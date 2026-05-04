@@ -131,9 +131,3 @@ Suggested minimum validation:
 | `/proc`, `/dev`, path, or BusyBox-sensitive behavior | `make elfuse && make check` |
 | Broad behavioral changes | `make elfuse && make check && make test-matrix` |
 | Debugger or ptrace flow | `make elfuse && make test-gdbstub` |
-
-## Related Material
-
-- [README.md](../README.md)
-- [usage.md](usage.md)
-- [internals.md](internals.md)

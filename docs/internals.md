@@ -627,9 +627,3 @@ The rule for contributors is simple: match the validation depth to the
 subsystem you changed. Procfs, process state, dynamic linking, and debugging
 typically warrant more than `make check`. See [testing.md](testing.md) for
 the full target list and the validation-by-change-type table.
-
-## Related Material
-
-- [README.md](../README.md)
-- [usage.md](usage.md)
-- [testing.md](testing.md)

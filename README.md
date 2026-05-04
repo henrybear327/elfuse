@@ -1,6 +1,6 @@
 # elfuse
 
-`elfuse` runs `aarch64-linux` ELF binaries on macOS Apple Silicon through
+`elfuse` runs aarch64-linux ELF binaries on macOS Apple Silicon through
 Apple's Hypervisor.framework. It is a process-scoped Linux user-space runtime:
 guest code executes on the CPU inside a lightweight VM, while Linux syscalls
 are intercepted and translated to macOS behavior in host-side handlers.

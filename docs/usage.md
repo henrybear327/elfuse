@@ -111,9 +111,3 @@ That has a few direct implications:
   syscall layer.
 - Behavior is strongest for normal command-line tools, language runtimes, test
   binaries, and debugger-driven workflows.
-
-## Related Material
-
-- [README.md](../README.md)
-- [testing.md](testing.md)
-- [internals.md](internals.md)

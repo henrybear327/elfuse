@@ -71,8 +71,6 @@ void runtime_set_process_title(int argc, char **argv, const char *elf_path)
     extern char **environ;
     char **new_environ = NULL;
     size_t avail;
-    const char *slash = strrchr(elf_path, '/');
-    const char *bin = slash ? slash + 1 : elf_path;
     const char *arch = "aarch64";
     char title[256];
     char thread_name[64];
@@ -80,6 +78,9 @@ void runtime_set_process_title(int argc, char **argv, const char *elf_path)
 
     if (argc <= 0 || !argv || !argv[0] || !elf_path || !environ)
         return;
+
+    const char *slash = strrchr(elf_path, '/');
+    const char *bin = slash ? slash + 1 : elf_path;
 
     snprintf(title, sizeof(title), "%s (%s-linux)", bin, arch);
     title_len = strlen(title);

@@ -91,6 +91,7 @@ test-opath
 
 [section] Guard page / mmap edge cases
 test-guard-page
+test-mmap-hint
 
 [section] mremap tests
 test-mremap

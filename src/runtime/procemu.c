@@ -578,12 +578,37 @@ static int dev_shm_resolve_path(const char *guest_suffix,
     return 0;
 }
 
+/* Give synthetic procfs nodes stable identities so directory walkers do not
+ * collapse distinct paths into one inode and falsely report filesystem loops.
+ */
+#define PROC_SYNTH_DEV ((dev_t) 0x504f)
+
+static ino_t proc_synth_ino(const char *path)
+{
+    /* 64-bit FNV-1a with Linux-looking nonzero output. */
+    uint64_t h = 1469598103934665603ULL;
+    for (const unsigned char *p = (const unsigned char *) path; *p; ++p) {
+        h ^= (uint64_t) *p;
+        h *= 1099511628211ULL;
+    }
+    h &= 0x7fffffffffffffffULL;
+    if (h == 0)
+        h = 1;
+    return (ino_t) h;
+}
+
 /* Populate *st for a synthetic /proc directory entry. */
-static void stat_fill_proc_dir(struct stat *st, mode_t mode, nlink_t nlink)
+static void stat_fill_proc_dir(struct stat *st,
+                               mode_t mode,
+                               nlink_t nlink,
+                               const char *path)
 {
     memset(st, 0, sizeof(*st));
     st->st_mode = S_IFDIR | mode;
     st->st_nlink = nlink;
+    st->st_dev = PROC_SYNTH_DEV;
+    st->st_ino = proc_synth_ino(path);
+    st->st_blksize = 4096;
 }
 
 /* Resolve a /dev/fd/<N> or /proc/self/fd/<N> path to a fresh dup() of the
@@ -642,11 +667,13 @@ static int proc_alias_self(const char *path, char *alias, size_t alias_sz)
  * st_size = 0 for proc nodes; mirroring that forces readers to drain to EOF
  * instead of pre-sizing buffers from a stale value.
  */
-static void stat_fill_proc_file(struct stat *st, mode_t mode)
+static void stat_fill_proc_file(struct stat *st, mode_t mode, const char *path)
 {
     memset(st, 0, sizeof(*st));
     st->st_mode = S_IFREG | mode;
     st->st_nlink = 1;
+    st->st_dev = PROC_SYNTH_DEV;
+    st->st_ino = proc_synth_ino(path);
     st->st_size = 0;
     st->st_blksize = 4096;
     st->st_blocks = 0;
@@ -2000,7 +2027,8 @@ int proc_intercept_stat(const char *path, struct stat *st)
      */
     /* /dev/shm is a directory */
     if (!strcmp(path, "/dev/shm") || !strcmp(path, "/dev/shm/")) {
-        stat_fill_proc_dir(st, 01777, 2); /* sticky bit, like real /dev/shm */
+        stat_fill_proc_dir(st, 01777, 2,
+                           path); /* sticky bit, like real /dev/shm */
         return 0;
     }
     /* /dev/shm/<name> files: check the host temp dir */
@@ -2013,7 +2041,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
 
     /* /proc and /proc/<our_pid> are directories */
     if (!strcmp(path, "/proc") || !strcmp(path, "/proc/")) {
-        stat_fill_proc_dir(st, 0555, 3);
+        stat_fill_proc_dir(st, 0555, 3, path);
         return 0;
     }
     {
@@ -2024,12 +2052,12 @@ int proc_intercept_stat(const char *path, struct stat *st)
                  (long long) proc_get_pid());
         if (!strcmp(path, pidbuf) || !strcmp(path, pidslash) ||
             !strcmp(path, "/proc/self") || !strcmp(path, "/proc/self/")) {
-            stat_fill_proc_dir(st, 0555, 3);
+            stat_fill_proc_dir(st, 0555, 3, path);
             return 0;
         }
     }
     if (!strcmp(path, "/proc/net") || !strcmp(path, "/proc/net/")) {
-        stat_fill_proc_dir(st, 0555, 2);
+        stat_fill_proc_dir(st, 0555, 2, path);
         return 0;
     }
 
@@ -2045,7 +2073,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
 
     /* /proc/self/task and /proc/self/task/<tid> are directories */
     if (!strcmp(path, "/proc/self/task") || !strcmp(path, "/proc/self/task/")) {
-        stat_fill_proc_dir(st, 0555, 2 + (nlink_t) thread_active_count());
+        stat_fill_proc_dir(st, 0555, 2 + (nlink_t) thread_active_count(), path);
         return 0;
     }
     if (!strncmp(path, "/proc/self/task/", 16)) {
@@ -2057,11 +2085,11 @@ int proc_intercept_stat(const char *path, struct stat *st)
                 return -1;
             }
             if (*endp == '\0' || !strcmp(endp, "/")) {
-                stat_fill_proc_dir(st, 0555, 2);
+                stat_fill_proc_dir(st, 0555, 2, path);
                 return 0;
             }
             if (!strcmp(endp, "/stat") || !strcmp(endp, "/status")) {
-                stat_fill_proc_file(st, 0444);
+                stat_fill_proc_file(st, 0444, path);
                 return 0;
             }
         }
@@ -2070,7 +2098,8 @@ int proc_intercept_stat(const char *path, struct stat *st)
     {
         int kind = proc_oom_path_kind(path);
         if (kind != OOM_PATH_NONE) {
-            stat_fill_proc_file(st, (kind == OOM_PATH_SCORE) ? 0444 : 0644);
+            stat_fill_proc_file(st, (kind == OOM_PATH_SCORE) ? 0444 : 0644,
+                                path);
             return 0;
         }
     }
@@ -2078,7 +2107,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
     if (!strcmp(path, "/proc/self/fdinfo") ||
         !strcmp(path, "/proc/self/fdinfo/") || !strcmp(path, "/proc/self/fd") ||
         !strcmp(path, "/proc/self/fd/")) {
-        stat_fill_proc_dir(st, 0555, 2);
+        stat_fill_proc_dir(st, 0555, 2, path);
         return 0;
     }
 
@@ -2091,7 +2120,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
             errno = ENOENT;
             return -1;
         }
-        stat_fill_proc_file(st, 0444);
+        stat_fill_proc_file(st, 0444, path);
         return 0;
     }
 
@@ -2127,7 +2156,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
 
     for (const char **p = known_proc_files; *p; p++) {
         if (!strcmp(path, *p)) {
-            stat_fill_proc_file(st, 0444);
+            stat_fill_proc_file(st, 0444, path);
             return 0;
         }
     }

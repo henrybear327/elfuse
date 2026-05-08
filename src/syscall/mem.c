@@ -21,6 +21,7 @@
 #include "debug/log.h"
 #include "utils.h"
 
+#include "runtime/thread.h"
 #include "syscall/abi.h"
 #include "syscall/internal.h"
 #include "syscall/mem.h"
@@ -1020,6 +1021,7 @@ int64_t sys_brk(guest_t *g, uint64_t addr)
     /* brk addresses as seen by the guest are IPA-based */
     uint64_t ipa_brk = guest_ipa(g, g->brk_current);
     uint64_t ipa_base = guest_ipa(g, g->brk_base);
+    uint64_t old_brk = g->brk_current;
 
     if (addr == 0) {
         return (int64_t) ipa_brk;
@@ -1035,16 +1037,18 @@ int64_t sys_brk(guest_t *g, uint64_t addr)
         return (int64_t) ipa_brk;
     }
 
-    /* Extend page tables if brk grows beyond currently-mapped region.
-     * The brk region is initially mapped up to MMAP_RX_BASE; if it grows
-     * past that, the mmap allocator needs to extend dynamically.
+    /* Materialize any newly exposed heap pages. This must handle both:
+     * 1. growth into brand-new 2 MiB blocks, and
+     * 2. growth within an already-split block where finalize_block_perms()
+     *    intentionally left non-covered pages invalid until brk exposes them.
      */
-    uint64_t brk_pt_end = ALIGN_UP(g->brk_current, BLOCK_2MIB);
-    if (brk_pt_end < MMAP_RX_BASE)
-        brk_pt_end = MMAP_RX_BASE;
-    if (new_off > brk_pt_end) {
-        uint64_t new_end = ALIGN_UP(new_off, BLOCK_2MIB);
-        if (guest_extend_page_tables(g, brk_pt_end, new_end, MEM_PERM_RW) < 0)
+    if (new_off > old_brk) {
+        uint64_t grow_start = ALIGN_DOWN(old_brk, GUEST_PAGE_SIZE);
+        uint64_t grow_end = PAGE_ALIGN_UP(new_off);
+
+        if (guest_extend_page_tables(g, grow_start, grow_end, MEM_PERM_RW) < 0)
+            return (int64_t) ipa_brk;
+        if (guest_update_perms(g, grow_start, grow_end, MEM_PERM_RW) < 0)
             return (int64_t) ipa_brk;
     }
 
@@ -1054,7 +1058,6 @@ int64_t sys_brk(guest_t *g, uint64_t addr)
                new_off - g->brk_current);
     }
 
-    uint64_t old_brk = g->brk_current;
     g->brk_current = new_off;
 
     /* Update "[heap]" region tracking atomically.
@@ -1443,10 +1446,25 @@ int64_t sys_mmap(guest_t *g,
             result_off = UINT64_MAX;
             if (addr != 0) {
                 uint64_t hint_off = addr - g->ipa_base;
-                if (hint_off >= MMAP_BASE && hint_off <= g->mmap_limit &&
-                    length <= g->mmap_limit - hint_off)
+                if (hint_off >= ELF_DEFAULT_BASE && hint_off <= g->mmap_limit &&
+                    length <= g->mmap_limit - hint_off) {
+                    /* Real Linux treats non-fixed mmap(addr!=0) as a strong
+                     * hint, including low canonical addresses such as the
+                     * traditional x86-64 ET_EXEC base at 0x400000. box64 uses
+                     * this pattern when reserving address space for static
+                     * ET_EXEC binaries; forcing every hint below MMAP_BASE
+                     * into the high RW arena breaks that expectation and the
+                     * guest later still dereferences the low address.
+                     *
+                     * Probe the hinted range first. Keep low-hint searches
+                     * below MMAP_BASE so an unresolved low hint does not
+                     * silently spill into the high arena on this fast path.
+                     */
+                    uint64_t hint_max =
+                        (hint_off < MMAP_BASE) ? MMAP_BASE : g->mmap_limit;
                     result_off =
-                        find_free_gap(g, length, hint_off, g->mmap_limit);
+                        find_free_gap_inner(g, length, hint_off, hint_max);
+                }
             }
             if (result_off == UINT64_MAX)
                 result_off = find_free_gap(g, length, MMAP_BASE, g->mmap_limit);
@@ -2381,6 +2399,90 @@ int64_t sys_mmap_anon(guest_t *g, uint64_t addr, uint64_t length, int prot)
                     LINUX_MAP_PRIVATE | LINUX_MAP_ANONYMOUS, -1, 0);
 }
 
+static int compare_range_pair(const void *a, const void *b)
+{
+    const uint64_t *ra = a;
+    const uint64_t *rb = b;
+
+    if (ra[0] < rb[0])
+        return -1;
+    if (ra[0] > rb[0])
+        return 1;
+    return 0;
+}
+
+static int munmap_guest_range(guest_t *g, uint64_t unmap_off, uint64_t end)
+{
+    /* Reject munmap targeting VM infrastructure regions. */
+    if (unmap_off < ELF_DEFAULT_BASE && end > PT_POOL_BASE)
+        return -LINUX_EINVAL;
+
+    /* Restore slab backing under any active MAP_SHARED file overlay before
+     * zeroing the host VA. Without this, the memset below would write zeros
+     * directly into the file.
+     */
+    int cleanup_err = cleanup_overlays_in_range(g, unmap_off, end);
+    if (cleanup_err < 0)
+        return cleanup_err;
+
+    /* Invalidate PTEs first. This may need to split a 2MiB block which can
+     * fail if the page table pool is exhausted. Failing before region removal
+     * keeps metadata consistent.
+     */
+    if (guest_invalidate_ptes(g, unmap_off, end) < 0)
+        return -LINUX_ENOMEM;
+    g->need_tlbi = true;
+    for (int i = 0; i < g->nregions; i++) {
+        guest_region_t *r = &g->regions[i];
+        if (r->start >= end)
+            break;
+        if (r->end <= unmap_off)
+            continue;
+        if (r->prot == LINUX_PROT_NONE)
+            continue;
+        uint64_t zstart = (r->start > unmap_off) ? r->start : unmap_off;
+        uint64_t zend = (r->end < end) ? r->end : end;
+        memset((uint8_t *) g->host_base + zstart, 0, zend - zstart);
+    }
+    guest_region_remove(g, unmap_off, end);
+    if (unmap_off < g->mmap_rw_gap_hint)
+        g->mmap_rw_gap_hint = unmap_off;
+    if (unmap_off < g->mmap_rx_gap_hint)
+        g->mmap_rx_gap_hint = unmap_off;
+
+    return 0;
+}
+
+void mem_cleanup_deferred_stack_unmaps(guest_t *g, thread_entry_t *t)
+{
+    uint64_t starts[MAX_DEFERRED_STACK_UNMAPS];
+    uint64_t ends[MAX_DEFERRED_STACK_UNMAPS];
+    int nranges;
+
+    if (!g || !t)
+        return;
+
+    nranges = thread_prepare_deferred_stack_unmaps_for_cleanup(
+        t, starts, ends, (int) ARRAY_SIZE(starts));
+    if (nranges <= 0)
+        return;
+
+    pthread_mutex_lock(&mmap_lock);
+    for (int i = 0; i < nranges; i++) {
+        int rc = munmap_guest_range(g, starts[i], ends[i]);
+        if (rc < 0) {
+            log_error(
+                "deferred stack munmap for tid=%lld leaked: "
+                "[0x%llx-0x%llx) rc=%d (region tracking inconsistent)",
+                (long long) t->guest_tid, (unsigned long long) starts[i],
+                (unsigned long long) ends[i], rc);
+            continue;
+        }
+        thread_drop_deferred_stack_unmap(t, starts[i], ends[i]);
+    }
+    pthread_mutex_unlock(&mmap_lock);
+}
+
 /* sys_munmap. */
 
 int64_t sys_munmap(guest_t *g, uint64_t addr, uint64_t length)
@@ -2397,45 +2499,45 @@ int64_t sys_munmap(guest_t *g, uint64_t addr, uint64_t length)
         uint64_t unmap_off = addr - g->ipa_base;
         if (unmap_off <= g->guest_size && length <= g->guest_size - unmap_off) {
             uint64_t end = unmap_off + length;
-
-            /* Reject munmap targeting VM infrastructure regions. */
-            if (unmap_off < ELF_DEFAULT_BASE && end > PT_POOL_BASE)
-                return -LINUX_EINVAL;
-
-            /* Restore slab backing under any active MAP_SHARED file overlay
-             * before zeroing the host VA. Without this, the memset below
-             * would write zeros directly into the file. The cleanup walker
-             * reads live region metadata so it must run before
-             * guest_region_remove.
-             */
-            int cleanup_err = cleanup_overlays_in_range(g, unmap_off, end);
-            if (cleanup_err < 0)
-                return cleanup_err;
-
-            /* Invalidate PTEs first. This may need to split a 2MiB block
-             * which can fail if the page table pool is exhausted. Failing
-             * before region removal keeps metadata consistent.
-             */
-            if (guest_invalidate_ptes(g, unmap_off, end) < 0)
+            thread_deferred_stack_unmap_txn_t txns[MAX_THREADS];
+            uint64_t ranges[MAX_THREADS][2];
+            int nranges = thread_collect_and_defer_stack_ranges(
+                unmap_off, end, txns, (int) ARRAY_SIZE(txns));
+            if (nranges < 0)
                 return -LINUX_ENOMEM;
-            g->need_tlbi = true;
-            for (int i = 0; i < g->nregions; i++) {
-                guest_region_t *r = &g->regions[i];
-                if (r->start >= end)
-                    break;
-                if (r->end <= unmap_off)
-                    continue;
-                if (r->prot == LINUX_PROT_NONE)
-                    continue;
-                uint64_t zstart = (r->start > unmap_off) ? r->start : unmap_off;
-                uint64_t zend = (r->end < end) ? r->end : end;
-                memset((uint8_t *) g->host_base + zstart, 0, zend - zstart);
+
+            for (int i = 0; i < nranges; i++) {
+                ranges[i][0] = txns[i].start;
+                ranges[i][1] = txns[i].end;
             }
-            guest_region_remove(g, unmap_off, end);
-            if (unmap_off < g->mmap_rw_gap_hint)
-                g->mmap_rw_gap_hint = unmap_off;
-            if (unmap_off < g->mmap_rx_gap_hint)
-                g->mmap_rx_gap_hint = unmap_off;
+            if (nranges > 1)
+                qsort(ranges, (size_t) nranges, sizeof(ranges[0]),
+                      compare_range_pair);
+
+            uint64_t cursor = unmap_off;
+            for (int i = 0; i < nranges && cursor < end; i++) {
+                uint64_t keep_start = ranges[i][0];
+                uint64_t keep_end = ranges[i][1];
+
+                if (keep_start > cursor) {
+                    int rc = munmap_guest_range(
+                        g, cursor, keep_start < end ? keep_start : end);
+                    if (rc < 0) {
+                        thread_rollback_deferred_stack_ranges(txns, nranges);
+                        return rc;
+                    }
+                }
+                if (keep_end > cursor)
+                    cursor = keep_end;
+            }
+            if (cursor < end) {
+                int rc = munmap_guest_range(g, cursor, end);
+                if (rc < 0) {
+                    thread_rollback_deferred_stack_ranges(txns, nranges);
+                    return rc;
+                }
+            }
+            thread_finish_deferred_stack_ranges(txns, nranges);
         }
     }
     return 0;

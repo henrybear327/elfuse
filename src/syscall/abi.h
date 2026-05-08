@@ -188,6 +188,7 @@
 #define SYS_pwritev2 287
 /* misc */
 #define SYS_sethostname 161
+#define SYS_getcpu 168
 #define SYS_memfd_create 279
 #define SYS_membarrier 283
 #define SYS_mlock 228

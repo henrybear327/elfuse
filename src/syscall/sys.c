@@ -222,6 +222,25 @@ int64_t sys_getcwd(guest_t *g, uint64_t buf_gva, uint64_t size)
     return (int64_t) write_len;
 }
 
+int64_t sys_getcpu(guest_t *g,
+                   uint64_t cpu_gva,
+                   uint64_t node_gva,
+                   uint64_t cache_gva)
+{
+    (void) cache_gva;
+
+    /* elfuse models one online CPU and one NUMA node. glibc and tools such as
+     * file(1) only need a successful query here; the kernel cache pointer is
+     * obsolete and may be ignored.
+     */
+    uint32_t zero = 0;
+    if (cpu_gva && guest_write_small(g, cpu_gva, &zero, sizeof(zero)) < 0)
+        return -LINUX_EFAULT;
+    if (node_gva && guest_write_small(g, node_gva, &zero, sizeof(zero)) < 0)
+        return -LINUX_EFAULT;
+    return 0;
+}
+
 int64_t sys_sched_getaffinity(guest_t *g,
                               int pid,
                               uint64_t size,

@@ -22,6 +22,10 @@ int64_t sys_getrandom(guest_t *g,
                       uint64_t buflen,
                       unsigned int flags);
 int64_t sys_getcwd(guest_t *g, uint64_t buf_gva, uint64_t size);
+int64_t sys_getcpu(guest_t *g,
+                   uint64_t cpu_gva,
+                   uint64_t node_gva,
+                   uint64_t cache_gva);
 int64_t sys_sched_getaffinity(guest_t *g,
                               int pid,
                               uint64_t size,

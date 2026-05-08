@@ -47,6 +47,9 @@ int64_t sys_madvise(guest_t *g, uint64_t addr, uint64_t length, int advice);
 /* msync: synchronize file-backed mappings to disk */
 int64_t sys_msync(guest_t *g, uint64_t addr, uint64_t length, int flags);
 
+/* Apply deferred guest-stack munmap work for an exiting thread. */
+void mem_cleanup_deferred_stack_unmaps(guest_t *g, thread_entry_t *t);
+
 /* Fork preparation: convert MAP_SHARED|MAP_ANONYMOUS regions that have
  * no backing fd into memfd-backed overlay regions. Each converted region
  * gets a private mkstemp+unlink temp file seeded from the current host

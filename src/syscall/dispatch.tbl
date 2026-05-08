@@ -175,6 +175,7 @@ SYS_prctl sc_prctl 1
 # System info
 SYS_uname sc_uname 0
 SYS_sethostname sc_sethostname 0
+SYS_getcpu sc_getcpu 0
 SYS_sysinfo sc_sysinfo 1
 SYS_getrlimit sc_getrlimit 1
 SYS_setrlimit sc_setrlimit 1

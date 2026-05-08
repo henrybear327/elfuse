@@ -56,72 +56,95 @@ int fork_ipc_read_all(int fd, void *buf, size_t len)
     return 0;
 }
 
+/* macOS rejects overly large SCM_RIGHTS payloads with EINVAL. Keep each control
+ * message comfortably below that limit and stream large fd sets in multiple
+ * chunks.
+ */
+#define FORK_IPC_FD_CHUNK 120
+
 int fork_ipc_send_fds(int sock, const int *fds, int count)
 {
     if (count <= 0)
         return 0;
 
-    char dummy = 'F';
-    struct iovec iov = {.iov_base = &dummy, .iov_len = 1};
-    size_t cmsg_size = CMSG_SPACE(count * sizeof(int));
-    uint8_t *cmsg_buf = calloc(1, cmsg_size);
-    if (!cmsg_buf)
-        return -1;
+    int sent = 0;
+    while (sent < count) {
+        int chunk = count - sent;
+        if (chunk > FORK_IPC_FD_CHUNK)
+            chunk = FORK_IPC_FD_CHUNK;
 
-    struct msghdr msg = {0};
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = cmsg_buf;
-    msg.msg_controllen = cmsg_size;
+        char dummy = 'F';
+        struct iovec iov = {.iov_base = &dummy, .iov_len = 1};
+        size_t cmsg_size = CMSG_SPACE((size_t) chunk * sizeof(int));
+        uint8_t *cmsg_buf = calloc(1, cmsg_size);
+        if (!cmsg_buf)
+            return -1;
 
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    cmsg->cmsg_level = SOL_SOCKET;
-    cmsg->cmsg_type = SCM_RIGHTS;
-    cmsg->cmsg_len = CMSG_LEN(count * sizeof(int));
-    memcpy(CMSG_DATA(cmsg), fds, count * sizeof(int));
+        struct msghdr msg = {0};
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cmsg_buf;
+        msg.msg_controllen = cmsg_size;
 
-    ssize_t ret = sendmsg(sock, &msg, 0);
-    free(cmsg_buf);
-    return ret < 0 ? -1 : 0;
+        struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+        cmsg->cmsg_len = CMSG_LEN((size_t) chunk * sizeof(int));
+        memcpy(CMSG_DATA(cmsg), fds + sent, (size_t) chunk * sizeof(int));
+
+        ssize_t ret = sendmsg(sock, &msg, 0);
+        free(cmsg_buf);
+        if (ret < 0)
+            return -1;
+        sent += chunk;
+    }
+    return 0;
 }
 
 int fork_ipc_recv_fds(int sock, int *fds, int max_count, int *out_count)
 {
-    char dummy;
-    struct iovec iov = {.iov_base = &dummy, .iov_len = 1};
-    size_t cmsg_size = CMSG_SPACE(max_count * sizeof(int));
-    uint8_t *cmsg_buf = calloc(1, cmsg_size);
-    if (!cmsg_buf)
-        return -1;
-
-    struct msghdr msg = {0};
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = cmsg_buf;
-    msg.msg_controllen = cmsg_size;
-
-    ssize_t ret = recvmsg(sock, &msg, 0);
-    if (ret < 0) {
-        free(cmsg_buf);
-        return -1;
-    }
-
     *out_count = 0;
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    if (cmsg && cmsg->cmsg_level == SOL_SOCKET &&
-        cmsg->cmsg_type == SCM_RIGHTS) {
-        if (cmsg->cmsg_len < CMSG_LEN(0)) {
+    while (*out_count < max_count) {
+        int chunk_max = max_count - *out_count;
+        if (chunk_max > FORK_IPC_FD_CHUNK)
+            chunk_max = FORK_IPC_FD_CHUNK;
+
+        char dummy;
+        struct iovec iov = {.iov_base = &dummy, .iov_len = 1};
+        size_t cmsg_size = CMSG_SPACE((size_t) chunk_max * sizeof(int));
+        uint8_t *cmsg_buf = calloc(1, cmsg_size);
+        if (!cmsg_buf)
+            return -1;
+
+        struct msghdr msg = {0};
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cmsg_buf;
+        msg.msg_controllen = cmsg_size;
+
+        ssize_t ret = recvmsg(sock, &msg, 0);
+        if (ret < 0) {
             free(cmsg_buf);
             return -1;
         }
-        int n = (int) ((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
-        if (n > max_count)
-            n = max_count;
-        memcpy(fds, CMSG_DATA(cmsg), n * sizeof(int));
-        *out_count = n;
-    }
+        struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+        if (!cmsg || cmsg->cmsg_level != SOL_SOCKET ||
+            cmsg->cmsg_type != SCM_RIGHTS || cmsg->cmsg_len < CMSG_LEN(0) ||
+            (msg.msg_flags & MSG_CTRUNC)) {
+            free(cmsg_buf);
+            return -1;
+        }
 
-    free(cmsg_buf);
+        int n = (int) ((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+        if (n <= 0 || n > chunk_max) {
+            free(cmsg_buf);
+            return -1;
+        }
+
+        memcpy(fds + *out_count, CMSG_DATA(cmsg), (size_t) n * sizeof(int));
+        *out_count += n;
+        free(cmsg_buf);
+    }
     return 0;
 }
 
@@ -379,8 +402,14 @@ static int fork_ipc_send_backing_fds(int ipc_sock,
     uint32_t nbacking = 0;
 
     for (uint32_t i = 0; i < num_guest_regions; i++) {
-        if (regions_snapshot[i].backing_fd >= 0)
+        if (regions_snapshot[i].backing_fd >= 0) {
+            if (fcntl(regions_snapshot[i].backing_fd, F_GETFD) < 0) {
+                log_error("clone: region %u carries stale backing_fd=%d: %s", i,
+                          regions_snapshot[i].backing_fd, strerror(errno));
+                return -1;
+            }
             backing_fds[nbacking++] = regions_snapshot[i].backing_fd;
+        }
     }
 
     if (fork_ipc_write_all(ipc_sock, &nbacking, sizeof(nbacking)) < 0)
@@ -388,27 +417,13 @@ static int fork_ipc_send_backing_fds(int ipc_sock,
     if (nbacking == 0)
         return 0;
 
-    char dummy = 'B';
-    struct iovec iov = {.iov_base = &dummy, .iov_len = 1};
-    size_t cmsg_sz = CMSG_SPACE(nbacking * sizeof(int));
-    uint8_t *cmsg_buf = calloc(1, cmsg_sz);
-    if (!cmsg_buf)
+    log_debug("clone: sending %u backing fds for %u regions", nbacking,
+              num_guest_regions);
+    if (fork_ipc_send_fds(ipc_sock, backing_fds, (int) nbacking) < 0) {
+        log_error("clone: send backing fds failed: %s", strerror(errno));
         return -1;
-
-    struct msghdr msg = {
-        .msg_iov = &iov,
-        .msg_iovlen = 1,
-        .msg_control = cmsg_buf,
-        .msg_controllen = cmsg_sz,
-    };
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    cmsg->cmsg_level = SOL_SOCKET;
-    cmsg->cmsg_type = SCM_RIGHTS;
-    cmsg->cmsg_len = CMSG_LEN(nbacking * sizeof(int));
-    memcpy(CMSG_DATA(cmsg), backing_fds, nbacking * sizeof(int));
-    int ret = sendmsg(ipc_sock, &msg, 0);
-    free(cmsg_buf);
-    return ret < 0 ? -1 : 0;
+    }
+    return 0;
 }
 
 int fork_ipc_send_process_state(int ipc_sock,
@@ -507,45 +522,17 @@ static int fork_ipc_recv_backing_fds(int ipc_fd,
     if (nbacking == 0 || nbacking > GUEST_MAX_REGIONS)
         return 0;
 
-    char dummy;
-    struct iovec iov = {.iov_base = &dummy, .iov_len = 1};
-    size_t cmsg_sz = CMSG_SPACE(nbacking * sizeof(int));
-    uint8_t *cmsg_buf = calloc(1, cmsg_sz);
-    if (!cmsg_buf)
+    int *region_fds = calloc(nbacking, sizeof(int));
+    if (!region_fds)
         return -1;
-
-    struct msghdr msg = {
-        .msg_iov = &iov,
-        .msg_iovlen = 1,
-        .msg_control = cmsg_buf,
-        .msg_controllen = cmsg_sz,
-    };
-    ssize_t nr = recvmsg(ipc_fd, &msg, 0);
-    if (nr <= 0) {
-        free(cmsg_buf);
+    int received_count = 0;
+    if (fork_ipc_recv_fds(ipc_fd, region_fds, (int) nbacking, &received_count) <
+        0) {
+        log_error("fork-child: failed to receive backing fds");
+        free(region_fds);
         return -1;
     }
-
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    if (msg.msg_flags & MSG_CTRUNC) {
-        log_error("fork-child: backing fd SCM_RIGHTS payload truncated");
-        free(cmsg_buf);
-        return -1;
-    }
-    if (!cmsg || cmsg->cmsg_level != SOL_SOCKET ||
-        cmsg->cmsg_type != SCM_RIGHTS) {
-        log_error("fork-child: missing backing fd SCM_RIGHTS payload");
-        free(cmsg_buf);
-        return -1;
-    }
-    if (cmsg->cmsg_len < CMSG_LEN(0)) {
-        free(cmsg_buf);
-        return -1;
-    }
-
-    int *region_fds = (int *) CMSG_DATA(cmsg);
-    uint32_t nreceived =
-        (uint32_t) ((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+    uint32_t nreceived = (uint32_t) received_count;
     uint32_t fi = 0;
 
     /* Sender (fork_ipc_send_backing_fds) iterates regions and sends one fd per
@@ -572,10 +559,10 @@ static int fork_ipc_recv_backing_fds(int ipc_fd,
     if (nreceived != nbacking) {
         log_error("fork-child: expected %u backing fds but received %u",
                   nbacking, nreceived);
-        free(cmsg_buf);
+        free(region_fds);
         return -1;
     }
-    free(cmsg_buf);
+    free(region_fds);
     return 0;
 }
 

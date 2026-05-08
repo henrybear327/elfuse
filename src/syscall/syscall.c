@@ -302,6 +302,7 @@ SC_FORWARD(sc_rt_sigpending,  signal_rt_sigpending(g, x0, x1))
 /* System info */
 SC_FORWARD(sc_uname,     sys_uname(g, x0))
 SC_FORWARD(sc_getrandom, sys_getrandom(g, x0, x1, (unsigned int) x2))
+SC_FORWARD(sc_getcpu,    sys_getcpu(g, x0, x1, x2))
 SC_FORWARD(sc_sysinfo,   sys_sysinfo(g, x0))
 SC_FORWARD(sc_prlimit64, sys_prlimit64(g, (int) x0, (int) x1, x2, x3))
 SC_FORWARD(sc_getrlimit, sys_prlimit64(g, 0, (int) x0, 0, x1))
@@ -1518,7 +1519,8 @@ static int64_t sc_clone(guest_t *g,
         (unsigned long long) x0, (unsigned long long) x1,
         (unsigned long long) x2, (unsigned long long) x3,
         (unsigned long long) x4);
-    return sys_clone(current_thread->vcpu, g, x0, x1, x2, x3, x4, verbose);
+    return sys_clone(current_thread->vcpu, g, x0, x1, 0, 0, x2, x3, x4,
+                     verbose);
 }
 
 static int64_t sc_clone3(guest_t *g,

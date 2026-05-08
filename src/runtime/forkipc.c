@@ -46,7 +46,26 @@
 
 /* fork_child_main. */
 
-int fork_child_main(int ipc_fd, bool verbose, int timeout_sec)
+static int fork_child_vfork_notify_fd = -1;
+
+void fork_notify_vfork_exec(void)
+{
+    if (fork_child_vfork_notify_fd < 0)
+        return;
+
+    char byte = 'X';
+    ssize_t n;
+    do {
+        n = write(fork_child_vfork_notify_fd, &byte, 1);
+    } while (n < 0 && errno == EINTR);
+    close(fork_child_vfork_notify_fd);
+    fork_child_vfork_notify_fd = -1;
+}
+
+int fork_child_main(int ipc_fd,
+                    int vfork_notify_fd,
+                    bool verbose,
+                    int timeout_sec)
 {
     /* Reinitialize logging after posix_spawn (mutex state is undefined). */
     log_init();
@@ -57,6 +76,7 @@ int fork_child_main(int ipc_fd, bool verbose, int timeout_sec)
      * snapshot so the incoming metadata survives child restore.
      */
     proc_init();
+    fork_child_vfork_notify_fd = vfork_notify_fd;
 
     /* The header fixes the IPC protocol version and the guest identity before
      * any variable-length state is trusted.
@@ -163,17 +183,20 @@ int fork_child_main(int ipc_fd, bool verbose, int timeout_sec)
     }
 
     if (fork_ipc_recv_memory_regions(ipc_fd, &g) < 0) {
+        log_error("fork-child: failed to receive memory regions");
         guest_destroy(&g);
         return 1;
     }
 
     if (fork_ipc_recv_fd_table(ipc_fd, &g) < 0) {
+        log_error("fork-child: failed to receive fd table");
         guest_destroy(&g);
         return 1;
     }
 
     signal_state_t sig;
     if (fork_ipc_recv_process_state(ipc_fd, &g, &sig) < 0) {
+        log_error("fork-child: failed to receive process state");
         guest_destroy(&g);
         return 1;
     }
@@ -298,6 +321,32 @@ typedef struct {
     vcpu_simd_state_t simd_state;
 } thread_create_args_t;
 
+static void resolve_clone_stack_range(const guest_t *g,
+                                      uint64_t child_stack,
+                                      uint64_t *start_out,
+                                      uint64_t *end_out)
+{
+    if (start_out)
+        *start_out = 0;
+    if (end_out)
+        *end_out = 0;
+    if (!g || !child_stack || child_stack <= g->ipa_base)
+        return;
+
+    uint64_t sp_off = child_stack - g->ipa_base;
+    if (sp_off == 0 || sp_off > g->guest_size)
+        return;
+
+    const guest_region_t *r = guest_region_find(g, sp_off - 1);
+    if (!r)
+        return;
+
+    if (start_out)
+        *start_out = r->start;
+    if (end_out)
+        *end_out = r->end;
+}
+
 /* Forward declaration: worker entry runs after sys_clone_thread */
 static void *thread_create_and_run(void *arg);
 
@@ -305,6 +354,8 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
                                 guest_t *g,
                                 uint64_t flags,
                                 uint64_t child_stack,
+                                uint64_t stack_map_start,
+                                uint64_t stack_map_end,
                                 uint64_t ptid_gva,
                                 uint64_t tls,
                                 uint64_t ctid_gva,
@@ -314,7 +365,11 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
     int64_t child_tid = proc_alloc_pid();
 
     /* Allocate thread table slot */
-    thread_entry_t *t = thread_alloc(child_tid);
+    if (stack_map_start >= stack_map_end)
+        resolve_clone_stack_range(g, child_stack, &stack_map_start,
+                                  &stack_map_end);
+
+    thread_entry_t *t = thread_alloc(child_tid, stack_map_start, stack_map_end);
     if (!t) {
         log_error("clone_thread: thread table full");
         return -LINUX_EAGAIN;
@@ -513,12 +568,17 @@ static void *thread_create_and_run(void *arg)
     /* CLONE_CHILD_CLEARTID: write 0 to the address and wake one waiter.
      * This is how pthread_join works in musl: the joining thread does
      * FUTEX_WAIT on this address until it becomes 0.
+     *
+     * Drain any deferred munmap of this thread's stack before waking the
+     * joiner: the parent may reuse the freed VA as soon as it returns from
+     * pthread_join, and reuse must not race with the deferred unmap.
      */
+    bool wake_ctid = false;
     if (t->clear_child_tid != 0) {
         uint32_t zero = 0;
         if (guest_write_small(g, t->clear_child_tid, &zero, sizeof(zero)) ==
             0) {
-            futex_wake_one(g, t->clear_child_tid);
+            wake_ctid = true;
         } else {
             log_warn(
                 "thread tid=%lld clear_child_tid "
@@ -527,6 +587,9 @@ static void *thread_create_and_run(void *arg)
                 (unsigned long long) t->clear_child_tid);
         }
     }
+    mem_cleanup_deferred_stack_unmaps(g, t);
+    if (wake_ctid)
+        futex_wake_one(g, t->clear_child_tid);
 
     log_debug("thread tid=%lld exiting", (long long) t->guest_tid);
 
@@ -561,6 +624,8 @@ static int64_t sys_clone_vm(hv_vcpu_t parent_vcpu,
                             guest_t *g,
                             uint64_t flags,
                             uint64_t child_stack,
+                            uint64_t stack_map_start,
+                            uint64_t stack_map_end,
                             uint64_t ptid_gva,
                             uint64_t tls,
                             uint64_t ctid_gva,
@@ -570,7 +635,11 @@ static int64_t sys_clone_vm(hv_vcpu_t parent_vcpu,
     int64_t child_tid = proc_alloc_pid();
 
     /* Allocate thread table slot */
-    thread_entry_t *t = thread_alloc(child_tid);
+    if (stack_map_start >= stack_map_end)
+        resolve_clone_stack_range(g, child_stack, &stack_map_start,
+                                  &stack_map_end);
+
+    thread_entry_t *t = thread_alloc(child_tid, stack_map_start, stack_map_end);
     if (!t) {
         log_error("clone_vm: thread table full");
         return -LINUX_EAGAIN;
@@ -752,14 +821,27 @@ static void *vm_clone_thread_run(void *arg)
 
     int exit_code = vcpu_run_loop(vcpu, vexit, g, verbose, 0);
 
-    /* CLONE_CHILD_CLEARTID cleanup */
+    /* CLONE_CHILD_CLEARTID cleanup. Same ordering as thread_entry: drain
+     * deferred stack munmaps before waking the joiner so the parent does
+     * not reuse the VA before it is released.
+     */
+    bool wake_ctid = false;
     if (t->clear_child_tid != 0) {
         uint32_t zero = 0;
         if (guest_write_small(g, t->clear_child_tid, &zero, sizeof(zero)) ==
             0) {
-            futex_wake_one(g, t->clear_child_tid);
+            wake_ctid = true;
+        } else {
+            log_warn(
+                "vm_clone tid=%lld clear_child_tid "
+                "write failed (gva=0x%llx)",
+                (long long) t->guest_tid,
+                (unsigned long long) t->clear_child_tid);
         }
     }
+    mem_cleanup_deferred_stack_unmaps(g, t);
+    if (wake_ctid)
+        futex_wake_one(g, t->clear_child_tid);
 
     /* Mark exit status for parent's wait4 to collect.
      * vm_exit_status uses wait-format: (exit_code << 8) for normal exit.
@@ -806,6 +888,8 @@ int64_t sys_clone(hv_vcpu_t vcpu,
                   guest_t *g,
                   uint64_t flags,
                   uint64_t child_stack,
+                  uint64_t stack_map_start,
+                  uint64_t stack_map_end,
                   uint64_t ptid_gva,
                   uint64_t tls,
                   uint64_t ctid_gva,
@@ -813,23 +897,27 @@ int64_t sys_clone(hv_vcpu_t vcpu,
 {
     /* CLONE_THREAD: create a new thread in the same VM (not a new process) */
     if (flags & LINUX_CLONE_THREAD) {
-        return sys_clone_thread(vcpu, g, flags, child_stack, ptid_gva, tls,
-                                ctid_gva, verbose);
-    }
-
-    /* CLONE_VM without CLONE_THREAD: create an in-process VM-clone child.
-     * The child shares guest memory but has a separate TID and is waitable
-     * via wait4/ptrace.
-     */
-    if ((flags & LINUX_CLONE_VM) && !(flags & LINUX_CLONE_THREAD)) {
-        return sys_clone_vm(vcpu, g, flags, child_stack, ptid_gva, tls,
-                            ctid_gva, verbose);
+        return sys_clone_thread(vcpu, g, flags, child_stack, stack_map_start,
+                                stack_map_end, ptid_gva, tls, ctid_gva,
+                                verbose);
     }
 
     /* elfuse only supports fork-like clone (SIGCHLD) and posix_spawn-like
      * clone (CLONE_VM|CLONE_VFORK|SIGCHLD)
      */
     bool is_vfork = (flags & LINUX_CLONE_VFORK) != 0;
+
+    /* CLONE_VM without CLONE_THREAD usually creates an in-process VM-clone
+     * child that shares guest memory and is waitable via wait4/ptrace.
+     * However CLONE_VFORK must go through the helper-process path below so the
+     * child's later execve replaces only the child image rather than resetting
+     * the parent's shared guest_t.
+     */
+    if ((flags & LINUX_CLONE_VM) && !(flags & LINUX_CLONE_THREAD) &&
+        !is_vfork) {
+        return sys_clone_vm(vcpu, g, flags, child_stack, stack_map_start,
+                            stack_map_end, ptid_gva, tls, ctid_gva, verbose);
+    }
 
     log_debug("clone(flags=0x%llx, vfork=%d)", (unsigned long long) flags,
               is_vfork);
@@ -838,8 +926,15 @@ int64_t sys_clone(hv_vcpu_t vcpu,
      * and SCM_RIGHTS file descriptors to the fork-child process.
      */
     int sock_fds[2];
+    int vfork_notify_fds[2] = {-1, -1};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sock_fds) < 0) {
         log_error("clone: socketpair failed: %s", strerror(errno));
+        return -LINUX_ENOMEM;
+    }
+    if (is_vfork && pipe(vfork_notify_fds) < 0) {
+        log_error("clone: vfork notify pipe failed: %s", strerror(errno));
+        close(sock_fds[0]);
+        close(sock_fds[1]);
         return -LINUX_ENOMEM;
     }
 
@@ -862,13 +957,20 @@ int64_t sys_clone(hv_vcpu_t vcpu,
     snprintf(fd_str, sizeof(fd_str), "%d", sock_fds[1]);
 
     /* argv is intentionally minimal; guest argv is restored later from IPC. */
-    char *child_argv[6];
+    char notify_fd_str[32];
+    char *child_argv[8];
     int ci = 0;
     child_argv[ci++] = self_path;
     if (verbose)
         child_argv[ci++] = "--verbose";
     child_argv[ci++] = "--fork-child";
     child_argv[ci++] = fd_str;
+    if (is_vfork) {
+        snprintf(notify_fd_str, sizeof(notify_fd_str), "%d",
+                 vfork_notify_fds[1]);
+        child_argv[ci++] = "--vfork-notify-fd";
+        child_argv[ci++] = notify_fd_str;
+    }
     child_argv[ci] = NULL;
 
     /* Set up spawn attributes: close all inherited FDs by default.
@@ -890,6 +992,9 @@ int64_t sys_clone(hv_vcpu_t vcpu,
     posix_spawn_file_actions_addinherit_np(&file_actions, STDOUT_FILENO);
     posix_spawn_file_actions_addinherit_np(&file_actions, STDERR_FILENO);
     posix_spawn_file_actions_addinherit_np(&file_actions, sock_fds[1]);
+    if (is_vfork)
+        posix_spawn_file_actions_addinherit_np(&file_actions,
+                                               vfork_notify_fds[1]);
 
     extern char **environ;
     pid_t child_host_pid;
@@ -902,11 +1007,17 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         log_error("clone: posix_spawn failed: %s", strerror(spawn_ret));
         close(sock_fds[0]);
         close(sock_fds[1]);
+        if (vfork_notify_fds[0] >= 0)
+            close(vfork_notify_fds[0]);
+        if (vfork_notify_fds[1] >= 0)
+            close(vfork_notify_fds[1]);
         return -LINUX_ENOMEM;
     }
 
     /* The parent keeps only its end of the control channel. */
     close(sock_fds[1]);
+    if (vfork_notify_fds[1] >= 0)
+        close(vfork_notify_fds[1]);
     int ipc_sock = sock_fds[0];
 
     /* Allocate guest PID before serialization so the child header carries its
@@ -1049,6 +1160,8 @@ int64_t sys_clone(hv_vcpu_t vcpu,
     ipc_registers_t regs = {0};
     regs.elr_el1 = vcpu_get_sysreg(vcpu, HV_SYS_REG_ELR_EL1);
     regs.sp_el0 = vcpu_get_sysreg(vcpu, HV_SYS_REG_SP_EL0);
+    if (child_stack)
+        regs.sp_el0 = child_stack;
     regs.spsr_el1 = vcpu_get_sysreg(vcpu, HV_SYS_REG_SPSR_EL1);
     regs.vbar_el1 = vcpu_get_sysreg(vcpu, HV_SYS_REG_VBAR_EL1);
     regs.ttbr0_el1 = vcpu_get_sysreg(vcpu, HV_SYS_REG_TTBR0_EL1);
@@ -1066,8 +1179,10 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         log_error("clone: failed to send registers");
         goto fail_snapshot;
     }
-    if (fork_ipc_send_memory_regions(ipc_sock, g, use_shm) < 0)
+    if (fork_ipc_send_memory_regions(ipc_sock, g, use_shm) < 0) {
+        log_error("clone: failed to send memory regions");
         goto fail_snapshot;
+    }
 
     /* Snapshot the semantic region array before resuming siblings.
      * Siblings may mmap/munmap/mprotect after resume, so the code needs a
@@ -1085,13 +1200,17 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         memcpy(regions_snapshot, g->regions, snap_sz);
     }
 
-    if (fork_ipc_send_fd_table(ipc_sock) < 0)
+    if (fork_ipc_send_fd_table(ipc_sock) < 0) {
+        log_error("clone: failed to send fd table");
         goto fail_snapshot;
+    }
 
     uint32_t num_guest_regions = (uint32_t) nregions_snapshot;
     if (fork_ipc_send_process_state(ipc_sock, regions_snapshot,
-                                    num_guest_regions) < 0)
+                                    num_guest_regions) < 0) {
+        log_error("clone: failed to send process state");
         goto fail_snapshot;
+    }
 
     /* The process-state payload includes the SCM_RIGHTS handoff for region
      * backing fds. Keep siblings quiesced until that send completes so a
@@ -1115,11 +1234,23 @@ int64_t sys_clone(hv_vcpu_t vcpu,
      * so it waits for the helper to exit.
      */
     if (is_vfork) {
-        int status;
-        waitpid(child_host_pid, &status, 0);
+        char byte;
+        ssize_t nr;
+        do {
+            nr = read(vfork_notify_fds[0], &byte, 1);
+        } while (nr < 0 && errno == EINTR);
+        close(vfork_notify_fds[0]);
 
-        /* Publish the vfork child status for later wait calls. */
-        proc_mark_child_exited(child_host_pid, status);
+        if (nr <= 0) {
+            int status;
+            waitpid(child_host_pid, &status, 0);
+            proc_mark_child_exited(child_host_pid, status);
+        } else {
+            int status;
+            pid_t waited = waitpid(child_host_pid, &status, WNOHANG);
+            if (waited == child_host_pid)
+                proc_mark_child_exited(child_host_pid, status);
+        }
     }
 
     log_debug("clone: child pid=%lld (host=%d)", (long long) child_guest_pid,
@@ -1145,6 +1276,10 @@ fail_snapshot:
             abort_rc);
     thread_resume_siblings();
     close(ipc_sock);
+    if (vfork_notify_fds[0] >= 0)
+        close(vfork_notify_fds[0]);
+    if (vfork_notify_fds[1] >= 0)
+        close(vfork_notify_fds[1]);
     return -LINUX_ENOMEM;
 }
 
@@ -1275,7 +1410,8 @@ int64_t sys_clone3(hv_vcpu_t vcpu,
         (unsigned long long) ca.stack, (unsigned long long) ca.stack_size,
         (unsigned long long) ca.tls, (unsigned long long) cl_args_size);
 
-    int64_t ret = sys_clone(vcpu, g, flags, child_stack, ca.parent_tid, ca.tls,
+    int64_t ret = sys_clone(vcpu, g, flags, child_stack, ca.stack,
+                            ca.stack + ca.stack_size, ca.parent_tid, ca.tls,
                             ca.child_tid, verbose);
 
     /* If clone succeeded and CLONE_PIDFD was requested, create a pidfd

@@ -31,6 +31,12 @@
 #define LINUX_SS_DISABLE 2
 
 static void thread_ptrace_init(thread_entry_t *t);
+static int thread_add_deferred_unmap_locked(thread_entry_t *t,
+                                            uint64_t start,
+                                            uint64_t end);
+static int thread_can_add_deferred_unmap_locked(thread_entry_t *t,
+                                                uint64_t start,
+                                                uint64_t end);
 
 /* Top of the EL1 exception stack region (one 4KiB slot per thread) */
 #define SP_EL1_TOP (GUEST_IPA_BASE + SHIM_DATA_BASE + BLOCK_2MIB)
@@ -112,7 +118,9 @@ void thread_register_main(hv_vcpu_t vcpu,
     current_thread = t;
 }
 
-thread_entry_t *thread_alloc(int64_t tid)
+thread_entry_t *thread_alloc(int64_t tid,
+                             uint64_t stack_start,
+                             uint64_t stack_end)
 {
     thread_entry_t *result = NULL;
 
@@ -131,6 +139,10 @@ thread_entry_t *thread_alloc(int64_t tid)
         }
         memset(t, 0, sizeof(*t));
         t->guest_tid = tid;
+        if (stack_start < stack_end) {
+            t->stack_map_start = stack_start;
+            t->stack_map_end = stack_end;
+        }
         t->active = 1;
         t->altstack_flags = LINUX_SS_DISABLE;
         thread_ptrace_init(t);
@@ -400,6 +412,7 @@ static int fork_quiesced_count = 0;      /* Siblings blocked on barrier */
 static int fork_target_count = 0;        /* Number of siblings to quiesce */
 static pthread_cond_t fork_cond = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t fork_all_quiesced_cond = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t deferred_stack_unmap_cond = PTHREAD_COND_INITIALIZER;
 
 void thread_quiesce_siblings(void)
 {
@@ -485,6 +498,275 @@ int thread_fork_barrier_check(void)
 pthread_mutex_t *thread_get_lock(void)
 {
     return &thread_lock;
+}
+
+int thread_collect_and_defer_stack_ranges(
+    uint64_t start,
+    uint64_t end,
+    thread_deferred_stack_unmap_txn_t *txns,
+    int max_ranges)
+{
+    int nranges = 0;
+
+    if (start >= end || !txns || max_ranges <= 0)
+        return 0;
+
+    pthread_mutex_lock(&thread_lock);
+retry:
+    nranges = 0;
+
+    /* Pass 1: enumerate every thread whose live stack overlaps [start, end)
+     * and verify each one can record a new deferred-unmap entry. If the
+     * caller-provided buffer is too small or any thread is at its
+     * deferred-unmap cap, refuse the whole operation so pass 2 never has
+     * to handle a partial commit.
+     */
+    THREAD_FOR_EACH_ACTIVE (t) {
+        uint64_t rs = t->stack_map_start;
+        uint64_t re = t->stack_map_end;
+
+        if (rs >= re || re <= start || rs >= end)
+            continue;
+        if (t->deferred_stack_unmap_busy > 0) {
+            pthread_cond_wait(&deferred_stack_unmap_cond, &thread_lock);
+            goto retry;
+        }
+        if (nranges >= max_ranges) {
+            pthread_mutex_unlock(&thread_lock);
+            return -1;
+        }
+        uint64_t ds = (rs > start) ? rs : start;
+        uint64_t de = (re < end) ? re : end;
+        if (thread_can_add_deferred_unmap_locked(t, ds, de) < 0) {
+            pthread_mutex_unlock(&thread_lock);
+            return -1;
+        }
+
+        txns[nranges].thread = t;
+        txns[nranges].guest_tid = t->guest_tid;
+        txns[nranges].start = ds;
+        txns[nranges].end = de;
+        txns[nranges].deferred_count = t->deferred_stack_unmap_count;
+        for (int j = 0; j < t->deferred_stack_unmap_count; j++) {
+            txns[nranges].deferred_starts[j] =
+                t->deferred_stack_unmap_starts[j];
+            txns[nranges].deferred_ends[j] = t->deferred_stack_unmap_ends[j];
+        }
+        nranges++;
+    }
+    /* Pass 2: commit. Both passes iterate the table in the same order
+     * under the same lock, so the active set seen here matches pass 1.
+     */
+    for (int i = 0; i < nranges; i++) {
+        (void) thread_add_deferred_unmap_locked(txns[i].thread, txns[i].start,
+                                                txns[i].end);
+        txns[i].thread->deferred_stack_unmap_busy++;
+    }
+    pthread_mutex_unlock(&thread_lock);
+
+    return nranges;
+}
+
+void thread_finish_deferred_stack_ranges(
+    const thread_deferred_stack_unmap_txn_t *txns,
+    int nranges)
+{
+    bool wake = false;
+
+    if (!txns || nranges <= 0)
+        return;
+
+    pthread_mutex_lock(&thread_lock);
+    for (int i = 0; i < nranges; i++) {
+        thread_entry_t *t = txns[i].thread;
+
+        if (!t || !t->active || t->guest_tid != txns[i].guest_tid ||
+            t->deferred_stack_unmap_busy <= 0)
+            continue;
+        t->deferred_stack_unmap_busy--;
+        wake = true;
+    }
+    if (wake)
+        pthread_cond_broadcast(&deferred_stack_unmap_cond);
+    pthread_mutex_unlock(&thread_lock);
+}
+
+void thread_rollback_deferred_stack_ranges(
+    const thread_deferred_stack_unmap_txn_t *txns,
+    int nranges)
+{
+    bool wake = false;
+
+    if (!txns || nranges <= 0)
+        return;
+
+    pthread_mutex_lock(&thread_lock);
+    for (int i = 0; i < nranges; i++) {
+        thread_entry_t *t = txns[i].thread;
+
+        if (!t || !t->active || t->guest_tid != txns[i].guest_tid)
+            continue;
+        t->deferred_stack_unmap_count = txns[i].deferred_count;
+        for (int j = 0; j < txns[i].deferred_count; j++) {
+            t->deferred_stack_unmap_starts[j] = txns[i].deferred_starts[j];
+            t->deferred_stack_unmap_ends[j] = txns[i].deferred_ends[j];
+        }
+        if (t->deferred_stack_unmap_busy > 0) {
+            t->deferred_stack_unmap_busy--;
+            wake = true;
+        }
+    }
+    if (wake)
+        pthread_cond_broadcast(&deferred_stack_unmap_cond);
+    pthread_mutex_unlock(&thread_lock);
+}
+
+int thread_prepare_deferred_stack_unmaps_for_cleanup(thread_entry_t *t,
+                                                     uint64_t *starts,
+                                                     uint64_t *ends,
+                                                     int max_ranges)
+{
+    int nranges = 0;
+
+    if (!t || !starts || !ends || max_ranges <= 0)
+        return 0;
+
+    pthread_mutex_lock(&thread_lock);
+    while (t->deferred_stack_unmap_busy > 0)
+        pthread_cond_wait(&deferred_stack_unmap_cond, &thread_lock);
+    t->stack_map_start = 0;
+    t->stack_map_end = 0;
+    nranges = t->deferred_stack_unmap_count;
+    if (nranges > max_ranges)
+        nranges = max_ranges;
+    for (int i = 0; i < nranges; i++) {
+        starts[i] = t->deferred_stack_unmap_starts[i];
+        ends[i] = t->deferred_stack_unmap_ends[i];
+    }
+    pthread_mutex_unlock(&thread_lock);
+
+    return nranges;
+}
+
+int thread_peek_deferred_stack_unmaps(thread_entry_t *t,
+                                      uint64_t *starts,
+                                      uint64_t *ends,
+                                      int max_ranges)
+{
+    int nranges = 0;
+
+    if (!t || !starts || !ends || max_ranges <= 0)
+        return 0;
+
+    pthread_mutex_lock(&thread_lock);
+    nranges = t->deferred_stack_unmap_count;
+    if (nranges > max_ranges)
+        nranges = max_ranges;
+    for (int i = 0; i < nranges; i++) {
+        starts[i] = t->deferred_stack_unmap_starts[i];
+        ends[i] = t->deferred_stack_unmap_ends[i];
+    }
+    pthread_mutex_unlock(&thread_lock);
+
+    return nranges;
+}
+
+int thread_drop_deferred_stack_unmap(thread_entry_t *t,
+                                     uint64_t start,
+                                     uint64_t end)
+{
+    int removed = 0;
+
+    if (!t || start >= end)
+        return 0;
+
+    pthread_mutex_lock(&thread_lock);
+    int n = t->deferred_stack_unmap_count;
+    for (int i = 0; i < n; i++) {
+        if (t->deferred_stack_unmap_starts[i] != start ||
+            t->deferred_stack_unmap_ends[i] != end)
+            continue;
+        n--;
+        t->deferred_stack_unmap_starts[i] = t->deferred_stack_unmap_starts[n];
+        t->deferred_stack_unmap_ends[i] = t->deferred_stack_unmap_ends[n];
+        t->deferred_stack_unmap_count = n;
+        removed = 1;
+        break;
+    }
+    pthread_mutex_unlock(&thread_lock);
+
+    return removed;
+}
+
+void thread_clear_stack_map(thread_entry_t *t)
+{
+    if (!t)
+        return;
+
+    pthread_mutex_lock(&thread_lock);
+    t->stack_map_start = 0;
+    t->stack_map_end = 0;
+    pthread_mutex_unlock(&thread_lock);
+}
+
+static int thread_add_deferred_unmap_locked(thread_entry_t *t,
+                                            uint64_t start,
+                                            uint64_t end)
+{
+    if (!t || start >= end)
+        return 0;
+
+    /* Absorb every existing slot that overlaps or is adjacent to [start,
+     * end), expanding the candidate as needed. Compact the array in place
+     * by pulling the live tail into each absorbed slot.
+     */
+    int n = t->deferred_stack_unmap_count;
+    int i = 0;
+    while (i < n) {
+        uint64_t rs = t->deferred_stack_unmap_starts[i];
+        uint64_t re = t->deferred_stack_unmap_ends[i];
+
+        if (end < rs || start > re) {
+            i++;
+            continue;
+        }
+        if (rs < start)
+            start = rs;
+        if (re > end)
+            end = re;
+        n--;
+        t->deferred_stack_unmap_starts[i] = t->deferred_stack_unmap_starts[n];
+        t->deferred_stack_unmap_ends[i] = t->deferred_stack_unmap_ends[n];
+    }
+
+    if (n >= MAX_DEFERRED_STACK_UNMAPS) {
+        t->deferred_stack_unmap_count = n;
+        return -1;
+    }
+
+    t->deferred_stack_unmap_starts[n] = start;
+    t->deferred_stack_unmap_ends[n] = end;
+    t->deferred_stack_unmap_count = n + 1;
+    return 0;
+}
+
+static int thread_can_add_deferred_unmap_locked(thread_entry_t *t,
+                                                uint64_t start,
+                                                uint64_t end)
+{
+    if (!t || start >= end)
+        return 0;
+
+    for (int i = 0; i < t->deferred_stack_unmap_count; i++) {
+        uint64_t rs = t->deferred_stack_unmap_starts[i];
+        uint64_t re = t->deferred_stack_unmap_ends[i];
+
+        if (end < rs || start > re)
+            continue;
+        return 0;
+    }
+
+    return (t->deferred_stack_unmap_count < MAX_DEFERRED_STACK_UNMAPS) ? 0 : -1;
 }
 
 static void thread_ptrace_init(thread_entry_t *t)

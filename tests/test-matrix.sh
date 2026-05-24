@@ -633,9 +633,11 @@ run_suite()
         elfuse-x86_64)
             printf "Unsupported %s: x86_64-via-Rosetta matrix is not runnable yet\n" \
                 "$mode"
-            printf "Current runtime still hard-disables Rosetta process syscalls "
-            printf "(fork/exec paths) and the x86_64 test-bin corpus is not "
-            printf "staged by fetch-fixtures.\n\n"
+            printf "Rosetta fork, execve, high-VA mmap, and the rosettad bridge "
+            printf "are in place; what remains is wiring the standalone "
+            printf "tests/test-rosetta-*.sh suites into a first-class matrix "
+            printf "branch with per-host pass/fail baselines. Run the "
+            printf "tests/test-rosetta-*.sh scripts directly in the meantime.\n\n"
             return 2
             ;;
         *)

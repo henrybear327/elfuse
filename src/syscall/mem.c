@@ -2702,23 +2702,15 @@ int64_t sys_madvise(guest_t *g, uint64_t addr, uint64_t length, int advice)
             uint64_t zend = (r->end < end) ? r->end : end;
             memset((uint8_t *) g->host_base + zstart, 0, zend - zstart);
             if (!(r->flags & LINUX_MAP_ANONYMOUS)) {
-                uint64_t file_off = r->offset + (zstart - r->start);
-                uint8_t *dst = (uint8_t *) g->host_base + zstart;
-                size_t remaining = zend - zstart;
-                while (remaining > 0) {
-                    ssize_t nr =
-                        pread(r->backing_fd, dst, remaining, (off_t) file_off);
-                    if (nr < 0) {
-                        if (errno == EINTR)
-                            continue;
-                        return linux_errno();
-                    }
-                    if (nr == 0)
-                        break; /* EOF: tail stays zero per mmap rules. */
-                    dst += nr;
-                    file_off += nr;
-                    remaining -= (size_t) nr;
-                }
+                /* EOF leaves the tail zero per mmap rules; the helper
+                 * already returns 0 in that case after stopping the
+                 * read loop.
+                 */
+                int err = read_file_range_to_guest(
+                    g, zstart, r->backing_fd, r->offset + (zstart - r->start),
+                    zend - zstart);
+                if (err < 0)
+                    return err;
             }
         }
         return 0;

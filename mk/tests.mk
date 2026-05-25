@@ -5,7 +5,8 @@
         test-dynamic test-dynamic-coreutils test-glibc-dynamic \
         test-glibc-coreutils test-perf \
         test-rosetta-cli test-rosetta-statics test-rosetta-failure-modes \
-        test-rosetta-alpine test-rosetta-all bench-rosetta \
+        test-rosetta-alpine test-rosetta-audit test-rosetta-jit \
+        test-rosetta-glibc test-rosetta-all bench-rosetta \
         test-matrix test-matrix-elfuse-aarch64 test-matrix-qemu-aarch64 \
         test-full test-multi-vcpu test-rwx test-sysroot-rename \
         test-case-collision test-case-collision-fallback test-sysroot-create-paths \
@@ -152,9 +153,19 @@ test-rosetta-failure-modes: $(ELFUSE_BIN)
 test-rosetta-alpine: $(ELFUSE_BIN)
 	$(call RUN_OPTIONAL_SKIP77,bash tests/test-rosetta-alpine.sh $(ELFUSE_BIN),test-rosetta-alpine)
 
+test-rosetta-audit: $(ELFUSE_BIN)
+	$(call RUN_OPTIONAL_SKIP77,bash tests/test-rosetta-audit.sh $(ELFUSE_BIN),test-rosetta-audit)
+
+test-rosetta-jit: $(ELFUSE_BIN)
+	$(call RUN_OPTIONAL_SKIP77,bash tests/test-rosetta-jit.sh $(ELFUSE_BIN),test-rosetta-jit)
+
+test-rosetta-glibc: $(ELFUSE_BIN)
+	$(call RUN_OPTIONAL_SKIP77,bash tests/test-rosetta-glibc.sh $(ELFUSE_BIN),test-rosetta-glibc)
+
 ## Run every Rosetta-specific test target in sequence.
 test-rosetta-all: test-rosetta-cli test-rosetta-failure-modes \
-                  test-rosetta-statics test-rosetta-alpine
+                  test-rosetta-statics test-rosetta-alpine \
+                  test-rosetta-audit test-rosetta-jit test-rosetta-glibc
 
 ## Wall-clock bench harness for x86_64-via-Rosetta workloads. Prints
 ## best-of-N samples plus the aarch64 reference where available. Set
@@ -443,8 +454,8 @@ test-perf: $(ELFUSE_BIN) $(PERF_DEPS)
 ## Alias for test-perf
 perf: test-perf
 
-# Test matrix (elfuse + qemu, aarch64)
-## Run full test matrix (all modes: elfuse + qemu, aarch64)
+# Test matrix (elfuse aarch64 + qemu aarch64 + elfuse x86_64/Rosetta)
+## Run full test matrix (all modes: elfuse-aarch64, qemu-aarch64, elfuse-x86_64)
 test-matrix: $(ELFUSE_BIN) $(TEST_DEPS)
 	@bash tests/test-matrix.sh all
 
@@ -456,8 +467,7 @@ test-matrix-elfuse-aarch64: $(ELFUSE_BIN) $(TEST_DEPS)
 test-matrix-qemu-aarch64: $(ELFUSE_BIN) $(TEST_DEPS)
 	@bash tests/test-matrix.sh qemu-aarch64
 
-## Probe the x86_64-via-Rosetta matrix wiring. Fails closed until the runtime
-## and fixture corpus are complete enough to execute real coverage.
+## Run test matrix: elfuse x86_64-via-Rosetta mode
 test-matrix-elfuse-x86_64: $(ELFUSE_BIN) $(TEST_DEPS)
 	@bash tests/test-matrix.sh elfuse-x86_64
 

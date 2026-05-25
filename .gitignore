@@ -4,3 +4,4 @@ externals/
 lib/modules/
 *.o
 *.bin
+__pycache__

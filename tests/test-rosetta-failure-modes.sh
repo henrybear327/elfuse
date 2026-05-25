@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
-# test-rosetta-failure-modes.sh - Probe known x86_64-via-Rosetta limits
+#
+# CLI gating for x86_64-via-Rosetta
 #
 # Copyright 2026 elfuse contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Verifies that known-unsupported scenarios fail with a clear, stable
-# error rather than crashing or succeeding silently. Treats the failure
-# itself as the test: every probe is expected to exit non-zero AND emit
-# a recognisable error fragment.
+# Verifies that the three command-line gates around x86_64 guests
+# reject as designed. Treats the failure itself as the test: every
+# probe is expected to exit non-zero AND emit a recognisable error
+# fragment.
 #
 # Categories covered:
-#   1. Mid-process aarch64 -> x86_64 execve: rejected -ENOEXEC
-#   2. Dynamic x86_64 binary (PT_INTERP): "failed to mmap segment"
-#   3. --gdb on x86_64 ELF: rejected by main.c
-#   4. --no-rosetta with x86_64: rejected at exec.c
-#   5. ELFUSE_NO_ROSETTA=1 with x86_64: same rejection via env
+#   1. --gdb on x86_64 ELF: rejected by main.c
+#   2. --no-rosetta with x86_64: rejected at exec.c
+#   3. ELFUSE_NO_ROSETTA=1 with x86_64: same rejection via env
+#
+# The end-to-end dynamic-linker bring-up under Rosetta is covered by
+# tests/test-rosetta-glibc.sh (glibc-hello / glibc-hello-via-ldso),
+# and mid-process execve re-bootstrap is covered by
+# tests/test-rosetta-statics.sh (env-execve). Those tests carry the
+# same code-path scrutiny as the dynamic / execve probes that used to
+# live here, against the vendored fixture trees that are always
+# present, so this script no longer needs the x86_64-musl Alpine
+# corpus and no longer self-stages it.
 #
 # Usage: tests/test-rosetta-failure-modes.sh [path/to/elfuse]
 
@@ -26,43 +34,18 @@ case "$ELFUSE_INPUT" in
     *) ELFUSE="$(pwd)/$ELFUSE_INPUT" ;;
 esac
 
-FIXTURES="${FIXTURES_DIR:-externals/test-fixtures}"
-STATICBIN_LONG="${FIXTURES}/x86_64-musl/staticbin/bin"
-DYNBIN_LONG="${FIXTURES}/x86_64-musl/dyn-bin"
 SHORTDIR=/tmp/elfuse-rfm
+
+# Shared report_pass / report_fail / report_skip + Results: summary
+# emitter. Matches the matrix runner's aarch64 per-binary format so
+# tests/test-matrix.sh elfuse-x86_64 output reads uniformly.
+# shellcheck source=tests/lib/rosetta-test.sh
+. "$(dirname "$0")/lib/rosetta-test.sh"
 
 pass=0
 fail=0
 skip=0
 total=0
-
-c_green()
-{
-    printf '\033[0;32m%s\033[0m' "$*"
-}
-c_red()
-{
-    printf '\033[0;31m%s\033[0m' "$*"
-}
-c_yellow()
-{
-    printf '\033[1;33m%s\033[0m' "$*"
-}
-report_pass()
-{
-    printf '%s %s\n' "$(c_green '   PASS:')" "$*"
-    pass=$((pass + 1))
-}
-report_fail()
-{
-    printf '%s %s\n' "$(c_red '   FAIL:')" "$*"
-    fail=$((fail + 1))
-}
-report_skip()
-{
-    printf '%s %s\n' "$(c_yellow '   SKIP:')" "$*"
-    skip=$((skip + 1))
-}
 
 # Expect a non-zero exit AND a stderr fragment match.
 # Args: <label> <stderr-grep-pattern> <command...>
@@ -73,7 +56,7 @@ probe_fail()
     total=$((total + 1))
 
     local stderr rc
-    stderr="$(mktemp "${SHORTDIR}/${label}.XXXXXX.stderr")"
+    stderr="$(mktemp "${SHORTDIR}/${label}.XXXXXX")"
     set +e
     "$TIMEOUT" 5 "$@" > /dev/null 2> "$stderr"
     rc=$?
@@ -98,21 +81,14 @@ if [ ! -x "$ELFUSE" ]; then
     exit 1
 fi
 
-# macOS ships no built-in timeout(1); Homebrew coreutils installs it as
-# /opt/homebrew/bin/timeout (and the legacy gtimeout alias). Detect either
-# binary so this suite runs on macOS hosts without preconfigured PATH.
-TIMEOUT="$(command -v timeout 2> /dev/null || command -v gtimeout 2> /dev/null \
-    || true)"
-if [ -z "$TIMEOUT" ]; then
-    printf 'timeout(1) not found in PATH; install via: brew install coreutils\n' >&2
-    exit 77
-fi
+require_timeout
 
 mkdir -p "$SHORTDIR"
 trap 'rm -rf "$SHORTDIR"' EXIT
 
 # Synthesize a minimal x86_64 ELF (header-only, no segments worth loading).
 # This is enough to drive the CLI gates that key on e_machine = EM_X86_64.
+# Self-contained: no external fixture tree needed.
 min_elf="${SHORTDIR}/min-x86_64.elf"
 python3 - "$min_elf" << 'PY'
 import struct, sys
@@ -123,8 +99,6 @@ phdr = struct.pack("<IIQQQQQQ",
     1, 5, 0, 0x400000, 0, 0, 0x1000, 0x1000)
 open(sys.argv[1], "wb").write(ehdr + phdr)
 PY
-
-# --- Gating tests that do not require Rosetta to be installed ---------------
 
 probe_fail "no-rosetta-flag" \
     "x86_64 ELF rejected by --no-rosetta" \
@@ -138,87 +112,11 @@ probe_fail "gdb-x86_64" \
     "--gdb is not supported for x86_64 guests" \
     "$ELFUSE" --gdb 4242 "$min_elf"
 
-# --- Tests that require Rosetta + fixtures ---------------------------------
-
-# Bootstrap the x86_64 fixture tree on-demand when rosetta is installed but
-# the staging dir is absent. Keeps `make test-rosetta-failure-modes`
-# self-sufficient on a fresh checkout instead of silently skipping the two
-# rosetta-dependent probes. The fetch is cached on disk so the first run
-# pays the download cost and every subsequent run is a no-op.
-if [ -x /Library/Apple/usr/libexec/oah/RosettaLinux/rosetta ] \
-    && {
-        [ ! -d "$DYNBIN_LONG" ] || [ ! -d "$STATICBIN_LONG" ]
-    }; then
-    printf 'staging x86_64 fixture tree (one-time download via fetch-fixtures.sh)\n'
-    INCLUDE_X86_64=1 bash "$(dirname "$0")/fetch-fixtures.sh" \
-        > /dev/null 2>&1 || true
-fi
-
-if [ ! -x /Library/Apple/usr/libexec/oah/RosettaLinux/rosetta ]; then
-    report_skip "dynamic-x86_64-segment-mmap (rosetta not installed)"
-    report_skip "mid-process-execve-x86_64 (rosetta not installed)"
-else
-    # Stage a short-path symlink farm so rosetta's 42-byte caps field does
-    # not truncate fixture paths in a normal checkout.
-    [ -d "$DYNBIN_LONG" ] \
-        && ln -sfn "$(cd "$DYNBIN_LONG" && pwd)" "${SHORTDIR}/dyn"
-    [ -d "$STATICBIN_LONG" ] \
-        && ln -sfn "$(cd "$STATICBIN_LONG" && pwd)" "${SHORTDIR}/sb"
-
-    # Probe 1: dynamic binary. PT_INTERP load currently fails with
-    # rosetta error "failed to mmap segment: 12". The probe only needs
-    # the dyn-bin tree; missing staticbin does not affect it.
-    if [ ! -d "${SHORTDIR}/dyn" ] \
-        || [ -z "$(ls -A "${SHORTDIR}/dyn" 2> /dev/null)" ]; then
-        report_skip "dynamic-x86_64-segment-mmap (dyn-bin fixtures missing)"
-    else
-        dyn_pick=""
-        for cand in echo cat ls true uname; do
-            if [ -x "${SHORTDIR}/dyn/${cand}" ]; then
-                dyn_pick="${SHORTDIR}/dyn/${cand}"
-                break
-            fi
-        done
-        if [ -z "$dyn_pick" ]; then
-            report_skip "dynamic-x86_64-segment-mmap (no dyn binary found)"
-        else
-            probe_fail "dynamic-x86_64-segment-mmap" \
-                "failed to mmap segment|Translation failed" \
-                "$ELFUSE" "$dyn_pick"
-        fi
-    fi
-
-    # Probe 2: mid-process execve into x86_64. busybox env spawns its argv[1]
-    # via execve. As of the rosetta re-bootstrap landing this is supported,
-    # so this is now a positive probe: env <true> must exit 0 with no
-    # output, exercising the post-reset rosetta_prepare re-entry branch +
-    # the bridge-idle drain in sys_execve. Only needs the staticbin tree.
-    if [ -x "${SHORTDIR}/sb/env" ] && [ -x "${SHORTDIR}/sb/true" ]; then
-        total=$((total + 1))
-        set +e
-        env_exec_rc=$(
-            "$TIMEOUT" 10 "$ELFUSE" "${SHORTDIR}/sb/env" \
-                "${SHORTDIR}/sb/true" > /dev/null 2>&1
-            printf '%s' "$?"
-        )
-        set -e
-        if [ "$env_exec_rc" = "0" ]; then
-            report_pass "mid-process-execve-x86_64 (rosetta re-bootstrap)"
-        else
-            report_fail "mid-process-execve-x86_64: rc=$env_exec_rc (expected 0)"
-        fi
-    else
-        report_skip "mid-process-execve-x86_64 (staticbin env/true missing)"
-    fi
-fi
-
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
-printf '\n'
-printf 'Results: %s passed, %s failed, %s skipped (of %s)\n' \
-    "$pass" "$fail" "$skip" "$total"
+report_summary "$total"
 
 if [ "$fail" -gt 0 ]; then
     exit 1

@@ -53,14 +53,16 @@ INITRAMFS="${FIXTURES}/initramfs.cpio.gz"
 # Pinned package versions (Alpine 3.21).  When bumping ALPINE_VERSION, refresh
 # these by querying the repo's APKINDEX.
 declare -A PKGS=(
-    ["main:linux-virt"]="6.12.90-r0"
+    ["main:linux-virt"]="6.12.91-r0"
     ["main:busybox-static"]="1.37.0-r14"
     ["main:dropbear"]="2024.86-r0"
     ["main:zlib"]="1.3.2-r0"
     ["main:utmps-libs"]="0.1.2.3-r2"
     ["main:skalibs-libs"]="2.14.3.0-r0"
     ["main:musl"]="1.2.5-r11"
+    ["main:musl-dev"]="1.2.5-r11"
     ["main:musl-utils"]="1.2.5-r11"
+    ["main:libgcc"]="14.2.0-r4"
     ["main:libcrypto3"]="3.3.7-r0"
     ["main:acl-libs"]="2.3.2-r1"
     ["main:libattr"]="2.5.2-r2"
@@ -82,6 +84,7 @@ declare -A PKGS=(
     ["main:ncurses-terminfo-base"]="6.5_p20241006-r3"
     ["main:lua5.4"]="5.4.7-r0"
     ["main:lua5.4-libs"]="5.4.7-r0"
+    ["main:luajit"]="2.1_p20240815-r0"
     ["main:jq"]="1.7.1-r0"
     ["main:oniguruma"]="6.9.9-r0"
     ["main:sqlite"]="3.48.0-r4"
@@ -91,7 +94,7 @@ declare -A PKGS=(
 
 # Subset whose binaries are exposed as standalone "static-bins" suite paths.
 # Most are dynamic but link only against musl/zlib/etc., already in rootfs/.
-# Applet list (hardcoded — busybox 1.37 inventory).  Busybox does not have
+# Applet list (hardcoded -- busybox 1.37 inventory).  Busybox does not have
 # b2sum / numfmt / base32; those tests fall through to the dynamic-coreutils
 # suite where the real coreutils binary is available.
 STATIC_APPLETS=(
@@ -212,10 +215,10 @@ main()
         cp -R "$modstage/lib/modules" "$ROOTFS/lib/" 2> /dev/null
         rm -rf "$modstage"
 
-        # /init (custom — no openrc, just bring up minimum services for ssh).
+        # /init (custom -- no openrc, just bring up minimum services for ssh).
         cat > "${ROOTFS}/init" << 'EOF'
 #!/bin/sh
-# Custom init — sets up enough for dropbear ssh + 9p shared mounts.
+# Custom init -- sets up enough for dropbear ssh + 9p shared mounts.
 set +e
 exec </dev/console >/dev/console 2>&1
 
@@ -243,7 +246,7 @@ ifconfig lo 127.0.0.1 up
 ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up || echo "qemu-runner: eth0 up failed"
 route add default gw 10.0.2.2 2>/dev/null
 
-# Dropbear — pre-baked host keys, pubkey auth only (passwords disabled).
+# Dropbear -- pre-baked host keys, pubkey auth only (passwords disabled).
 mkdir -p /etc/dropbear /var/empty /var/log
 chmod 700 /root /root/.ssh
 chown -R 0:0 /root

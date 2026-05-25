@@ -757,7 +757,7 @@ static void handle_thread_info(int first)
     }
 
     /* Build comma-separated hex thread ID list.
-     * Worst case: MAX_THREADS(64) × 17 chars (16 hex + comma) + 1 prefix + NUL.
+     * Worst case: MAX_THREADS(64) x 17 chars (16 hex + comma) + 1 prefix + NUL.
      */
     char reply[2048];
     int pos = 0;

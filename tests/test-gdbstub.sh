@@ -279,7 +279,7 @@ run_lldb \
     -o "memory read 0x400020 --count 6 --format c" \
     -o "process kill" \
     -o "quit"
-# 0x400020 is msg: "hello\n" — should contain 'h','e','l','l','o'
+# 0x400020 is msg: "hello\n" -- should contain 'h','e','l','l','o'
 ok=0
 if echo "$LLDB_OUT" | grep -q "hello"; then
     ok=1
@@ -342,7 +342,7 @@ run_lldb \
     -o "register read pc" \
     -o "process kill" \
     -o "quit"
-# Should hit breakpoint at 0x400014 (mov x0, #0 — the exit setup)
+# Should hit breakpoint at 0x400014 (mov x0, #0 -- the exit setup)
 ok=0
 if echo "$LLDB_OUT" | grep -qi "0x.*400014"; then
     ok=1
@@ -456,7 +456,7 @@ run_lldb \
 sleep 0.5
 ok=0
 if ! kill -0 "$elfuse_pid" 2> /dev/null; then
-    # elfuse exited after detach — guest ran to completion
+    # elfuse exited after detach -- guest ran to completion
     ok=1
 fi
 report "detach: guest continues and exits after detach" $ok

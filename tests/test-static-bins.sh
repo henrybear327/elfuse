@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-static-bins.sh — Static binary smoke tests for elfuse
+# test-static-bins.sh -- Static binary smoke tests for elfuse
 #
 # Copyright 2026 elfuse contributors
 # Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -35,7 +35,7 @@ TEST_TIMEOUT="${TEST_TIMEOUT:-10}"
 # shellcheck source=tests/lib/test-runner.sh
 source "$SCRIPT_DIR/lib/test-runner.sh"
 
-# GNU `timeout` is required to bound each guest invocation. On macOS it
+# GNU 'timeout' is required to bound each guest invocation. On macOS it
 # ships via Homebrew coreutils. Fail loudly upfront instead of letting
 # every test report a cryptic "command not found, rc=127".
 if ! command -v timeout > /dev/null 2>&1; then

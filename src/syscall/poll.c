@@ -779,7 +779,7 @@ int64_t sys_epoll_ctl(guest_t *g, int epfd, int op, int fd, uint64_t event_gva)
      * deletes even when oneshot_armed: with multi-filter EPOLLONESHOT, only
      * the filter that fired was removed by EV_ONESHOT; the other filter is
      * still registered and must be cleaned. Issue each delete in its own
-     * kevent call so an ENOENT on one filter does not abort the other —
+     * kevent call so an ENOENT on one filter does not abort the other --
      * with a single batched call and NULL eventlist, kevent stops at the
      * first failed change and leaks the survivor.
      */

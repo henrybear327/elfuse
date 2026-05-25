@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-busybox.sh — Busybox 1.37.0 applet smoke tests for elfuse
+# test-busybox.sh -- Busybox 1.37.0 applet smoke tests for elfuse
 #
 # Copyright 2026 elfuse contributors
 # Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

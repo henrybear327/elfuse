@@ -1007,7 +1007,7 @@ static void drain_external_guest_signal(void)
     }
 }
 
-/* HVC #4 (set sysreg) register index → hv_sys_reg_t mapping.
+/* HVC #4 (set sysreg) register index -> hv_sys_reg_t mapping.
  * Index must match the encoding the shim writes to X0 in shim.S; out-of-range
  * IDs trip the HVC #4 default branch in vcpu_run_loop().
  */

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-fuse-alpine.sh — Validate guest FUSE inside the Alpine musl sysroot.
+# test-fuse-alpine.sh -- Validate guest FUSE inside the Alpine musl sysroot.
 #
 # Copyright 2026 elfuse contributors
 # SPDX-License-Identifier: Apache-2.0

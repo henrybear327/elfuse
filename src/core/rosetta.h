@@ -169,7 +169,7 @@ typedef struct {
 
 /* First-pass rosetta setup, runs before guest_build_page_tables(): parse
  * the rosetta binary, place its segments in the primary buffer (or reload
- * into the existing placement on execve), initialise the TTBR1 kbuf, and
+ * into the existing placement on execve), initialize the TTBR1 kbuf, and
  * append page-table regions for the builder. A single non-identity
  * mem_region_t covers the rosetta image, mapping its statically-linked high
  * VA to the chosen low GPA via mem_region_t.va_base.

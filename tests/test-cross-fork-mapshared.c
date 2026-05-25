@@ -132,7 +132,7 @@ static bool send_byte(int fd)
     return n == 1;
 }
 
-/* Test 1: File-backed MAP_SHARED — parent and child see each other's
+/* Test 1: File-backed MAP_SHARED -- parent and child see each other's
  * writes through the same disk file without msync.
  */
 static void test_file_backed_cross_fork(void)
@@ -253,7 +253,7 @@ static void test_file_backed_cross_fork(void)
     close(fd);
 }
 
-/* Test 2: Anonymous MAP_SHARED — typical parent-child IPC pattern
+/* Test 2: Anonymous MAP_SHARED -- typical parent-child IPC pattern
  * (Postgres, multi-process daemons). elfuse must convert the region
  * to memfd-backed at fork time so both sides observe writes.
  */
@@ -339,7 +339,7 @@ static void test_anon_shared_cross_fork(void)
     munmap(p, 4096);
 }
 
-/* Test 3: shm-backed MAP_SHARED via /dev/shm — same as test 1 but
+/* Test 3: shm-backed MAP_SHARED via /dev/shm -- same as test 1 but
  * exercises the shm path (musl/glibc shm_open emulation in elfuse).
  */
 static void test_shm_cross_fork(void)

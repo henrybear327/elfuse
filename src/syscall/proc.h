@@ -86,7 +86,7 @@ const char *proc_get_elfuse_path(void);
 void proc_set_rosetta_enabled(bool enabled);
 bool proc_rosetta_enabled(void);
 
-/* Runtime indicator: true once the guest_t has been initialised in rosetta
+/* Runtime indicator: true once the guest_t has been initialized in rosetta
  * mode. Distinct from proc_rosetta_enabled which reflects the user opt-in.
  * Code paths that lack direct guest_t access (proc_intercept_readlink) can
  * branch on the runtime state without threading g through every signature.

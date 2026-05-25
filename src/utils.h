@@ -151,7 +151,7 @@ static inline int fd_set_nonblock(int fd)
 /* Carry overflow/underflow between tv_nsec and tv_sec so the result is a
  * canonical timespec with 0 <= tv_nsec < 1e9. Uses div/mod (which truncate
  * toward zero in C99) plus a single borrow so the LONG_MIN case never
- * negates tv_nsec — that would be undefined behavior.
+ * negates tv_nsec -- that would be undefined behavior.
  *
  * NSEC_PER_SEC is also defined by mach/clock_types.h and dispatch/time.h
  * on macOS; the guard avoids redefinition warnings when those system
@@ -200,7 +200,7 @@ static inline uint64_t bit_mask64_low(unsigned int n)
     return n >= 64 ? UINT64_MAX : (BIT64(n) - 1);
 }
 
-/* Position of the lowest set bit. word must be non-zero — __builtin_ctzll
+/* Position of the lowest set bit. word must be non-zero -- __builtin_ctzll
  * is undefined on zero. Range: 0..63.
  */
 static inline int bit_ctz64(uint64_t word)

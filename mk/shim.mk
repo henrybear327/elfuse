@@ -28,7 +28,7 @@ $(BUILD_DIR)/shim_blob.h: $(BUILD_DIR)/shim.bin
 	cmp -s "$$tmp" "$@" 2>/dev/null || mv "$$tmp" "$@"; \
 	rm -f "$$tmp"
 
-# Version header — regenerates when HEAD or index changes.
+# Version header -- regenerates when HEAD or index changes.
 # cmp trick avoids unnecessary rebuilds when version string is unchanged.
 VERSION_DEPS := $(wildcard .git/HEAD .git/index) mk/config.mk
 $(BUILD_DIR)/version.h: $(VERSION_DEPS) | $(BUILD_DIR)

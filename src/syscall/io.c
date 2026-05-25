@@ -94,8 +94,9 @@ static void termios_copy_cc_to_linux(uint8_t linux_cc[19], const cc_t mac_cc[])
 {
     for (int i = 0; i < 19; i++) {
         int mac_idx = linux_mac_cc[i];
-        // cppcheck-suppress negativeIndex
-        // RANGE_CHECK guards mac_idx >= 0 before the array access.
+        /* cppcheck-suppress negativeIndex
+         * RANGE_CHECK guards mac_idx >= 0 before the array access.
+         */
         linux_cc[i] = RANGE_CHECK(mac_idx, 0, NCCS) ? mac_cc[mac_idx] : 0;
     }
 }
@@ -186,7 +187,7 @@ static int64_t rosetta_vz_ioctl(guest_t *g, uint64_t request, uint64_t arg)
         return 1;
     }
     case ROSETTA_VZ_CAPS: {
-        /* caps is zero-initialised: VZ_SECONDARY and the trailing NUL of any
+        /* caps is zero-initialized: VZ_SECONDARY and the trailing NUL of any
          * partially-copied binary path are already in place.
          */
         uint8_t caps[ROSETTA_CAPS_SIZE] = {0};

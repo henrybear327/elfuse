@@ -191,9 +191,9 @@ static uint64_t make_page_rw(uint64_t gpa)
  *   L2[0]: 0x000000 (shim+PT pool, RX)
  *   L2[1]: 0x200000 (shim data/EL1 stack, RW)
  *   L2[2]: 0x400000 (guest EL0 code, RX)
- *   L2[3]: 0x600000 (RWX block test, RWX)       ← Test 1
- *   L2[4]: 0x800000 (table -> L3 for RWX page)   ← Test 2
- *   L2[5]: 0xA00000 (guest data, RW)             ← Test 4
+ *   L2[3]: 0x600000 (RWX block test, RWX)       <- Test 1
+ *   L2[4]: 0x800000 (table -> L3 for RWX page)   <- Test 2
+ *   L2[5]: 0xA00000 (guest data, RW)             <- Test 4
  *   L2[6]: 0xC00000 (stack, RW)
  *   L2[7]: 0xE00000 (stack top, RW)
  */

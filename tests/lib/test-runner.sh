@@ -10,10 +10,10 @@
 : "${TEST_LABEL_WIDTH:=14}"
 : "${TEST_TIMEOUT:=10}"
 
-# Resolve a working `timeout` binary. macOS doesn't ship one, so fall back to
+# Resolve a working 'timeout' binary. macOS doesn't ship one, so fall back to
 # GNU coreutils' gtimeout. Wrap as a function so callers keep using the bare
-# name `timeout`. Resolution order: TIMEOUT_BIN env override, `timeout` on
-# PATH, `gtimeout` on PATH, then Homebrew's stable opt symlinks for ARM and
+# name 'timeout'. Resolution order: TIMEOUT_BIN env override, 'timeout' on
+# PATH, 'gtimeout' on PATH, then Homebrew's stable opt symlinks for ARM and
 # Intel macOS (the install prefix differs between the two).
 if [ -n "${TIMEOUT_BIN:-}" ]; then
     timeout()
@@ -34,7 +34,7 @@ elif ! command -v timeout > /dev/null 2>&1; then
         done
     fi
     if [ -n "$_timeout_bin" ]; then
-        # shellcheck disable=SC2317  # Invoked indirectly via `timeout` callers.
+        # shellcheck disable=SC2317  # Invoked indirectly via 'timeout' callers.
         eval "timeout() { \"$_timeout_bin\" \"\$@\"; }"
     else
         echo "test-runner: no 'timeout' or 'gtimeout' in PATH." >&2
@@ -137,7 +137,7 @@ run()
         return
     fi
 
-    # Wrap every invocation in `timeout` so a hanging guest tool cannot
+    # Wrap every invocation in 'timeout' so a hanging guest tool cannot
     # freeze the entire suite. run_pipe and run_timeout already do this;
     # the omission here used to let a deadlocked elfuse syscall path
     # hang make check forever.

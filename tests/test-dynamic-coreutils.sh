@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-dynamic-coreutils.sh — Dynamically-linked GNU coreutils test suite for elfuse
+# test-dynamic-coreutils.sh -- Dynamically-linked GNU coreutils test suite for elfuse
 #
 # Copyright 2026 elfuse contributors
 # Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

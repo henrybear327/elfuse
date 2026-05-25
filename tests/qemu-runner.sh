@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# qemu-runner.sh — Boot qemu-system-aarch64 with the elfuse test fixtures
+# qemu-runner.sh -- Boot qemu-system-aarch64 with the elfuse test fixtures
 # initramfs and provide qemu_exec() for command execution over ssh.
 #
 # Sourced by tests/test-matrix.sh (for the qemu-aarch64 mode) but also
@@ -162,7 +162,7 @@ qemu_start()
 
 # Each call opens a fresh ssh connection.  Avoids ControlMaster pitfalls
 # (master dying mid-suite cascades rc=255 to every later command) at the
-# cost of ~100ms handshake overhead per call — a flat ~15s across the
+# cost of ~100ms handshake overhead per call -- a flat ~15s across the
 # full matrix, well within the suite's tolerance.
 _qemu_ssh_raw()
 {
@@ -226,7 +226,7 @@ qemu_stop()
 # script exit.
 trap 'qemu_stop' EXIT
 
-# CLI driver: when run directly, support `qemu-runner.sh start|exec|stop`.
+# CLI driver: when run directly, support 'qemu-runner.sh start|exec|stop'.
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
     cmd="${1:-help}"
     shift || true

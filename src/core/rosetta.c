@@ -6,7 +6,7 @@
  *
  * rosetta_prepare loads the Apple Rosetta binary into the primary buffer at
  * a low GPA and exposes it at its statically-linked high VA (0x800000000000)
- * via a non-identity mem_region_t.va_base. The TTBR1 kbuf is initialised at
+ * via a non-identity mem_region_t.va_base. The TTBR1 kbuf is initialized at
  * a 256 MiB window just below the rosetta image. rosetta_finalize wires the
  * bootstrap-visible pieces needed to enter the translator: fd 3 setup,
  * binfmt-style argv construction, cmdline refresh, and the TTBR0 kbuf alias.
@@ -801,7 +801,7 @@ static ssize_t rosettad_send_fd(int sock, uint8_t payload, int send_fd)
 
 /* Translate subprocess */
 
-/* Spawn `elfuse rosettad translate <in_path> <out_path>` and wait for it
+/* Spawn 'elfuse rosettad translate <in_path> <out_path>' and wait for it
  * to exit. Returns 0 if the translator exited successfully and the
  * output file is non-empty, -1 otherwise.
  */
@@ -885,7 +885,7 @@ static int translate_via_rosettad(const char *in_path, const char *out_path)
  * (hit -> return cached fd), or spawn the translator and publish the
  * result. Returns an O_RDONLY fd pointing at the AOT file on success,
  * -1 on any failure. *out_digest is always written when the SHA-256
- * succeeds; the caller passes it back to rosetta so subsequent `d`
+ * succeeds; the caller passes it back to rosetta so subsequent 'd'
  * lookups reuse the same key.
  */
 static int rosettad_translate(int bin_fd,

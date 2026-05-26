@@ -71,10 +71,9 @@
  * meaningful (Apple Silicon TSO toggle); older platforms simply leave actlr
  * at 0, which falls through to PR_SET_MEM_MODEL_DEFAULT.
  *
- * The guard checks the SDK version rather than the macro presence: on
- * macOS 15+ the symbol is an enumerator (not a #define), so a plain
- * #ifndef would always fire and shadow the SDK name with a macro of the
- * same spelling.
+ * The guard checks the SDK version rather than the macro presence: on macOS 15+
+ * the symbol is an enumerator (not a #define), so a plain #ifndef would always
+ * fire and shadow the SDK name with a macro of the same spelling.
  */
 #if __MAC_OS_X_VERSION_MAX_ALLOWED < 150000
 #define HV_SYS_REG_ACTLR_EL1 ((hv_sys_reg_t) 0xc081)
@@ -99,18 +98,18 @@ void syscall_init(void)
     wakeup_pipe_init();
 }
 
-/* Memory syscall implementations (sys_brk, sys_mmap, sys_mremap, etc.)
- * are in syscall/mem.c. FD table in syscall/fdtable.c. Errno/flag
- * translation in syscall/translate.c.
+/* Memory syscall implementations (sys_brk, sys_mmap, sys_mremap, etc.) are in
+ * syscall/mem.c. FD table in syscall/fdtable.c. Errno/flag translation in
+ * syscall/translate.c.
  */
 
 /* Syscall handler table. */
 
-/* Each sc_xxx wrapper adapts one (or a group of fall-through) case(s) from
- * the old switch into a uniform signature.  Returns int64_t result, or a
- * sentinel: SYSCALL_EXEC_HAPPENED for exec/sigreturn, (INT64_MIN | code)
- * for exit/exit_group.  Wrappers that need mmap_lock acquire it internally.
- * Wrappers that need the vCPU handle use current_thread->vcpu.
+/* Each sc_xxx wrapper adapts one (or a group of fall-through) case(s) from the
+ * old switch into a uniform signature.  Returns int64_t result, or a sentinel:
+ * SYSCALL_EXEC_HAPPENED for exec/sigreturn, (INT64_MIN | code) for
+ * exit/exit_group. Wrappers that need mmap_lock acquire it internally. Wrappers
+ * that need the vCPU handle use current_thread->vcpu.
  */
 typedef int64_t (*syscall_handler_t)(guest_t *g,
                                      uint64_t x0,
@@ -122,40 +121,40 @@ typedef int64_t (*syscall_handler_t)(guest_t *g,
                                      bool verbose);
 
 /* Exit sentinel: high bits mark this as an exit, low 8 bits carry the code.
- * Cannot collide with SYSCALL_EXEC_HAPPENED (-0x10000): exit sentinel
- * has INT64_MIN's sign bit set, exec sentinel does not.
+ * Cannot collide with SYSCALL_EXEC_HAPPENED (-0x10000): exit sentinel has
+ * INT64_MIN's sign bit set, exec sentinel does not.
  */
 #define SC_EXIT_SENTINEL INT64_MIN
 
 /* Wrapper macros.
  *
- * These macros eliminate the boilerplate of ~120 sc_xxx wrappers that
- * follow one of three patterns:
+ * These macros eliminate the boilerplate of ~120 sc_xxx wrappers that follow
+ * one of three patterns:
  *
  *   SC_FORWARD(name, expr): cast args and forward to sys_xxx / signal_xxx
  *   SC_LOCKED(name, expr):  same, but hold mmap_lock during the call
  *   SC_STUB(name, val):     return a constant (alias for SC_FORWARD)
  *
  * All parameters are marked (void) to suppress -Wunused-parameter.
- * The body expression may reference g, x0–x5, and verbose freely.
+ * The body expression may reference g, x0-x5, and verbose freely.
  */
 
 /* clang-format off */
 #define SC_FORWARD(name, body)                                                \
-    static int64_t name(guest_t *g, uint64_t x0, uint64_t x1, uint64_t x2,   \
+    static int64_t name(guest_t *g, uint64_t x0, uint64_t x1, uint64_t x2,    \
                         uint64_t x3, uint64_t x4, uint64_t x5, bool verbose)  \
     {                                                                         \
-        (void) g; (void) x0; (void) x1; (void) x2;                           \
-        (void) x3; (void) x4; (void) x5; (void) verbose;                     \
+        (void) g; (void) x0; (void) x1; (void) x2;                            \
+        (void) x3; (void) x4; (void) x5; (void) verbose;                      \
         return (body);                                                        \
     }
 
 #define SC_LOCKED(name, body)                                                 \
-    static int64_t name(guest_t *g, uint64_t x0, uint64_t x1, uint64_t x2,   \
+    static int64_t name(guest_t *g, uint64_t x0, uint64_t x1, uint64_t x2,    \
                         uint64_t x3, uint64_t x4, uint64_t x5, bool verbose)  \
     {                                                                         \
-        (void) g; (void) x0; (void) x1; (void) x2;                           \
-        (void) x3; (void) x4; (void) x5; (void) verbose;                     \
+        (void) g; (void) x0; (void) x1; (void) x2;                            \
+        (void) x3; (void) x4; (void) x5; (void) verbose;                      \
         pthread_mutex_lock(&mmap_lock);                                       \
         int64_t r = (body);                                                   \
         pthread_mutex_unlock(&mmap_lock);                                     \
@@ -363,22 +362,22 @@ SC_FORWARD(sc_futex, sys_futex(g, x0, (int) x1, (uint32_t) x2, x3, x4, (uint32_t
 
 /* Sync.
  *
- * Linux sync(2) flushes all dirty buffers. Forwarding to host sync()
- * stalls because the guest slab is mmap'd MAP_SHARED to an internal
- * tempfile (g->shm_fd) for the CoW fork fast path: a global flush has
- * to walk multi-GB of demand-paged dirty pages from that tempfile, plus
- * the same from any other elfuse process running on the host. The slab
- * tempfile is implementation detail; the guest never opened it. Iterate
- * the guest fd table and the region overlay backing fds, dup each under
- * its lock, release the lock, and fsync the dups outside any guest lock
- * so a slow disk cannot stall concurrent mmap/fd operations on other
- * threads. fsync on non-regular fds returns EINVAL on macOS, which is
- * benign and ignored. Always returns 0 to mirror sync(2)'s "void" spirit.
+ * Linux sync(2) flushes all dirty buffers. Forwarding to host sync() stalls
+ * because the guest slab is mmap'd MAP_SHARED to internal tempfile (g->shm_fd)
+ * for the CoW fork fast path: a global flush has to walk multi-GB of
+ * demand-paged dirty pages from that tempfile, plus the same from any other
+ * elfuse process running on the host. The slab tempfile is implementation
+ * detail; the guest never opened it. Iterate the guest fd table and the region
+ * overlay backing fds, dup each under its lock, release the lock, and fsync the
+ * dups outside any guest lock so a slow disk cannot stall concurrent mmap/fd
+ * operations on other threads. fsync on non-regular fds returns EINVAL on
+ * macOS, which is benign and ignored. Always returns 0 to mirror sync(2)'s
+ * "void" spirit.
  */
-/* Inline fallback: under malloc failure the bulk-dup path cannot proceed,
- * so iterate one fd at a time, dupping under the matching lock and fsync
- * outside it. Slower (acquires/releases fd_lock per regular fd) but keeps
- * sync(2) honest under memory pressure instead of silently no-opping.
+/* Inline fallback: under malloc failure the bulk-dup path cannot proceed, so
+ * iterate one fd at a time, dupping under the matching lock and fsync outside
+ * it. Slower (acquires/releases fd_lock per regular fd) but keeps sync(2)
+ * honest under memory pressure instead of silently no-opping.
  */
 static void sc_sync_fdtable_inline(void)
 {
@@ -399,9 +398,9 @@ static void sc_sync_fdtable_inline(void)
 static void sc_sync_regions_inline(guest_t *g)
 {
     /* Region count can change under us once mmap_lock is released, so
-     * resnapshot under the lock each iteration; the i index is a live
-     * cursor into g->regions[] so a concurrent insertion (always at the
-     * sorted position) cannot make us skip an entry permanently.
+     * resnapshot under the lock each iteration; the i index is a live cursor
+     * into g->regions[] so a concurrent insertion (always at the sorted
+     * position) cannot make us skip an entry permanently.
      */
     for (int i = 0;; i++) {
         pthread_mutex_lock(&mmap_lock);
@@ -1727,6 +1726,7 @@ int syscall_dispatch(hv_vcpu_t vcpu, guest_t *g, int *exit_code, bool verbose)
             if (tp != FD_REGULAR && tp != FD_STDIO && tp != FD_PIPE &&
                 tp != FD_SOCKET)
                 goto slow_path;
+
             /* Proc-backed fds may need synthetic read/write handling (for
              * example, oom_* rereads recompute content on each read and proc
              * dirfds steer relative *at() resolution). Keep them on the slow

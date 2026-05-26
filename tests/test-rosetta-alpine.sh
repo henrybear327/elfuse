@@ -33,44 +33,22 @@ esac
 FIXTURES="${FIXTURES_DIR:-externals/test-fixtures}"
 STATICBIN_LONG="${FIXTURES}/x86_64-musl/staticbin/bin"
 ROOTFS="${FIXTURES}/x86_64-musl/rootfs"
-ROSETTA_PATH=/Library/Apple/usr/libexec/oah/RosettaLinux/rosetta
+ROSETTA_PATH="${MATRIX_ROSETTA_TRANSLATOR:-/Library/Apple/usr/libexec/oah/RosettaLinux/rosetta}"
 
 SHORTDIR=/tmp/elfuse-ra
 STATICBIN="${SHORTDIR}/bin"
 DATA="${SHORTDIR}/data"
 
+# Shared report_pass / report_fail / report_skip + Results: summary
+# emitter. Matches the matrix runner's aarch64 per-binary format so
+# tests/test-matrix.sh elfuse-x86_64 output reads uniformly.
+# shellcheck source=tests/lib/rosetta-test.sh
+. "$(dirname "$0")/lib/rosetta-test.sh"
+
 pass=0
 fail=0
 skip=0
 total=0
-
-c_green()
-{
-    printf '\033[0;32m%s\033[0m' "$*"
-}
-c_red()
-{
-    printf '\033[0;31m%s\033[0m' "$*"
-}
-c_yellow()
-{
-    printf '\033[1;33m%s\033[0m' "$*"
-}
-report_pass()
-{
-    printf '%s %s\n' "$(c_green '   PASS:')" "$*"
-    pass=$((pass + 1))
-}
-report_fail()
-{
-    printf '%s %s\n' "$(c_red '   FAIL:')" "$*"
-    fail=$((fail + 1))
-}
-report_skip()
-{
-    printf '%s %s\n' "$(c_yellow '   SKIP:')" "$*"
-    skip=$((skip + 1))
-}
 
 # Pre-flight.
 if [ ! -x "$ROSETTA_PATH" ]; then
@@ -87,15 +65,7 @@ if [ ! -x "$ELFUSE" ]; then
     exit 1
 fi
 
-# macOS ships no built-in timeout(1); Homebrew coreutils installs it as
-# /opt/homebrew/bin/timeout (and the legacy gtimeout alias). Detect either
-# binary so this suite runs on macOS hosts without preconfigured PATH.
-TIMEOUT="$(command -v timeout 2> /dev/null || command -v gtimeout 2> /dev/null \
-    || true)"
-if [ -z "$TIMEOUT" ]; then
-    printf 'timeout(1) not found in PATH; install via: brew install coreutils\n' >&2
-    exit 77
-fi
+require_timeout
 
 # Stage short-path symlink farm and a small data corpus.
 rm -rf "$SHORTDIR"
@@ -434,9 +404,7 @@ run_pipe "pipe-base64-decode" "rosetta-bridge" \
 # Summary
 # ---------------------------------------------------------------------------
 
-printf '\n'
-printf 'Results: %s passed, %s failed, %s skipped (of %s)\n' \
-    "$pass" "$fail" "$skip" "$total"
+report_summary "$total"
 
 if [ "$fail" -gt 0 ]; then
     exit 1

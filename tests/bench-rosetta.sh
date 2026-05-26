@@ -29,7 +29,7 @@ esac
 
 FIXTURES="${FIXTURES_DIR:-externals/test-fixtures}"
 STATICBIN_LONG="${FIXTURES}/x86_64-musl/staticbin/bin"
-ROSETTA_PATH=/Library/Apple/usr/libexec/oah/RosettaLinux/rosetta
+ROSETTA_PATH="${MATRIX_ROSETTA_TRANSLATOR:-/Library/Apple/usr/libexec/oah/RosettaLinux/rosetta}"
 SHORTDIR=/tmp/elfuse-br
 
 if [ ! -x "$ROSETTA_PATH" ]; then

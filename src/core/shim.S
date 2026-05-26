@@ -248,7 +248,7 @@ bad_exception:
  * registers X9-X15 are NOT saved by the compiler across SVC calls. The shim
  * must save/restore ALL 31 GPRs.
  *
- * Stack frame: 256 bytes (16 pairs × 16 bytes)
+ * Stack frame: 256 bytes (16 pairs x 16 bytes)
  *   [sp+0]   x0,x1    [sp+16]  x2,x3    [sp+32]  x4,x5
  *   [sp+48]  x6,x7    [sp+64]  x8,x9    [sp+80]  x10,x11
  *   [sp+96]  x12,x13  [sp+112] x14,x15  [sp+128] x16,x17
@@ -605,7 +605,7 @@ tlbi_selective:
      * TLBI VAE1IS takes a Xt operand of (VA[55:12] | (ASID << 48)). The
      * guest runs single-ASID at EL0, so just shift the VA right by 12.
      * Issue all TLBI ops, then a single DSB ISH + IC IALLU + DSB + ISB
-     * matches broadcast semantics (preserves I-cache invalidation behaviour
+     * matches broadcast semantics (preserves I-cache invalidation behavior
      * for callers like file-backed mmap of executable pages).
      *
      * Defensive: if x10 == 0, skip the loop. The per-vCPU host-side

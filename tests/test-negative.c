@@ -395,7 +395,7 @@ static void test_einval(void)
     {
         /* TIMER_ABSTIME with a deadline already in the past must return 0
          * immediately (no sleep). Use tv_sec=0 to stay in the kernel's
-         * "valid timespec" space — Linux rejects negative tv_sec with
+         * "valid timespec" space -- Linux rejects negative tv_sec with
          * -EINVAL even before the deadline-in-past check.
          */
         struct timespec ts = {.tv_sec = 0, .tv_nsec = 0};

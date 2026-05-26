@@ -1,4 +1,4 @@
-# mk/common.mk — Generic build rules
+# mk/common.mk -- Generic build rules
 #
 # Per-file compilation with automatic dependency tracking, verbosity
 # control, and kernel-style build output.  Inspired by libiui's build
@@ -18,7 +18,7 @@ $(BUILD_DIR):
 # Automatic header dependency generation (-MMD -MP)
 DEPFLAGS = -MMD -MP -MF $(BUILD_DIR)/$(subst /,_,$*).d
 
-# Pattern rules — source to object.
+# Pattern rules -- source to object.
 # GENERATED_HEADERS are order-only prerequisites so clean builds have the
 # build-generated includes available before compilation. .d files track the
 # real header dependencies after the first compile. Generators whose output

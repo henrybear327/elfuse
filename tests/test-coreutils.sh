@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-coreutils.sh — GNU coreutils integration suite for elfuse
+# test-coreutils.sh -- GNU coreutils integration suite for elfuse
 #
 # Copyright 2026 elfuse contributors
 # Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

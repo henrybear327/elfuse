@@ -491,7 +491,7 @@ int main(void)
             if (n != 1 || (out.events & EPOLLOUT)) {
                 FAIL("expected only IN to fire (OUT must not be ready)");
             } else {
-                /* MOD to IN-only — drops OUT entirely. The implementation
+                /* MOD to IN-only -- drops OUT entirely. The implementation
                  * must remove the surviving EVFILT_WRITE; with the kevent
                  * batched-delete bug it would leak.
                  */

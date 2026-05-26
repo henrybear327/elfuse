@@ -146,7 +146,7 @@ static void sysinfo_refresh_cached_locked(time_t now_sec)
         }
     }
 
-    /* Load averages (× 65536 for fixed-point). */
+    /* Load averages (x 65536 for fixed-point). */
     double loadavg[3];
     if (getloadavg(loadavg, 3) == 3) {
         cached_sysinfo.loads[0] = (uint64_t) (loadavg[0] * 65536.0);

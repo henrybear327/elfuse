@@ -53,7 +53,7 @@ PERF_FAILED=0
 
 # Collect $RUNS timing samples for a command, print median and stats.
 # Args: label command...
-# Earlier revisions swallowed every sample's exit status with `|| true`,
+# Earlier revisions swallowed every sample's exit status with '|| true',
 # which made a missing native binary, an elfuse crash, or a host SIP
 # block silently degrade into "median 0 ms PASS". Now any non-zero
 # sample aborts the timing for that label and flips PERF_FAILED so the
@@ -130,7 +130,7 @@ for _ in $(seq 1 100); do cat "$SYSCALL_C" >> "$TMPFILE"; done
 TMPSIZE=$(wc -c < "$TMPFILE" | tr -d ' ')
 printf "  ${CYAN}(test file: %s bytes)${RESET}\n" "$TMPSIZE"
 # sh -c spawns a child shell that does not inherit the outer pipefail
-# from the script's `set -o pipefail`. Run the pipeline under bash so
+# from the script's 'set -o pipefail'. Run the pipeline under bash so
 # pipefail is available on systems whose /bin/sh is not bash-compatible.
 benchmark "native cat|wc" bash -c "set -o pipefail; cat '$TMPFILE' | wc -l"
 benchmark "elfuse cat|wc" bash -c "set -o pipefail; '$ELFUSE' '$TOOL_BIN/cat' '$TMPFILE' | wc -l"

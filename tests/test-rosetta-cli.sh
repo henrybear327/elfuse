@@ -8,6 +8,18 @@ set -euo pipefail
 
 ELFUSE="${1:-build/elfuse}"
 
+# Shared report_pass / report_fail / report_skip + test-runner.sh
+# colors. The matrix runner reads only the Results: line emitted by
+# report_summary at the bottom; per-binary lines now match the aarch64
+# modes' [ OK ] / [ FAIL ] format.
+# shellcheck source=tests/lib/rosetta-test.sh
+. "$(dirname "$0")/lib/rosetta-test.sh"
+
+pass=0
+fail=0
+skip=0
+total=0
+
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/elfuse-rosetta-cli.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -54,19 +66,22 @@ run_expect_fail()
     local label="$1"
     local pattern="$2"
     shift 2
+    total=$((total + 1))
 
     local stderr="$tmpdir/${label}.stderr"
     if "$@" > /dev/null 2> "$stderr"; then
-        printf 'FAIL %s: command succeeded unexpectedly\n' "$label" >&2
+        report_fail "$label (command succeeded unexpectedly)"
         cat "$stderr" >&2
+        report_summary "$total"
         exit 1
     fi
     if ! grep -q -- "$pattern" "$stderr"; then
-        printf 'FAIL %s: stderr did not contain %s\n' "$label" "$pattern" >&2
+        report_fail "$label (stderr did not contain $pattern)"
         cat "$stderr" >&2
+        report_summary "$total"
         exit 1
     fi
-    printf 'PASS %s\n' "$label"
+    report_pass "$label"
 }
 
 # Rosetta is on by default and architecture is auto-detected from the ELF
@@ -94,3 +109,5 @@ run_expect_fail "rosetta-gdb" \
 run_expect_fail "rosetta-default" \
     "requires the Rosetta Linux translator\\|translate produced empty/missing output\\|Translation failed, invalid path or invalid executable\\|VMAllocationTracker\\|Rosetta is only intended to run on Apple Silicon" \
     "$ELFUSE" "$x64_elf"
+
+report_summary "$total"

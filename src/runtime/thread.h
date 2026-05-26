@@ -105,8 +105,8 @@ typedef struct {
      * resume, dirty changes are applied back to the vCPU.
      */
     uint8_t gdb_reg_snapshot[788]; /* Register snapshot for GDB
-                                    * Layout: 31×GPR(8) + SP(8) + PC(8)
-                                    * + CPSR(4) + 32×V(16) + FPSR(4) + FPCR(4)
+                                    * Layout: 31xGPR(8) + SP(8) + PC(8)
+                                    * + CPSR(4) + 32xV(16) + FPSR(4) + FPCR(4)
                                     */
     bool gdb_regs_dirty;           /* GDB handler modified snapshot */
 

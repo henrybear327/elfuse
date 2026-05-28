@@ -208,8 +208,16 @@ int elf_map_segments(const elf_info_t *info,
                      const char *path,
                      void *guest_base,
                      uint64_t guest_size,
-                     uint64_t load_base)
+                     uint64_t load_base,
+                     uint64_t infra_lo,
+                     uint64_t infra_hi)
 {
+    /* Half-open intersection test for [a, a+alen) and [b, b+blen). When
+     * infra_lo == infra_hi the caller opted out (early bring-up before
+     * guest_t is wired up); the host-side writes that follow still get
+     * the existing guest_size bound check.
+     */
+    bool infra_active = infra_lo < infra_hi;
     FILE *f = fopen(path, "rb");
     if (!f) {
         perror(path);
@@ -264,6 +272,17 @@ int elf_map_segments(const elf_info_t *info,
         fclose(f);
         return -1;
     }
+    if (infra_active && phdr_dest < infra_hi &&
+        phdr_dest + ph_total > infra_lo) {
+        log_error(
+            "%s: program headers at 0x%llx overlap infra reserve "
+            "[0x%llx, 0x%llx)",
+            path, (unsigned long long) phdr_dest, (unsigned long long) infra_lo,
+            (unsigned long long) infra_hi);
+        free(ph_buf);
+        fclose(f);
+        return -1;
+    }
     memcpy((uint8_t *) guest_base + phdr_dest, ph_buf, ph_total);
 
     /* Copy PT_LOAD contents after AT_PHDR is in place; ET_DYN segments are
@@ -308,15 +327,34 @@ int elf_map_segments(const elf_info_t *info,
             return -1;
         }
 
-        /* Zero the full page-aligned segment extent, not only p_memsz.
-         * Linux guarantees zero-filled tail bytes in the last mapped page,
-         * and some dynamic linkers allocate from that page tail before they
-         * request more memory. Leaving stale bytes there leaks state across
-         * execve and corrupts the new image.
+        /* The host memset zeros PAGE_ALIGN_UP(memsz) bytes, not just memsz,
+         * so the infra-overlap check has to use the same rounded extent.
+         * Without the rounding here, a segment that ends just below
+         * infra_lo passes the check and still spills up to PAGE_SIZE-1
+         * bytes of zero into the infra reserve via the page tail.
          */
         uint64_t zero_len = PAGE_ALIGN_UP(memsz);
         if (gpa + zero_len > guest_size)
             zero_len = guest_size - gpa;
+        if (infra_active && gpa < infra_hi && gpa + zero_len > infra_lo) {
+            log_error(
+                "%s: segment at 0x%llx+0x%llx (zero-extent 0x%llx) overlaps "
+                "infra reserve [0x%llx, 0x%llx)",
+                path, (unsigned long long) gpa, (unsigned long long) memsz,
+                (unsigned long long) zero_len, (unsigned long long) infra_lo,
+                (unsigned long long) infra_hi);
+            free(ph_buf);
+            fclose(f);
+            return -1;
+        }
+
+        /* Zero the full page-aligned segment extent (zero_len computed above
+         * with guest_size and infra_reserve checks). Linux guarantees
+         * zero-filled tail bytes in the last mapped page, and some dynamic
+         * linkers allocate from that page tail before they request more
+         * memory. Leaving stale bytes there leaks state across execve and
+         * corrupts the new image.
+         */
         memset((uint8_t *) guest_base + gpa, 0, zero_len);
 
         /* Overlay initialized bytes after zeroing so BSS and page tail remain

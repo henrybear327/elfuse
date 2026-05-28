@@ -244,6 +244,28 @@ void signal_set_fault_info(int si_code, uint64_t addr, uint64_t esr);
 int signal_pending(void);
 bool signal_pending_interruption(bool *restart_out);
 
+/* True if anything that would normally be drained by signal_check_timer is
+ * currently live: an unblocked pending signal, OR any of the three guest
+ * itimers is armed. The shim's identity fast path consults this (indirectly
+ * via shim_globals attention flag) to decide whether to skip the HVC #5
+ * round-trip. Whenever this returns true, the shim must take the slow path so
+ * the epilogue's signal_check_timer + queue drain runs.
+ */
+bool signal_attention_needed(void);
+
+/* Register the shim-globals guest pointer used by the attention setters in
+ * signal_queue / setitimer / proc_set_exit_group. Called from bootstrap and
+ * fork-child after guest_init. Asserts that the value is NULL or matches the
+ * already-registered g; elfuse runs one VM per process and the singleton
+ * catches lifecycle bugs (multiple concurrent VMs in one process would
+ * violate this invariant).
+ *
+ * Passing NULL clears the registration (used by signal_init for a defensive
+ * reset; the attention setters become no-ops in that state, matching the
+ * pre-registration behavior).
+ */
+void signal_set_shim_globals_guest(guest_t *g);
+
 /* Deliver the highest-priority pending unblocked signal to the guest.
  * Builds an rt_sigframe on the guest stack and redirects vCPU to handler.
  * Returns: 1 if signal was delivered, 0 if nothing pending,
@@ -289,9 +311,9 @@ const signal_state_t *signal_get_state(void);
 void signal_set_state(const signal_state_t *state);
 
 /* Snapshot or consume pending signals for signalfd.
- * signal_peek_signalfd() snapshots up to max matching entries without
- * consuming them. signal_take_signalfd_exact() then consumes those exact
- * entries, preserving any matching signals that arrived later.
+ * signal_peek_signalfd() snapshots up to max matching entries without consuming
+ * them. signal_take_signalfd_exact() then consumes those exact entries,
+ * preserving any matching signals that arrived later.
  */
 size_t signal_peek_signalfd(uint64_t mask, signal_rt_info_t *out, size_t max);
 size_t signal_take_signalfd_exact(const signal_rt_info_t *expected, size_t max);

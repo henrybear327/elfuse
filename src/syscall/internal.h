@@ -108,6 +108,12 @@ int fd_snapshot_and_dup(int guest_fd, fd_entry_t *out);
  */
 int fd_get_type(int guest_fd);
 
+/* Republish the EL1 urandom read fast-path bit for this fd from the current
+ * fd_table type and access mode. Only readable /dev/urandom descriptors are
+ * eligible for the bitmap.
+ */
+void fd_refresh_urandom_bitmap(int fd);
+
 /* Type -> cleanup registry. Modules that own a synthetic fd type register
  * their cleanup at init time; dup and fork-restore paths look up the
  * cleanup from the type so the binding stays consistent without each path

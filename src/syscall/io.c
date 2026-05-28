@@ -28,6 +28,7 @@
 #include "utils.h"
 
 #include "core/rosetta.h"
+#include "core/shim-globals.h"
 #include "hvutil.h"
 #include "runtime/procemu.h"
 #include "runtime/thread.h"
@@ -62,14 +63,26 @@ typedef struct {
     uint8_t c_cc[19];
 } linux_termios_t;
 
+/* Per-fd lock embedded in the cache so a urandom read on fd A does not
+ * serialize behind a concurrent urandom read on fd B. The previous design
+ * used a single global mutex covering the whole cache array, which made
+ * the per-fd cache pointless under any sibling-vCPU urandom traffic.
+ * The lock array is initialized at startup by io_init().
+ */
 typedef struct {
+    pthread_mutex_t lock;
     uint8_t buf[URANDOM_CACHE_SIZE];
     size_t off;
     size_t len;
 } urandom_cache_t;
 
-static pthread_mutex_t urandom_lock = PTHREAD_MUTEX_INITIALIZER;
 static urandom_cache_t urandom_cache[FD_TABLE_SIZE];
+
+void io_init(void)
+{
+    for (int i = 0; i < FD_TABLE_SIZE; i++)
+        pthread_mutex_init(&urandom_cache[i].lock, NULL);
+}
 
 _Static_assert(sizeof(linux_termios_t) == 36,
                "aarch64 Linux TCGETS struct termios must be 36 bytes");
@@ -139,9 +152,15 @@ void urandom_fd_reset_cache(int guest_fd)
     if (!RANGE_CHECK(guest_fd, 0, FD_TABLE_SIZE))
         return;
 
-    pthread_mutex_lock(&urandom_lock);
-    memset(&urandom_cache[guest_fd], 0, sizeof(urandom_cache[guest_fd]));
-    pthread_mutex_unlock(&urandom_lock);
+    /* Preserve the embedded lock; reset only the entropy fields. memset of
+     * the whole struct would clobber the mutex state.
+     */
+    urandom_cache_t *c = &urandom_cache[guest_fd];
+    pthread_mutex_lock(&c->lock);
+    memset(c->buf, 0, sizeof(c->buf));
+    c->off = 0;
+    c->len = 0;
+    pthread_mutex_unlock(&c->lock);
 }
 
 void urandom_fd_cleanup(int guest_fd)
@@ -179,8 +198,8 @@ static int64_t urandom_fill_iov(int guest_fd,
     if (total == 0)
         return 0;
 
-    pthread_mutex_lock(&urandom_lock);
     urandom_cache_t *c = &urandom_cache[guest_fd];
+    pthread_mutex_lock(&c->lock);
     size_t done = 0;
     for (int i = 0; i < iovcnt && done < total; i++) {
         uint8_t *dst = iov[i].iov_base;
@@ -203,7 +222,7 @@ static int64_t urandom_fill_iov(int guest_fd,
             done += chunk;
         }
     }
-    pthread_mutex_unlock(&urandom_lock);
+    pthread_mutex_unlock(&c->lock);
     return (int64_t) done;
 }
 
@@ -245,7 +264,17 @@ static int64_t urandom_read(guest_t *g,
         count = avail;
 
     struct iovec iov = {.iov_base = dst, .iov_len = (size_t) count};
-    return urandom_fill_iov(guest_fd, &iov, 1);
+    int64_t rc = urandom_fill_iov(guest_fd, &iov, 1);
+
+    /* This slow path runs when the shim's identity-class fast path
+     * could not serve the read: either the request was larger than
+     * the shim's inline limit, or the ring was empty. Refill the
+     * shim's entropy ring before returning so a subsequent
+     * read(/dev/urandom) from the same vCPU sees a populated ring
+     * and stays on the fast path.
+     */
+    shim_globals_refill_urandom_ring(g);
+    return rc;
 }
 
 static bool rosetta_ioctl_target_fd(guest_t *g, int host_fd)
@@ -1154,6 +1183,12 @@ int64_t sys_readv(guest_t *g, int fd, uint64_t iov_gva, int iovcnt)
             return err;
         int64_t ret = urandom_fill_iov(fd, host_iov.iov, iovcnt);
         host_iov_free(&host_iov);
+        /* Mirror sys_read's slow-path refill so a readv consumer that
+         * drains the shim ring leaves it ready for the next call,
+         * instead of forcing every subsequent EL1 fast-path attempt
+         * back through HVC until some other path triggers a refill.
+         */
+        shim_globals_refill_urandom_ring(g);
         return ret;
     }
     if (type == FD_EVENTFD || type == FD_SIGNALFD || type == FD_TIMERFD ||

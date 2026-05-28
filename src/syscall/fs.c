@@ -24,6 +24,8 @@
 #include "debug/log.h"
 #include "utils.h"
 
+#include "core/shim-globals.h" /* shim_globals_mark_urandom_fd */
+
 #include "runtime/procemu.h"
 
 #include "syscall/abi.h"
@@ -211,9 +213,35 @@ static int fd_alloc_opened_host(int host_fd,
         return -1;
     }
 
-    fd_table[guest_fd].linux_flags = linux_flags;
-    if (dir)
-        fd_table[guest_fd].dir = dir;
+    /* Publish linux_flags, dir, and the urandom bitmap bit atomically
+     * with respect to the slot's identity. fd_alloc_*_relaxed drops
+     * fd_lock before returning, so a sibling vCPU's pathological
+     * close(guest_fd) + open() could reuse the slot between alloc and
+     * the metadata install below. Re-acquire fd_lock and verify the
+     * (type, host_fd) tuple still matches what just got allocated;
+     * if it does not, the slot belongs to a different file now and
+     * any install would clobber the sibling's entry. The sibling's
+     * close path already cleaned up our host_fd via fd_cleanup_entry,
+     * so this side only owns dir, which gets closed below.
+     */
+    bool installed = false;
+    pthread_mutex_lock(&fd_lock);
+    if (fd_table[guest_fd].type == type &&
+        fd_table[guest_fd].host_fd == host_fd) {
+        fd_table[guest_fd].linux_flags = linux_flags;
+        if (dir)
+            fd_table[guest_fd].dir = dir;
+        bool readable_urandom =
+            type == FD_URANDOM &&
+            (linux_flags & LINUX_O_ACCMODE) != LINUX_O_WRONLY;
+        shim_globals_mark_urandom_fd(guest_fd, readable_urandom);
+        installed = true;
+    }
+    pthread_mutex_unlock(&fd_lock);
+
+    if (!installed && dir)
+        closedir(dir);
+
     return guest_fd;
 }
 
@@ -421,25 +449,6 @@ int64_t sys_close(int fd)
 
 /* dup/fcntl. */
 
-static int clone_dir_stream_if_needed(int src_fd, int dst_fd, int dst_host_fd)
-{
-    if (fd_table[src_fd].type != FD_DIR)
-        return 0;
-
-    int dir_fd = dup(dst_host_fd);
-    if (dir_fd < 0)
-        return -1;
-
-    DIR *dir = fdopendir(dir_fd);
-    if (!dir) {
-        close(dir_fd);
-        return -1;
-    }
-
-    fd_table[dst_fd].dir = dir;
-    return 0;
-}
-
 static void discard_allocated_fd(int guest_fd)
 {
     fd_entry_t snap;
@@ -447,17 +456,75 @@ static void discard_allocated_fd(int guest_fd)
         fd_cleanup_entry(guest_fd, &snap);
 }
 
-static void install_fd_alias_metadata(int dst_fd,
-                                      const fd_entry_t *src_snap,
-                                      int linux_flags)
+/* Open a DIR stream over a dup of dst_host_fd if the source was an
+ * FD_DIR. Returns NULL on success-but-no-stream-needed (non-dir source)
+ * or on dup/fdopendir failure with errno preserved. Pulled out of the
+ * critical section in install_fd_alias_metadata_atomic because dup and
+ * fdopendir are slow syscalls that must not hold fd_lock.
+ */
+static DIR *clone_dir_stream(const fd_entry_t *src_snap,
+                             int dst_host_fd,
+                             bool *out_failed)
 {
-    int preserved_flags = src_snap->linux_flags &
-                          (LINUX_O_PATH | LINUX_O_DIRECTORY | LINUX_O_NOFOLLOW |
-                           LINUX_O_DIRECT | LINUX_O_LARGEFILE);
-    fd_table[dst_fd].linux_flags = preserved_flags | linux_flags;
-    fd_table[dst_fd].seals = src_snap->seals;
-    memcpy(fd_table[dst_fd].proc_path, src_snap->proc_path,
-           sizeof(fd_table[dst_fd].proc_path));
+    *out_failed = false;
+    if (src_snap->type != FD_DIR)
+        return NULL;
+
+    int dir_fd = dup(dst_host_fd);
+    if (dir_fd < 0) {
+        *out_failed = true;
+        return NULL;
+    }
+    DIR *dir = fdopendir(dir_fd);
+    if (!dir) {
+        int saved_errno = errno;
+        close(dir_fd);
+        errno = saved_errno;
+        *out_failed = true;
+        return NULL;
+    }
+    return dir;
+}
+
+/* Install dup-alias metadata atomically with the slot identity. Uses
+ * the (type, host_fd) tuple as proof that the slot still belongs to
+ * the in-flight duplicate_guest_fd call; a sibling vCPU's pathological
+ * close + open between the relaxed allocator's lock release and this
+ * call could otherwise clobber the sibling's freshly-installed entry.
+ * Returns true on successful install, false if the slot was
+ * reallocated (caller must closedir any cloned dir to avoid a leak).
+ */
+static bool install_fd_alias_metadata_atomic(int dst_fd,
+                                             int expected_type,
+                                             int expected_host_fd,
+                                             const fd_entry_t *src_snap,
+                                             int linux_flags,
+                                             DIR *dir)
+{
+    int preserved_flags =
+        src_snap->linux_flags &
+        (LINUX_O_ACCMODE | LINUX_O_PATH | LINUX_O_DIRECTORY | LINUX_O_NOFOLLOW |
+         LINUX_O_DIRECT | LINUX_O_LARGEFILE);
+    int final_flags = preserved_flags | linux_flags;
+
+    bool installed = false;
+    pthread_mutex_lock(&fd_lock);
+    if (fd_table[dst_fd].type == expected_type &&
+        fd_table[dst_fd].host_fd == expected_host_fd) {
+        fd_table[dst_fd].linux_flags = final_flags;
+        fd_table[dst_fd].seals = src_snap->seals;
+        memcpy(fd_table[dst_fd].proc_path, src_snap->proc_path,
+               sizeof(fd_table[dst_fd].proc_path));
+        if (dir)
+            fd_table[dst_fd].dir = dir;
+        bool readable_urandom =
+            expected_type == FD_URANDOM &&
+            (final_flags & LINUX_O_ACCMODE) != LINUX_O_WRONLY;
+        shim_globals_mark_urandom_fd(dst_fd, readable_urandom);
+        installed = true;
+    }
+    pthread_mutex_unlock(&fd_lock);
+    return installed;
 }
 
 /* Duplicate a guest fd into either the next free slot >= min_guest_fd or a
@@ -515,12 +582,29 @@ static int duplicate_guest_fd(int src_fd,
         return -1;
     }
 
-    install_fd_alias_metadata(guest_fd, &src_snap, linux_flags);
-    if (clone_dir_stream_if_needed(src_fd, guest_fd, new_host_fd) < 0) {
+    /* Clone the DIR stream outside fd_lock (dup + fdopendir would block
+     * other fd ops), then install everything atomically under fd_lock
+     * with a tuple verification so a sibling close + reopen on the same
+     * guest_fd cannot make this install land on an unrelated slot.
+     */
+    bool dir_clone_failed = false;
+    DIR *dir = clone_dir_stream(&src_snap, new_host_fd, &dir_clone_failed);
+    if (dir_clone_failed) {
         int saved_errno = errno;
         discard_allocated_fd(guest_fd);
         errno = saved_errno;
         return -1;
+    }
+
+    if (!install_fd_alias_metadata_atomic(guest_fd, new_type, new_host_fd,
+                                          &src_snap, linux_flags, dir)) {
+        /* Slot was reallocated by a sibling while metadata install was
+         * pending; the sibling's close path already cleaned up new_host_fd
+         * via fd_cleanup_entry, so the only resource this side still
+         * owns is the cloned DIR stream.
+         */
+        if (dir)
+            closedir(dir);
     }
 
     return guest_fd;

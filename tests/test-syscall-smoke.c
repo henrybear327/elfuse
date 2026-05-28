@@ -714,6 +714,26 @@ static void test_urandom_open_flags(void)
 
     wfd = open("/dev/urandom", O_WRONLY | O_CLOEXEC);
     if (wfd < 0) {
+        FAIL("O_WRONLY open dup");
+        return;
+    }
+    int dupfd = dup(wfd);
+    close(wfd);
+    if (dupfd < 0) {
+        FAIL("O_WRONLY dup");
+        return;
+    }
+    errno = 0;
+    n = read(dupfd, &b, 1);
+    saved_errno = errno;
+    close(dupfd);
+    if (n != -1 || saved_errno != EBADF) {
+        FAIL("O_WRONLY dup read");
+        return;
+    }
+
+    wfd = open("/dev/urandom", O_WRONLY | O_CLOEXEC);
+    if (wfd < 0) {
         FAIL("O_WRONLY open readv");
         return;
     }

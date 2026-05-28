@@ -20,6 +20,7 @@
 
 #include "core/bootstrap.h"
 #include "core/rosetta.h"
+#include "core/shim-globals.h"
 #include "core/stack.h"
 #include "core/startup-trace.h"
 #include "core/vdso.h"
@@ -31,6 +32,7 @@
 #include "syscall/internal.h"
 #include "syscall/path.h"
 #include "syscall/proc.h"
+#include "syscall/signal.h"
 
 #include "debug/log.h"
 
@@ -95,20 +97,25 @@ static void register_elf_segment_regions(guest_t *g,
     }
 }
 
-/* Publish shim, shim-data, heap, stack-guard, and stack regions to the
+/* Publish shim, shim-data, heap, stack-guard, and stack regions to
  * /proc/self/maps view, and invalidate the null page and stack-guard PTEs.
- * Shared by guest_bootstrap_prepare and guest_bootstrap_rosetta_post_reset;
- * the caller registers ELF or rosetta segments separately because those
- * differ between aarch64 and rosetta guests.
+ * Shared by guest_bootstrap_prepare and guest_bootstrap_rosetta_post_reset; the
+ * caller registers ELF or rosetta segments separately because those differ
+ * between aarch64 and rosetta guests.
  */
 static void register_runtime_regions(guest_t *g, size_t shim_bin_len)
 {
     guest_region_add(g, g->shim_base, g->shim_base + shim_bin_len,
                      LINUX_PROT_READ | LINUX_PROT_EXEC, LINUX_MAP_PRIVATE, 0,
                      "[shim]");
+    /* shim_data is mapped privileged-only (AP[2:1]=00) in the page tables; the
+     * EL1 shim has full RW but EL0 cannot read or write. Report PROT_NONE in
+     * /proc/self/maps so guest tooling treats it as inaccessible, matching what
+     * dereferencing the GVA actually does (translation fault -> EL0 SIGSEGV
+     * path).
+     */
     guest_region_add(g, g->shim_data_base, g->shim_data_base + BLOCK_2MIB,
-                     LINUX_PROT_READ | LINUX_PROT_WRITE, LINUX_MAP_PRIVATE, 0,
-                     "[shim-data]");
+                     LINUX_PROT_NONE, LINUX_MAP_PRIVATE, 0, "[shim-data]");
 
     if (g->brk_base < g->brk_current) {
         guest_region_add(g, g->brk_base, g->brk_current,
@@ -247,8 +254,11 @@ static bool load_interpreter(guest_t *g,
     }
 
     boot->interp_base = g->interp_base;
+    uint64_t infra_lo = g->interp_base - INFRA_RESERVE;
+    uint64_t infra_hi = g->interp_base;
     if (elf_map_segments(&boot->interp_info, boot->interp_resolved,
-                         g->host_base, g->guest_size, boot->interp_base) < 0) {
+                         g->host_base, g->guest_size, boot->interp_base,
+                         infra_lo, infra_hi) < 0) {
         log_error("failed to map interpreter segments");
         if (interp_host_temp)
             unlink(boot->interp_resolved);
@@ -278,20 +288,28 @@ static bool build_boot_regions(mem_region_t *regions,
      */
     if (!append_boot_region(regions, nregions, g->shim_base,
                             g->shim_base + shim_bin_len, MEM_PERM_RX) ||
+        /* shim_data is EL1-only: the guest must not directly read or write the
+         * identity cache, attention flag, urandom bitmap, or ring, any of which
+         * would let it spoof its own syscall results. The EL1 shim itself has
+         * full RW. /proc/self/maps still lists [shim-data] (region tracking is
+         * independent of EL0 access), but EL0 dereferences fault to the SIGSEGV
+         * path.
+         */
         !append_boot_region(regions, nregions, g->shim_data_base,
-                            g->shim_data_base + BLOCK_2MIB, MEM_PERM_RW) ||
+                            g->shim_data_base + BLOCK_2MIB,
+                            MEM_PERM_RW_EL1_ONLY) ||
         !append_boot_region(regions, nregions, VDSO_BASE, VDSO_BASE + VDSO_SIZE,
                             MEM_PERM_RX)) {
         return false;
     }
 
-    /* Rosetta guests never load the x86_64 ELF or its interpreter into
-     * guest memory; rosetta itself reads the target via fd 3 once it is
-     * running. Adding those segments to the page-table builder would emit
-     * ghost L2/L3 entries at the binary's x86_64 link address (typically
-     * 0x400000) pointing into uninitialized primary-buffer GPAs. The
-     * rosetta image's own segments are registered by rosetta_prepare's
-     * separate region append in the bootstrap caller.
+    /* Rosetta guests never load the x86_64 ELF or its interpreter into guest
+     * memory; rosetta itself reads the target via fd 3 once it is running.
+     * Adding those segments to the page-table builder would emit ghost L2/L3
+     * entries at the binary's x86_64 link address (typically 0x400000) pointing
+     * into uninitialized primary-buffer GPAs. The rosetta image's own segments
+     * are registered by rosetta_prepare's separate region append in the
+     * bootstrap caller.
      */
     if (!g->is_rosetta) {
         if (!append_elf_segment_regions(regions, nregions, &boot->elf_info,
@@ -370,12 +388,12 @@ int guest_bootstrap_prepare(guest_t *g,
         (unsigned long long) boot->elf_info.load_max,
         want_rosetta ? "x86_64-via-rosetta" : "aarch64");
 
-    /* Rosetta is statically linked at 0x800000000000 (128 TiB), beyond the
-     * 36 and 40-bit IPA ranges. Request 48-bit IPA up-front so the
-     * page-table builder can reach the rosetta segments. HVF clamps to its
-     * supported size; on M1 hosts the upstream hyper-linux audit confirms
-     * 48 is honoured even though the auto-detect default returns 36, so
-     * the request is non-fatal in either direction.
+    /* Rosetta is statically linked at 0x800000000000 (128 TiB), beyond the 36
+     * and 40-bit IPA ranges. Request 48-bit IPA up-front so the page-table
+     * builder can reach the rosetta segments. HVF clamps to its supported size;
+     * on M1 hosts the upstream hyper-linux audit confirms 48 is honoured even
+     * though the auto-detect default returns 36, so the request is non-fatal in
+     * either direction.
      */
     uint32_t req_ipa = want_rosetta ? 48 : 0;
     t0 = startup_trace_now_ns();
@@ -397,8 +415,8 @@ int guest_bootstrap_prepare(guest_t *g,
     if (want_rosetta) {
         /* Rosetta path: no x86_64 ELF segments are loaded into guest memory
          * (rosetta itself does that lazily once it starts running). brk and
-         * stack use the same defaults the aarch64 path falls back to when
-         * the binary sits at low VAs; the x86_64 binary's load_max would be
+         * stack use the same defaults the aarch64 path falls back to when the
+         * binary sits at low VAs; the x86_64 binary's load_max would be
          * meaningless here because nothing of it actually lives in primary
          * buffer GPA space.
          */
@@ -412,8 +430,11 @@ int guest_bootstrap_prepare(guest_t *g,
         boot->elf_load_base =
             (boot->elf_info.e_type == ET_DYN) ? PIE_LOAD_BASE : 0;
         t0 = startup_trace_now_ns();
+        uint64_t infra_lo = g->interp_base - INFRA_RESERVE;
+        uint64_t infra_hi = g->interp_base;
         if (elf_map_segments(&boot->elf_info, elf_host_path, g->host_base,
-                             g->guest_size, boot->elf_load_base) < 0) {
+                             g->guest_size, boot->elf_load_base, infra_lo,
+                             infra_hi) < 0) {
             log_error("failed to map ELF segments");
             return -1;
         }
@@ -664,9 +685,49 @@ int guest_bootstrap_create_vcpu(guest_t *g,
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL0, sp_ipa));
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, el1_sp));
 
-    /* CNTKCTL_EL1.EL0VCTEN | EL0PCTEN: allow EL0 to read CNTVCT_EL0 /
-     * CNTPCT_EL0. Required by the vDSO clock_gettime fast path (and is the
-     * default on native Linux), without which the guest gets 0 back from MRS.
+    /* Round-trip a sentinel through TPIDR_EL1 before installing the real
+     * value. Validates only the hv_vcpu_{set,get}_sys_reg pre-run round
+     * trip, not preservation across hv_vcpu_run -- the test-shim-identity
+     * microbench is the end-to-end check for that.
+     */
+    if (shim_globals_self_test(vcpu) < 0)
+        return -1;
+    /* TPIDR_EL1 -> shim_globals base, CONTEXTIDR_EL1 -> tid (== pid for the
+     * initial main thread). gettid fast path reads CONTEXTIDR_EL1 directly.
+     */
+    if (shim_globals_install_per_vcpu(vcpu, g, proc_get_pid()) < 0)
+        return -1;
+
+    /* Zero the shim-globals region and publish the initial identity so the very
+     * first getpid / getuid / etc. SVC #0 hits the cache instead of returning
+     * the all-zero seed. Future setuid/setgid paths refresh creds via
+     * cred_publish_after; fork-child has its own publish on the inherited
+     * identity.
+     */
+    shim_globals_init(g);
+    shim_globals_set_trace_enabled(g, verbose);
+    shim_globals_publish_pid(g, proc_get_pid(), proc_get_ppid());
+    shim_globals_publish_creds(g, proc_get_uid(), proc_get_euid(),
+                               proc_get_gid(), proc_get_egid());
+    /* Pre-fill the entropy ring so the first read(/dev/urandom) from the guest
+     * is served by the shim fast path with no cold-start HVC for refill.
+     */
+    shim_globals_refill_urandom_ring(g);
+    /* Register the singleton guest pointer so signal_queue and the itimer
+     * setters can raise the attention flag without threading g through every
+     * call site. signal_init clears this defensively; the first registration
+     * must run after both proc_init and shim_globals_init.
+     */
+    signal_set_shim_globals_guest(g);
+    /* Same singleton pattern but for the fd-table hooks that update the urandom
+     * bitmap. Must run before any FD_URANDOM-typed slot is allocated; bootstrap
+     * finishes before any guest syscall runs.
+     */
+    shim_globals_set_singleton(g);
+
+    /* CNTKCTL_EL1.EL0VCTEN | EL0PCTEN: allow EL0 to read {CNTVCT,CNTPCT}_EL0.
+     * Required by the vDSO clock_gettime fast path (and is the default on
+     * native Linux), without which the guest gets 0 back from MRS.
      */
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_CNTKCTL_EL1, 0x3ULL));
 

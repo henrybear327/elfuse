@@ -364,6 +364,11 @@ typedef struct {
 #define LINUX_O_RDONLY 0x0000
 #define LINUX_O_WRONLY 0x0001
 #define LINUX_O_RDWR 0x0002
+/* O_ACCMODE is the mask covering O_RDONLY, O_WRONLY, O_RDWR. The urandom
+ * read fast-path bitmap and the dup-alias metadata both need this mask to
+ * isolate the access-mode bits from the other LINUX_O_* flags.
+ */
+#define LINUX_O_ACCMODE 0x0003
 #define LINUX_O_CREAT 0x0040
 #define LINUX_O_EXCL 0x0080
 #define LINUX_O_NOCTTY 0x0100

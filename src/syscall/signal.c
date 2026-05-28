@@ -28,6 +28,7 @@
 
 #include "hvutil.h"
 
+#include "core/shim-globals.h"
 #include "core/vdso.h"
 
 #include "runtime/thread.h"
@@ -255,12 +256,74 @@ static inline bool *thread_saved_valid_ptr(void)
 
 /* Public API. */
 
+/* Singleton guest pointer used by attention-flag setters in this file.
+ * elfuse runs one VM per process so a single global is correct. The
+ * setter (signal_set_shim_globals_guest) asserts NULL-or-same to catch
+ * a lifecycle bug in any future multi-VM design.
+ *
+ * Atomic because attention_raise runs on every signal queue from any
+ * thread without holding sig_lock, while signal_init clears it across
+ * the execve reset window. ARM64 aligned 64-bit pointer writes are
+ * single-copy atomic, but plain reads/writes have no ordering, so a
+ * concurrent attention_raise could observe a stale value or fail to
+ * see a fresh registration. The release-acquire pair seals the window.
+ */
+static _Atomic(guest_t *) attention_guest;
+
 void signal_init(void)
 {
     memset(&sig_state, 0, sizeof(sig_state));
+    /* Clear the attention singleton on every init pass. Bootstrap and
+     * the fork-child receive path both call this before
+     * signal_set_shim_globals_guest publishes the live g; the reset
+     * keeps the setter's NULL-or-same assertion from latching onto a
+     * stale parent pointer in the child process. Release-store so a
+     * sibling thread that ACQUIRE-loads the slot after init observes
+     * NULL and falls back to thread_interrupt_all instead of a stale
+     * parent pointer.
+     */
+    atomic_store_explicit(&attention_guest, NULL, memory_order_release);
     /* Altstack is now per-thread (in thread_entry_t), initialized to
      * SS_DISABLE by thread_register_main() and thread_alloc().
      */
+}
+
+void signal_set_shim_globals_guest(guest_t *g)
+{
+    guest_t *cur = atomic_load_explicit(&attention_guest, memory_order_acquire);
+    if (g != NULL && cur != NULL && cur != g) {
+        log_error(
+            "signal: shim-globals guest already registered to %p, "
+            "refusing to re-register with %p",
+            (void *) cur, (void *) g);
+        return;
+    }
+    atomic_store_explicit(&attention_guest, g, memory_order_release);
+}
+
+/* Raise the shim-globals attention flag if the singleton has been
+ * registered; otherwise fall back to a bare vCPU interrupt. Both paths
+ * end up running thread_interrupt_all (shim_globals_raise_attention
+ * issues it internally), so callers only need this single helper.
+ */
+static inline void attention_raise(void)
+{
+    guest_t *g = atomic_load_explicit(&attention_guest, memory_order_acquire);
+    if (g)
+        shim_globals_raise_attention(g);
+    else
+        thread_interrupt_all();
+}
+
+/* Predicate matches the deliverability gate used by signal_queue and
+ * signal_queue_info: SIGKILL/SIGSTOP are uncatchable and must always
+ * interrupt; other signals only interrupt when at least one active
+ * thread does not block them.
+ */
+static inline bool signal_should_interrupt(int signum)
+{
+    return sig_uncatchable(signum) ||
+           thread_signal_deliverable(sig_bit(signum));
 }
 
 void signal_reset_for_exec(void)
@@ -319,13 +382,14 @@ void signal_queue(int signum)
      */
     signalfd_notify(signum);
 
-    /* Only force vCPUs out of hv_vcpu_run() if the signal is actually
-     * deliverable to at least one thread. SIGKILL/SIGSTOP cannot be
-     * blocked and always need interruption. For other signals, check
-     * per-thread blocked masks to avoid spurious context switches --
-     * Go, JVM, and Node.js mask signals in worker threads, causing
-     * thousands of unnecessary ~1000ns VM exit+re-entry cycles per
-     * second if signal emulation interrupts unconditionally.
+    /* Only force vCPUs out of hv_vcpu_run(), and only force the shim's
+     * identity fast path off, if the signal is actually deliverable to
+     * at least one thread. SIGKILL/SIGSTOP cannot be blocked and always
+     * need interruption. For other signals, check per-thread blocked masks
+     * to avoid spurious context switches -- Go, JVM, and Node.js mask
+     * signals in worker threads, causing thousands of unnecessary ~1000ns
+     * VM exit+re-entry cycles per second if signal emulation interrupts
+     * unconditionally.
      *
      * Race: if a thread concurrently unblocks this signal via
      * rt_sigprocmask, the pending signal could be missed here.
@@ -333,8 +397,8 @@ void signal_queue(int signum)
      * signals after unblocking and interrupting the current thread
      * if delivery became possible.
      */
-    if (sig_uncatchable(signum) || thread_signal_deliverable(sig_bit(signum)))
-        thread_interrupt_all();
+    if (signal_should_interrupt(signum))
+        attention_raise();
 }
 
 void signal_queue_rt(int signum,
@@ -373,8 +437,11 @@ void signal_queue_info(int signum,
                           memory_order_release);
     pthread_mutex_unlock(&sig_lock);
     signalfd_notify(signum);
-    if (thread_signal_deliverable(sig_bit(signum)))
-        thread_interrupt_all();
+    /* Same shim-globals attention raise as signal_queue: force the fast
+     * path off only when the queued signal can reach signal_deliver.
+     */
+    if (signal_should_interrupt(signum))
+        attention_raise();
 }
 
 void signal_set_fault_info(int si_code, uint64_t addr, uint64_t esr)
@@ -405,6 +472,30 @@ int signal_pending(void)
     int result = (sig_state.pending & ~blocked) != 0;
     pthread_mutex_unlock(&sig_lock);
     return result;
+}
+
+bool signal_attention_needed(void)
+{
+    /* Cheap atomic load on the sig-pending hint first; if a signal is
+     * queued and deliverable to at least one active thread, the shim should
+     * drop to the slow path even before we touch the itimer state. A pending
+     * signal blocked by every active thread is not useful slow-path work and
+     * should not keep identity syscalls out of the fast path indefinitely.
+     */
+    uint64_t hint =
+        atomic_load_explicit(&sig_pending_hint, memory_order_acquire);
+    if (hint != 0 && thread_signal_deliverable(hint))
+        return true;
+    /* Active guest itimers: even if no signal is queued YET, the
+     * timer can fire at any moment, and signal_check_timer needs an
+     * HVC #5 epilogue to notice it. Keep attention raised while any
+     * timer is armed.
+     */
+    if (__atomic_load_n(&guest_itimer.active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&guest_itimer_virt.active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&guest_itimer_prof.active, __ATOMIC_ACQUIRE))
+        return true;
+    return false;
 }
 
 bool signal_pending_interruption(bool *restart_out)
@@ -752,15 +843,32 @@ void signal_set_itimer(const struct timeval *value,
         pthread_mutex_unlock(&sig_lock);
         return;
     }
-    if (value->tv_sec == 0 && value->tv_usec == 0) {
+    bool arm = (value->tv_sec != 0 || value->tv_usec != 0);
+    if (!arm) {
         /* Disarm */
         __atomic_store_n(&guest_itimer.active, 0, __ATOMIC_RELEASE);
     } else {
-        __atomic_store_n(&guest_itimer.active, 1, __ATOMIC_RELEASE);
+        /* Publish expiry and interval BEFORE the release-store of active.
+         * signal_check_timer and signal_attention_needed ACQUIRE-load
+         * active without holding sig_lock; if active is published before
+         * its associated fields, a consumer can observe active=1 with
+         * stale expiry/interval and decide an early or late SIGALRM.
+         * Matches the field order in signal_set_itimer_virt.
+         */
         guest_itimer.expiry = timeval_add(&now, value);
         guest_itimer.interval = interval ? *interval : (struct timeval) {0, 0};
+        __atomic_store_n(&guest_itimer.active, 1, __ATOMIC_RELEASE);
     }
     pthread_mutex_unlock(&sig_lock);
+
+    /* Arming any timer requires the shim's identity fast path to drop
+     * to the slow path so signal_check_timer can see the expiry. The
+     * disarm case is handled by signal_attention_needed returning
+     * false at the next HVC epilogue recompute -- no explicit clear
+     * here.
+     */
+    if (arm)
+        attention_raise();
 }
 
 void signal_get_itimer(struct timeval *value, struct timeval *interval)
@@ -850,8 +958,9 @@ void signal_set_itimer_virt(int which,
         else
             *old_value = (struct timeval) {0, 0};
     }
+    bool arm = value && (value->tv_sec != 0 || value->tv_usec != 0);
     if (value) {
-        if (value->tv_sec == 0 && value->tv_usec == 0) {
+        if (!arm) {
             __atomic_store_n(&timer->active, 0, __ATOMIC_RELEASE);
         } else {
             timer->expiry = timeval_add(&now, value);
@@ -860,6 +969,9 @@ void signal_set_itimer_virt(int which,
         }
     }
     pthread_mutex_unlock(&sig_lock);
+
+    if (arm)
+        attention_raise();
 }
 
 void signal_get_itimer_virt(int which,

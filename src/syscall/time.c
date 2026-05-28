@@ -58,10 +58,9 @@ _Static_assert(sizeof(struct timespec) == sizeof(linux_timespec_t),
 _Static_assert(sizeof(struct timeval) == sizeof(linux_timeval_t),
                "host and guest timeval must match on LP64");
 
-static bool linux_timespec_valid(const linux_timespec_t *ts,
-                                 bool allow_negative_sec)
+static bool linux_timespec_valid(const linux_timespec_t *ts)
 {
-    if (!allow_negative_sec && ts->tv_sec < 0)
+    if (ts->tv_sec < 0)
         return false;
     return ts->tv_nsec >= 0 && ts->tv_nsec < NSEC_PER_SEC;
 }
@@ -244,35 +243,81 @@ int64_t sys_clock_getres(guest_t *g, int clockid, uint64_t tp_gva)
 
 int64_t sys_clock_gettime(guest_t *g, int clockid, uint64_t tp_gva)
 {
-    struct timespec ts;
     int mac_clockid = translate_clockid(clockid);
     if (mac_clockid < 0)
         return -LINUX_EINVAL;
-    if (clock_gettime(mac_clockid, &ts) < 0)
-        return linux_errno();
-
-    if (guest_write_small(g, tp_gva, &ts, sizeof(ts)) < 0)
-        return -LINUX_EFAULT;
 
     /* If this trap came from the __kernel_clock_gettime vDSO svc_fallback,
      * the trampoline parked the guest's CNTVCT_EL0 read in X9 before
      * issuing SVC, and ELR_EL1 holds the address immediately after that
-     * SVC. Pair X9 with the wall_clock we just computed and seed the vvar
-     * so subsequent calls hit the fast path. Skip the seed for any other
-     * trap (raw syscall(SYS_clock_gettime, ...) from guest code, etc.):
-     * X9 is then arbitrary guest state, and seeding from it would poison
-     * the anchor and break every later fast-path call.
+     * SVC. Pair X9 with both the MONOTONIC and REALTIME wall_clocks and
+     * seed the vvar so subsequent calls hit the fast path for either
+     * clockid. Skip the seed for any other trap (raw
+     * syscall(SYS_clock_gettime, ...) from guest code, etc.): X9 is
+     * then arbitrary guest state, and seeding from it would poison the
+     * anchor and break every later fast-path call.
+     *
+     * Skip the gate entirely once the anchor is published: vdso_seed_anchor
+     * is a one-shot CAS that can never fire again, so the HVF reads of
+     * ELR_EL1 and X9 below would be pure waste on every subsequent trap.
+     * Both clockid 0 (REALTIME) and clockid 1 (MONOTONIC) take the vDSO
+     * fast path, so either may be the first caller; either way both
+     * anchor pairs are seeded from a single set of host clock_gettime
+     * calls.
+     *
+     * Order matters: read X9 first, then sample both host wall clocks
+     * back-to-back, then write to guest and seed. Sampling host clocks
+     * before checking X9 would bake a permanent positive bias (~50-200 ns)
+     * into the anchor because every host call ages the X9 timestamp by
+     * the seeding gate's HVF round-trip. The back-to-back wall-clock
+     * reads minimize MONO/REAL skew within the anchor.
      */
-    if (clockid == 1 /* CLOCK_MONOTONIC */ && current_thread) {
+    bool seed_eligible = (clockid == 0 /* CLOCK_REALTIME */ ||
+                          clockid == 1 /* CLOCK_MONOTONIC */) &&
+                         current_thread && !vdso_anchor_is_seeded(g);
+
+    uint64_t guest_cntvct = 0;
+    if (seed_eligible) {
         uint64_t elr = 0;
-        uint64_t guest_cntvct = 0;
         if (hv_vcpu_get_sys_reg(current_thread->vcpu, HV_SYS_REG_ELR_EL1,
-                                &elr) == HV_SUCCESS &&
-            elr == vdso_clock_gettime_svc_pc() + 4 &&
-            hv_vcpu_get_reg(current_thread->vcpu, HV_REG_X9, &guest_cntvct) ==
-                HV_SUCCESS &&
-            guest_cntvct != 0)
-            vdso_seed_anchor(g, guest_cntvct, ts.tv_sec, ts.tv_nsec);
+                                &elr) != HV_SUCCESS ||
+            elr != vdso_clock_gettime_svc_pc() + 4 ||
+            hv_vcpu_get_reg(current_thread->vcpu, HV_REG_X9, &guest_cntvct) !=
+                HV_SUCCESS ||
+            guest_cntvct == 0) {
+            /* Trap came from a path other than the vDSO trampoline; X9 is
+             * arbitrary, fall through to the non-seeding path.
+             */
+            seed_eligible = false;
+        }
+    }
+
+    struct timespec ts;
+    if (clock_gettime(mac_clockid, &ts) < 0)
+        return linux_errno();
+
+    /* For the seeding path, sample the OTHER clockid back-to-back so both
+     * anchor pairs reflect roughly the same host moment. If the second
+     * clock_gettime fails (unreachable on macOS but defensive), skip
+     * seeding rather than fail the user's request: the user already has
+     * the value they asked for.
+     */
+    struct timespec ts_other;
+    bool can_seed = false;
+    if (seed_eligible) {
+        int other_mac = (clockid == 1) ? CLOCK_REALTIME : CLOCK_MONOTONIC;
+        if (clock_gettime(other_mac, &ts_other) == 0)
+            can_seed = true;
+    }
+
+    if (guest_write_small(g, tp_gva, &ts, sizeof(ts)) < 0)
+        return -LINUX_EFAULT;
+
+    if (can_seed) {
+        const struct timespec *ts_mono = (clockid == 1) ? &ts : &ts_other;
+        const struct timespec *ts_real = (clockid == 0) ? &ts : &ts_other;
+        vdso_seed_anchor(g, guest_cntvct, ts_mono->tv_sec, ts_mono->tv_nsec,
+                         ts_real->tv_sec, ts_real->tv_nsec);
     }
 
     return 0;
@@ -290,7 +335,7 @@ int64_t sys_nanosleep(guest_t *g, uint64_t req_gva, uint64_t rem_gva)
     if (guest_read_small(g, req_gva, &lreq, sizeof(lreq)) < 0)
         return -LINUX_EFAULT;
 
-    if (!linux_timespec_valid(&lreq, false))
+    if (!linux_timespec_valid(&lreq))
         return -LINUX_EINVAL;
 
     return interruptible_sleep_ns(g, linux_timespec_to_ns_sat(&lreq), rem_gva,
@@ -309,7 +354,14 @@ int64_t sys_clock_nanosleep(guest_t *g,
 
     if (flags & ~TIMER_ABSTIME)
         return -LINUX_EINVAL;
-    if (!linux_timespec_valid(&lreq, (flags & TIMER_ABSTIME) != 0))
+    /* Linux's hrtimer_nanosleep_clockid validates the timespec via
+     * timespec64_valid_strict() (kernel/time/hrtimer.c) before deciding
+     * whether the absolute deadline has expired. Negative tv_sec is
+     * rejected with EINVAL even when TIMER_ABSTIME is set, not silently
+     * treated as 'already expired'. Reject negative tv_sec unconditionally
+     * so both relative and absolute callers match the kernel contract.
+     */
+    if (!linux_timespec_valid(&lreq))
         return -LINUX_EINVAL;
 
     int mac_clockid = translate_clockid(clockid);
@@ -319,9 +371,6 @@ int64_t sys_clock_nanosleep(guest_t *g,
     int64_t remaining_ns;
 
     if (flags & TIMER_ABSTIME) {
-        if (lreq.tv_sec < 0)
-            return 0;
-
         struct timespec now;
         if (clock_gettime(mac_clockid, &now) < 0)
             return linux_errno();
@@ -362,9 +411,15 @@ int64_t sys_setitimer(guest_t *g, int which, uint64_t new_gva, uint64_t old_gva)
     if (new_gva) {
         if (guest_read_small(g, new_gva, &lnew, sizeof(lnew)) < 0)
             return -LINUX_EFAULT;
-        /* Linux rejects tv_usec outside [0, 999999] for value and interval. */
+        /* Linux rejects tv_usec outside [0, 999999] AND negative tv_sec for
+         * both value and interval. Accepting a negative tv_sec would cast
+         * through (long) below and arm an expired timer instead of returning
+         * EINVAL, diverging from the kernel contract.
+         */
         if (!RANGE_CHECK(lnew.it_value.tv_usec, 0, 1000000) ||
-            !RANGE_CHECK(lnew.it_interval.tv_usec, 0, 1000000))
+            !RANGE_CHECK(lnew.it_interval.tv_usec, 0, 1000000) ||
+            (int64_t) lnew.it_value.tv_sec < 0 ||
+            (int64_t) lnew.it_interval.tv_sec < 0)
             return -LINUX_EINVAL;
         has_new = true;
     }

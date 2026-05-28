@@ -205,27 +205,54 @@ static void test_vdso(void)
         }
     }
 
-    /* Direct call into the vDSO trampoline. Must agree with SVC. */
+    /* Direct call into the vDSO trampoline. Must agree with SVC for both
+     * CLOCK_MONOTONIC and CLOCK_REALTIME. The trampoline interpolates each
+     * clockid from a shared CNTVCT anchor pair; the seed runs on first
+     * call so the second clockid here always exercises the post-seed
+     * fast path.
+     */
     const Elf64_Sym *cg =
         lookup_sym(ehdr, v.symtab, v.strtab, v.hash, "__kernel_clock_gettime");
     if (cg) {
         clock_gettime_fn fn =
             (clock_gettime_fn) (uintptr_t) (base + cg->st_value);
-        struct timespec via_vdso = {0}, via_svc = {0};
-        int r1 = fn(CLOCK_MONOTONIC, &via_vdso);
-        int r2 = (int) syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &via_svc);
-        EXPECT(r1 == 0, "vDSO clock_gettime returned 0");
-        EXPECT(r2 == 0, "SVC clock_gettime returned 0");
-        /* Both should produce a sane monotonic value within ~10ms of each
-         * other (allowing for the gap between the two calls).
-         */
-        int64_t delta_ns =
-            ((int64_t) via_svc.tv_sec - via_vdso.tv_sec) * 1000000000LL +
-            (via_svc.tv_nsec - via_vdso.tv_nsec);
-        if (delta_ns < 0)
-            delta_ns = -delta_ns;
-        EXPECT(delta_ns < 10000000, "vDSO and SVC clock_gettime agree");
-        printf("vDSO/SVC clock_gettime delta = %" PRId64 " ns\n", delta_ns);
+        struct {
+            clockid_t id;
+            const char *label;
+            int64_t tolerance_ns;
+        } cases[] = {
+            /* CLOCK_MONOTONIC: tight tolerance, anchor-derived value
+             * cannot drift relative to the SVC reference beyond the gap
+             * between calls.
+             */
+            {CLOCK_MONOTONIC, "MONOTONIC", 10000000},
+            /* CLOCK_REALTIME: tolerance loose enough to absorb host
+             * scheduling jitter between the two clock_gettime calls.
+             */
+            {CLOCK_REALTIME, "REALTIME", 10000000},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            struct timespec via_vdso = {0}, via_svc = {0};
+            int r1 = fn(cases[i].id, &via_vdso);
+            int r2 = (int) syscall(SYS_clock_gettime, cases[i].id, &via_svc);
+            char buf[80];
+            snprintf(buf, sizeof(buf), "vDSO clock_gettime(%s) returned 0",
+                     cases[i].label);
+            EXPECT(r1 == 0, buf);
+            snprintf(buf, sizeof(buf), "SVC clock_gettime(%s) returned 0",
+                     cases[i].label);
+            EXPECT(r2 == 0, buf);
+            int64_t delta_ns =
+                ((int64_t) via_svc.tv_sec - via_vdso.tv_sec) * 1000000000LL +
+                (via_svc.tv_nsec - via_vdso.tv_nsec);
+            if (delta_ns < 0)
+                delta_ns = -delta_ns;
+            snprintf(buf, sizeof(buf), "vDSO and SVC clock_gettime(%s) agree",
+                     cases[i].label);
+            EXPECT(delta_ns < cases[i].tolerance_ns, buf);
+            printf("vDSO/SVC clock_gettime(%s) delta = %" PRId64 " ns\n",
+                   cases[i].label, delta_ns);
+        }
     }
 }
 

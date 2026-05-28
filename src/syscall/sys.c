@@ -178,12 +178,28 @@ int64_t sys_uname(guest_t *g, uint64_t buf_gva)
     return 0;
 }
 
+/* Linux getrandom(2) flags. arc4random_buf is always non-blocking and always
+ * seeded, so GRND_NONBLOCK / GRND_RANDOM / GRND_INSECURE all collapse to the
+ * same behavior here. Unknown flag bits must still return EINVAL per kernel
+ * behavior (kernel/random.c rejects flags & ~SUPPORTED_FLAGS) so callers do
+ * not silently fossilize wrong assumptions about the elfuse implementation.
+ */
+#define LINUX_GRND_NONBLOCK 0x0001
+#define LINUX_GRND_RANDOM 0x0002
+#define LINUX_GRND_INSECURE 0x0004
+#define LINUX_GRND_SUPPORTED_MASK \
+    (LINUX_GRND_NONBLOCK | LINUX_GRND_RANDOM | LINUX_GRND_INSECURE)
+
 int64_t sys_getrandom(guest_t *g,
                       uint64_t buf_gva,
                       uint64_t buflen,
                       unsigned int flags)
 {
-    (void) flags;
+    if (flags & ~LINUX_GRND_SUPPORTED_MASK)
+        return -LINUX_EINVAL;
+    if ((flags & (LINUX_GRND_RANDOM | LINUX_GRND_INSECURE)) ==
+        (LINUX_GRND_RANDOM | LINUX_GRND_INSECURE))
+        return -LINUX_EINVAL;
     if (buflen == 0)
         return 0;
     if (buf_gva > UINT64_MAX - buflen)

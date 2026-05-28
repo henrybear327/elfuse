@@ -35,6 +35,15 @@ int fork_ipc_write_all(int fd, const void *buf, size_t len)
                 continue;
             return -1;
         }
+        if (n == 0) {
+            /* Defensive: an unexpected zero return on a blocking socket
+             * would otherwise spin forever, since p and len stay at the
+             * same offset. Treat it as an IO failure so the parent and
+             * child both bail rather than wedge.
+             */
+            errno = EIO;
+            return -1;
+        }
         p += n;
         len -= n;
     }
@@ -385,6 +394,7 @@ int fork_ipc_recv_fd_table(int ipc_fd, guest_t *g)
         if (fd_entries[i].type == FD_STDIO) {
             close(host_fds[i]);
             fd_table[gfd].linux_flags = fd_entries[i].linux_flags;
+            fd_refresh_urandom_bitmap(gfd);
             memcpy(fd_table[gfd].proc_path, fd_entries[i].proc_path,
                    sizeof(fd_table[gfd].proc_path));
             fd_table[gfd].seals = fd_entries[i].seals;
@@ -407,6 +417,7 @@ int fork_ipc_recv_fd_table(int ipc_fd, guest_t *g)
             void (*cleanup)(int) = fd_cleanup_for_type(fd_entries[i].type);
             fd_alloc_at(gfd, fd_entries[i].type, host_fds[i], cleanup);
             fd_table[gfd].linux_flags = fd_entries[i].linux_flags;
+            fd_refresh_urandom_bitmap(gfd);
             memcpy(fd_table[gfd].proc_path, fd_entries[i].proc_path,
                    sizeof(fd_table[gfd].proc_path));
             fd_table[gfd].seals = fd_entries[i].seals;
@@ -698,15 +709,25 @@ int fork_ipc_recv_process_state(int ipc_fd, guest_t *g, signal_state_t *sig)
         log_error("fork-child: failed to read region count");
         return -1;
     }
-    if (num_guest_regions > GUEST_MAX_REGIONS)
-        num_guest_regions = GUEST_MAX_REGIONS;
-    if (num_guest_regions > 0 &&
+    uint32_t recv_regions = num_guest_regions;
+    if (recv_regions > GUEST_MAX_REGIONS)
+        recv_regions = GUEST_MAX_REGIONS;
+    if (recv_regions > 0 &&
         fork_ipc_read_all(ipc_fd, g->regions,
-                          num_guest_regions * sizeof(guest_region_t)) < 0) {
+                          recv_regions * sizeof(guest_region_t)) < 0) {
         log_error("fork-child: failed to read regions");
         return -1;
     }
-    g->nregions = (int) num_guest_regions;
+    /* Drain any excess records the parent serialized beyond the local cap.
+     * Without this drain, the next read (num_preannounced) consumes stale
+     * region bytes and desynchronizes the rest of the IPC payload. Mirrors
+     * the preannounced-region drain below.
+     */
+    if (num_guest_regions > recv_regions &&
+        fork_ipc_drain_bytes(ipc_fd, (num_guest_regions - recv_regions) *
+                                         sizeof(guest_region_t)) < 0)
+        return -1;
+    g->nregions = (int) recv_regions;
 
     uint32_t num_preannounced = 0;
     if (fork_ipc_read_all(ipc_fd, &num_preannounced, sizeof(num_preannounced)) <

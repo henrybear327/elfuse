@@ -46,6 +46,12 @@ test-sysinfo
 test-io-opt
 test-syscall-smoke
 test-vdso
+test-shim-identity
+test-shim-identity-attention
+test-shim-verbose-trace
+test-shim-data-el1
+test-shim-urandom-smp
+test-shim-urandom-toctou
 test-poll                      # diff=skip
 
 [section] I/O subsystem tests
@@ -105,6 +111,8 @@ test-lowbase-mem-300000
 
 [section] mremap tests
 test-mremap
+test-mremap-infra
+test-shim-cred-race
 
 [section] msync MAP_SHARED tests
 test-msync

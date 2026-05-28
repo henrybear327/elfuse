@@ -2458,6 +2458,16 @@ int64_t sys_mremap(guest_t *g,
     if (old_size > 0 && old_size > g->guest_size - old_off)
         return -LINUX_EFAULT;
 
+    /* Reject mremap whose source range touches VM infrastructure (page
+     * tables, shim code, shim data). Without this guard a guest can move
+     * the shim_data block out from under the EL1 stack or the shim-
+     * globals identity cache, since the move path issues raw memmove,
+     * memset, region removal and PTE invalidation. Matches the parallel
+     * guards in sys_mmap MAP_FIXED, sys_munmap and sys_mprotect.
+     */
+    if (guest_range_hits_infra(g, old_off, old_off + old_size))
+        return -LINUX_EINVAL;
+
     /* Verify the whole source range is covered by one tracked VMA. mremap()
      * must not copy holes or unrelated adjacent mappings.
      */
@@ -2499,6 +2509,14 @@ int64_t sys_mremap(guest_t *g,
          */
         if (new_off > g->guest_size || new_size > g->guest_size - new_off)
             return -LINUX_ENOMEM;
+
+        /* Same infrastructure protection as the source range: the move
+         * tail removes any existing dest region and rewrites PTEs, which
+         * would corrupt page tables / shim text / shim data if the dest
+         * lands inside infra.
+         */
+        if (guest_range_hits_infra(g, new_off, new_off + new_size))
+            return -LINUX_EINVAL;
 
         /* Linux rejects MREMAP_FIXED when old and new ranges overlap */
         uint64_t old_end = old_off + old_size, new_end = new_off + new_size;
@@ -2705,6 +2723,14 @@ int64_t sys_mremap(guest_t *g,
     /* Grow in place: try to extend without moving */
     if (new_size > old_size) {
         uint64_t grow_off = old_off + old_size, grow_len = new_size - old_size;
+
+        /* Reject growing into infrastructure (page tables, shim text,
+         * shim data). The source-range infra guard above only covers
+         * [old_off, old_off+old_size); the grown tail can still spill
+         * into infra without it.
+         */
+        if (guest_range_hits_infra(g, grow_off, grow_off + grow_len))
+            return -LINUX_EINVAL;
 
         /* Check if the space after the old region is free (overflow-safe) */
         if (grow_off <= g->guest_size && grow_len <= g->guest_size - grow_off) {
@@ -2973,6 +2999,16 @@ int64_t sys_madvise(guest_t *g, uint64_t addr, uint64_t length, int advice)
     uint64_t off = addr - g->ipa_base;
     if (off > g->guest_size || length > g->guest_size - off)
         return -LINUX_ENOMEM;
+
+    /* Defensive guard against destructive advice on infrastructure
+     * ranges (page tables, shim text, shim data). MADV_DONTNEED would
+     * zero shim data via raw host_base+off arithmetic; MADV_FREE on a
+     * future flag change could do the same. Today the destructive
+     * advice paths happen to skip non-anonymous regions, but a future
+     * regression should not silently reopen the hole.
+     */
+    if (guest_range_hits_infra(g, off, off + length))
+        return -LINUX_EINVAL;
 
     switch (advice) {
     case LINUX_MADV_DONTNEED: {

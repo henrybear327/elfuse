@@ -268,8 +268,10 @@ int rosetta_prepare(guest_t *g,
          * binaries: uint64_t arithmetic, two's-complement intentional.
          */
         uint64_t load_base = guest_base - va_base;
+        uint64_t infra_lo = g->interp_base - INFRA_RESERVE;
+        uint64_t infra_hi = g->interp_base;
         if (elf_map_segments(ri, ROSETTA_PATH, g->host_base, g->guest_size,
-                             load_base) < 0) {
+                             load_base, infra_lo, infra_hi) < 0) {
             log_error("rosetta: elf_map_segments failed");
             return -1;
         }
@@ -316,8 +318,10 @@ int rosetta_prepare(guest_t *g,
          */
         guest_base = g->rosetta_guest_base;
         uint64_t load_base = guest_base - va_base;
+        uint64_t infra_lo = g->interp_base - INFRA_RESERVE;
+        uint64_t infra_hi = g->interp_base;
         if (elf_map_segments(ri, ROSETTA_PATH, g->host_base, g->guest_size,
-                             load_base) < 0) {
+                             load_base, infra_lo, infra_hi) < 0) {
             log_error("rosetta: re-entry elf_map_segments failed");
             return -1;
         }

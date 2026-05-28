@@ -5,17 +5,24 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Builds a minimal vDSO ELF image in guest memory exposing versioned
- * __kernel_{rt_sigreturn,clock_getres,clock_gettime,gettimeofday}. Each entry
- * point is an SVC trampoline that traps back to the host for the actual work.
+ * __kernel_{rt_sigreturn,clock_getres,clock_gettime,gettimeofday}.
+ * __kernel_clock_gettime is a CNTVCT-based fast-path trampoline that serves
+ * CLOCK_MONOTONIC (clockid 1) and CLOCK_REALTIME (clockid 0) inline without
+ * trapping; rt_sigreturn / clock_getres / gettimeofday remain 12-byte SVC
+ * trampolines that fall back to the host syscall implementations.
  *
- * An earlier revision had a CNTVCT-based fast path for clock_gettime backed by
- * a host-updated vvar page. That path was incorrect under HVF: the host writes
- * CNTVCT_EL0 from the macOS frame of reference while the guest reads it through
- * HVF's CNTVOFF_EL2 virtualization, so the seqlock interpolation produced bogus
- * times (year 26382). The fast path is gone; SVC is correct and the trap cost
- * is still one syscall round trip, but the versioned ELF metadata lets modern
- * libcs find the trampoline instead of falling back to their generic syscall
- * path.
+ * The fast path reads CNTVCT_EL0 at EL0 (enabled via CNTKCTL_EL1.EL0VCTEN in
+ * the bootstrap), looks up the host-published anchor in the vvar (initialized,
+ * anchor_cntvct, anchor_mono_sec/nsec, anchor_real_sec/nsec), and interpolates
+ * the requested clock from the CNTVCT delta. The vvar is seeded on the first
+ * clock_gettime SVC fallback, gated on ELR_EL1 == svc_fallback_pc + 4 so an
+ * unrelated raw syscall(SYS_clock_gettime, ...) cannot poison the anchor from
+ * an arbitrary X9 value. A three-state CAS (0 -> 2 -> 1) keeps concurrent
+ * first-callers from tearing anchor fields.
+ *
+ * Wall-clock anchors are not refreshed if macOS NTP steps host time; long-
+ * running daemons can observe drift relative to a fresh REALTIME SVC. The
+ * SVC path remains correct in all cases for callers that bypass the vDSO.
  */
 
 #include <stdint.h>
@@ -85,6 +92,17 @@ typedef struct {
 #define VDSO_LINUX_VERSION_INDEX 2
 #define ELF_ST_INFO(bind, type) (((bind) << 4) | ((type) & 0xf))
 
+/* Host-owned vDSO page accessor. The vDSO is mapped RX to EL0, so guest
+ * permission walkers cannot write here; route every host build/seed/attention
+ * mutation through this bounds-checked direct host_base+VDSO_BASE pointer.
+ */
+static uint8_t *vdso_host_page(guest_t *g)
+{
+    if (VDSO_BASE + VDSO_SIZE > g->guest_size)
+        return NULL;
+    return (uint8_t *) g->host_base + VDSO_BASE;
+}
+
 /* Layout.
  *
  * Symbol layout (all entries are 12-byte SVC trampolines):
@@ -102,64 +120,86 @@ typedef struct {
 /* vvar at fixed offset; host writes the wall-clock anchor on first
  * clock_gettime SVC, after the guest trampoline has stored its own
  * CNTVCT_EL0 read into X9. Layout:
- *   +0   uint32 initialized (host sets 1 after anchor_sec/anchor_nsec)
- *   +4   uint32 pad
+ *   +0   uint32 initialized (host sets 1 after the anchor fields)
+ *   +4   uint32 attention (host mirrors shim attention bits; nonzero -> SVC)
  *   +8   uint64 anchor_cntvct (guest frame, written by host from X9)
- *   +16  uint64 anchor_sec
- *   +24  uint64 anchor_nsec
+ *   +16  uint64 anchor_mono_sec  (CLOCK_MONOTONIC anchor)
+ *   +24  uint64 anchor_mono_nsec
+ *   +32  uint64 anchor_real_sec  (CLOCK_REALTIME anchor)
+ *   +40  uint64 anchor_real_nsec
+ *
+ * Both anchor pairs are seeded together at the first vDSO-mediated
+ * clock_gettime SVC. The trampoline interpolates either pair from the
+ * shared CNTVCT delta; the picking of MONO vs REAL is done by adding
+ * VVAR_OFF_ANCHOR_MONO_SEC or VVAR_OFF_ANCHOR_REAL_SEC to the vvar base
+ * and LDPing the two-doubleword anchor.
+ *
+ * Wall-clock anchors are not refreshed on macOS NTP steps; long-running
+ * processes that observe sub-second wall-clock movements will see drift
+ * relative to a fresh clock_gettime(REALTIME) syscall. This matches the
+ * existing CNTVCT-based design and the standard tradeoff for vDSO time
+ * routines that lack a kernel-driven seqlock.
  */
 #define VDSO_OFF_VVAR 0x0B0
 #define VVAR_OFF_INITIALIZED 0x00
+#define VVAR_OFF_ATTENTION 0x04
 #define VVAR_OFF_ANCHOR_CNTVCT 0x08
-#define VVAR_OFF_ANCHOR_SEC 0x10
-#define VVAR_OFF_ANCHOR_NSEC 0x18
-#define VVAR_SIZE 0x20
+#define VVAR_OFF_ANCHOR_MONO_SEC 0x10
+#define VVAR_OFF_ANCHOR_MONO_NSEC 0x18
+#define VVAR_OFF_ANCHOR_REAL_SEC 0x20
+#define VVAR_OFF_ANCHOR_REAL_NSEC 0x28
+#define VVAR_SIZE 0x30
 
 /* .text trampolines. rt_sigreturn / clock_getres / gettimeofday are 12-byte
  * SVC trampolines. clock_gettime is the CNTVCT-based fast-path trampoline
- * (112 bytes = 28 instructions including the svc_fallback tail). The
+ * (140 bytes = 35 instructions including the svc_fallback tail). The
  * trampoline uses LDAR on the vvar initialized flag, treats both states
  * 0 (unseeded) and 2 (host-side reservation in vdso_seed_anchor) as
- * fall-back, and guards the CNTVCT-anchor subtraction against unsigned
- * underflow via SUBS + B.LO.
+ * fall-back, also falls back while attention is pending, and guards the
+ * CNTVCT-anchor subtraction against unsigned underflow via SUBS + B.LO. The
+ * fast path now serves both clockid 0 (CLOCK_REALTIME) and clockid 1
+ * (CLOCK_MONOTONIC); other clockids fall back to SVC.
  */
-#define TEXT_OFF_SIGRET 0x0D0
-#define TEXT_OFF_GETRES 0x0DC
-#define TEXT_OFF_GETTIME 0x0E8
-#define TEXT_GETTIME_SIZE 0x70
+#define TEXT_OFF_SIGRET 0x0E0
+#define TEXT_OFF_GETRES 0x0EC
+#define TEXT_OFF_GETTIME 0x0F8
+#define TEXT_GETTIME_SIZE 0x8C
 #define TEXT_OFF_GETTOD (TEXT_OFF_GETTIME + TEXT_GETTIME_SIZE)
 #define TEXT_END (TEXT_OFF_GETTOD + 12)
-/* Address of the SVC inside __kernel_clock_gettime's svc_fallback (offset
- * 0x68 within the trampoline). The host's sys_clock_gettime uses this
- * value to gate vvar seeding: only a trap whose ELR_EL1 equals SVC_PC + 4
- * came from the trampoline and may carry a trustworthy CNTVCT in X9.
+/* Offset of the SVC instruction inside __kernel_clock_gettime's svc_fallback
+ * (svc_fallback opens at instruction 33 of 35, i.e. byte 0x80; the SVC is
+ * the second instruction of the fallback, at byte 0x84). The host's
+ * sys_clock_gettime uses this value to gate vvar seeding: only a trap whose
+ * ELR_EL1 equals SVC_PC + 4 came from the trampoline and may carry a
+ * trustworthy CNTVCT in X9.
  */
-#define VDSO_CLOCK_GETTIME_SVC_PC (TEXT_OFF_GETTIME + 0x68)
+#define VDSO_CLOCK_GETTIME_SVC_PC (TEXT_OFF_GETTIME + 0x84)
 
 /* dynstr, dynsym, hash, GNU version metadata, dynamic, shdr follow.
- * TEXT_END is 0x164 after the fast-path expansion; pad to 8-byte align.
+ * TEXT_END is 0x190 after the attention-check expansion.
  */
-#define VDSO_OFF_DYNSTR 0x168
+#define VDSO_OFF_DYNSTR 0x190
 
-/* Padded to 8-byte align: 0x168 + 103 = 0x1CF, pad to 0x1D0 */
-#define VDSO_OFF_DYNSYM 0x1D0
+/* Padded to 8-byte align: 0x190 + 103 = 0x1F7, pad to 0x1F8 */
+#define VDSO_OFF_DYNSYM 0x1F8
 
-/* 5 * 24 = 120, 0x1D0 + 120 = 0x248 */
-#define VDSO_OFF_HASH 0x248
+/* 5 * 24 = 120, 0x1F8 + 120 = 0x270 */
+#define VDSO_OFF_HASH 0x270
 
-/* 2+1+5 = 8 words * 4 = 32, 0x248 + 32 = 0x268 */
-#define VDSO_OFF_VERSYM 0x268
+/* 2+1+5 = 8 words * 4 = 32, 0x270 + 32 = 0x290 */
+#define VDSO_OFF_VERSYM 0x290
 
-/* 5 * 2 = 10, 0x268 + 10 = 0x272, pad to 0x278 */
-#define VDSO_OFF_VERDEF 0x278
+/* 5 * 2 = 10, 0x290 + 10 = 0x29A, pad to 0x2A0 */
+#define VDSO_OFF_VERDEF 0x2A0
 
-/* Verdef + verdaux = 28, 0x278 + 28 = 0x294, pad to 0x298 */
-#define VDSO_OFF_DYNAMIC 0x298
+/* Verdef + verdaux = 28, 0x2A0 + 28 = 0x2BC, pad to 0x2C0 */
+#define VDSO_OFF_DYNAMIC 0x2C0
 
-/* 9 * 16 = 144, 0x298 + 144 = 0x328 */
-#define VDSO_OFF_SHDR 0x328
+/* 9 * 16 = 144, 0x2C0 + 144 = 0x350 */
+#define VDSO_OFF_SHDR 0x350
 
-/* 8 * 64 = 512, 0x328 + 512 = 0x528 (fits in 4 KiB) */
+/* 8 * 64 = 512, 0x350 + 512 = 0x550 (fits in 4 KiB) */
+
 #define VDSO_NUM_SYMS 4
 #define HASH_NCHAIN (VDSO_NUM_SYMS + 1)
 #define HASH_NBUCKET 1
@@ -220,41 +260,13 @@ static void emit_svc_trampoline(uint32_t *code, unsigned syscall_nr)
 
 /* CNTVCT-based fast-path trampoline for __kernel_clock_gettime. The guest
  * always reads CNTVCT_EL0 into X9 first, then either falls through to a
- * full SVC (CLOCK_REALTIME, unsupported clockids, vvar uninitialized) or
+ * full SVC (unsupported clockids, pending attention, vvar uninitialized) or
  * interpolates wall_clock from the vvar anchor. The host's
  * sys_clock_gettime handler reads X9 on the first SVC and seeds the vvar
  * (anchor_cntvct = X9, anchor_sec/nsec = wall_clock), so subsequent calls
- * skip the trap. CNTKCTL_EL1.EL0VCTEN is set in bootstrap to allow the
- * MRS at EL0; without that the trampoline gets 0 back and the math
- * collapses.
- *
- * Layout (vvar_off is byte offset from the trampoline's first instruction
- * to VDSO_OFF_VVAR; resolved by emit_clock_gettime_trampoline below):
- *
- *   00: mrs  x9, cntvct_el0          ; always read first
- *   04: cmp  w0, #1                  ; CLOCK_MONOTONIC?
- *   08: b.ne svc_fallback
- *   0C: adr  x2, vvar
- *   10: ldr  w3, [x2, #INITIALIZED]
- *   14: cbz  w3, svc_fallback        ; not seeded yet
- *   18: ldr  x3, [x2, #ANCHOR_CNTVCT]
- *   1C: ldr  x4, [x2, #ANCHOR_SEC]
- *   20: ldr  x5, [x2, #ANCHOR_NSEC]
- *   24: sub  x6, x9, x3              ; delta cycles (CNTFRQ = 24 MHz)
- *   28: mov  x7, #125
- *   2C: mul  x6, x6, x7              ; delta * 125
- *   30: mov  x7, #3
- *   34: udiv x6, x6, x7              ; delta_ns
- *   38: add  x5, x5, x6              ; raw nsec
- *   3C: mov  x7, #0xCA00
- *   40: movk x7, #0x3B9A, lsl #16    ; x7 = 1e9
- *   44: udiv x8, x5, x7              ; sec carry
- *   48: msub x5, x8, x7, x5          ; nsec %= 1e9
- *   4C: add  x4, x4, x8              ; final sec
- *   50: stp  x4, x5, [x1]            ; store {sec, nsec}
- *   54: mov  x0, #0
- *   58: ret
- *   5C: (svc_fallback: mov x8 #113; svc #0; ret)
+ * skip the trap while attention remains clear. CNTKCTL_EL1.EL0VCTEN is set
+ * in bootstrap to allow the MRS at EL0; without that the trampoline gets
+ * 0 back and the math collapses.
  *
  * The svc_fallback tail lives in __kernel_clock_gettime's slot too so a
  * single RET ends the function in either path.
@@ -296,6 +308,12 @@ static uint32_t enc_ldr_x_imm12(unsigned rt, unsigned rn, uint32_t off_bytes)
 static uint32_t enc_add_x(unsigned rd, unsigned rn, unsigned rm)
 {
     return 0x8B000000U | ((rm & 0x1F) << 16) | ((rn & 0x1F) << 5) | (rd & 0x1F);
+}
+
+static uint32_t enc_add_x_imm12(unsigned rd, unsigned rn, uint16_t imm)
+{
+    return 0x91000000U | (((uint32_t) imm & 0xFFF) << 10) | ((rn & 0x1F) << 5) |
+           (rd & 0x1F);
 }
 
 static uint32_t enc_mul_x(unsigned rd, unsigned rn, unsigned rm)
@@ -345,59 +363,127 @@ static uint32_t enc_subs_x(unsigned rd, unsigned rn, unsigned rm)
     return 0xEB000000U | ((rm & 0x1F) << 16) | ((rn & 0x1F) << 5) | (rd & 0x1F);
 }
 
+/* CBZ Wt, imm19 (byte-relative; encoder shifts >>2 internally). */
+static uint32_t enc_cbz_w(unsigned rt, int32_t pc_rel)
+{
+    uint32_t imm19 = (uint32_t) ((pc_rel >> 2) & 0x7FFFF);
+    return 0x34000000U | (imm19 << 5) | (rt & 0x1F);
+}
+
+static uint32_t enc_cbnz_w(unsigned rt, int32_t pc_rel)
+{
+    uint32_t imm19 = (uint32_t) ((pc_rel >> 2) & 0x7FFFF);
+    return 0x35000000U | (imm19 << 5) | (rt & 0x1F);
+}
+
+/* B imm26 unconditional branch (byte-relative). */
+static uint32_t enc_b(int32_t pc_rel)
+{
+    uint32_t imm26 = (uint32_t) ((pc_rel >> 2) & 0x3FFFFFF);
+    return 0x14000000U | imm26;
+}
+
+/* LDP Xt1, Xt2, [Xn, #off_bytes] (signed 7-bit imm, multiple of 8). */
+static uint32_t enc_ldp_x_imm7(unsigned rt1,
+                               unsigned rt2,
+                               unsigned rn,
+                               int32_t off_bytes)
+{
+    int32_t imm7 = (off_bytes / 8) & 0x7F;
+    return 0xA9400000U | ((uint32_t) imm7 << 15) | ((rt2 & 0x1F) << 10) |
+           ((rn & 0x1F) << 5) | (rt1 & 0x1F);
+}
+
 /* Emit the CNTVCT fast-path clock_gettime trampoline at page+pc_off; the
  * vvar lives at page+vvar_off. The trampoline is exactly TEXT_GETTIME_SIZE
  * bytes; the static_assert below catches drift.
+ *
+ * Layout (35 instructions, 0x8c bytes):
+ *
+ *   0x00  mrs  x9, cntvct_el0           ; always read first
+ *   0x04  cbz  w0, .Lreal               ; clockid==0 -> CLOCK_REALTIME
+ *   0x08  cmp  w0, #1                   ; clockid==1 -> CLOCK_MONOTONIC
+ *   0x0C  b.ne svc_fallback              ; other clockid -> SVC
+ *   0x10  mov  w7, #ANCHOR_MONO_SEC      ; offset within vvar of MONO sec
+ *   0x14  b    .Linit
+ *   0x18  .Lreal: mov w7, #ANCHOR_REAL_SEC
+ *   0x1C  .Linit: adr x2, vvar
+ *   0x20  add  x10, x2, #ATTENTION
+ *   0x24  ldar w3, [x10]                 ; load attention flag (acquire)
+ *   0x28  cbnz w3, svc_fallback          ; timers/signals need epilogue
+ *   0x2C  ldar w3, [x2]                  ; load initialized flag (acquire)
+ *   0x30  cmp  w3, #1
+ *   0x34  b.ne svc_fallback              ; not seeded yet
+ *   0x38  ldr  x3, [x2, #ANCHOR_CNTVCT]
+ *   0x3C  add  x8, x2, x7                ; x8 = vvar base + sec_offset
+ *   0x40  ldp  x4, x5, [x8]              ; x4=anchor_sec, x5=anchor_nsec
+ *   0x44  subs x6, x9, x3                ; cntvct delta
+ *   0x48  b.lo svc_fallback              ; underflow -> SVC
+ *   ... (math identical to original: delta*125/3 ns, +nsec, carry into sec)
+ *   0x74  stp  x4, x5, [x1]              ; store {sec, nsec}
+ *   0x78  mov  x0, #0
+ *   0x7C  ret
+ *   0x80  svc_fallback: mov x8, #113
+ *   0x84  svc  #0
+ *   0x88  ret
+ *
+ * Both clockids share the same CNTVCT delta math; only the anchor pair
+ * loaded via LDP changes. Picking via a runtime offset register avoids
+ * duplicating the entire math block per clockid.
  */
 static void emit_clock_gettime_trampoline(uint32_t *code,
                                           uint32_t pc_off,
                                           uint32_t vvar_off)
 {
-    /* svc_fallback starts at offset 0x64 within the trampoline. The
-     * branch instructions live at offsets 0x08 (b.ne on clockid != 1),
-     * 0x18 (b.ne on initialized != 1), and 0x2C (b.lo on cntvct underflow).
-     * Each branch encoder takes a byte-relative offset (target - branch_pc)
-     * and shifts >> 2 internally for imm19.
-     */
-    int32_t svc_fallback_off = 0x64;
-    int32_t adr_pc_off = 0x0C;
+    /* Branch targets within the trampoline. */
+    int32_t real_off = 0x18;         /* .Lreal */
+    int32_t init_off = 0x1C;         /* .Linit (common path entry) */
+    int32_t svc_fallback_off = 0x80; /* svc_fallback */
+    int32_t adr_pc_off = 0x1C;       /* offset of 'adr x2, vvar' */
     int32_t vvar_rel = (int32_t) vvar_off - (int32_t) (pc_off + adr_pc_off);
 
-    code[0] = 0xD53BE049U;           /* mrs  x9, cntvct_el0      */
-    code[1] = enc_cmp_w_imm12(0, 1); /* cmp  w0, #1              */
-    code[2] =
-        enc_bcond_imm19(COND_NE, svc_fallback_off - 0x08); /* b.ne fallback */
-    code[3] = enc_adr(2, vvar_rel);  /* adr  x2, vvar            */
-    code[4] = enc_ldar_w(3, 2);      /* ldar w3, [x2]            */
-    code[5] = enc_cmp_w_imm12(3, 1); /* cmp  w3, #1              */
-    code[6] =
-        enc_bcond_imm19(COND_NE, svc_fallback_off - 0x18); /* b.ne fallback */
-    code[7] = enc_ldr_x_imm12(3, 2, VVAR_OFF_ANCHOR_CNTVCT);
-    code[8] = enc_ldr_x_imm12(4, 2, VVAR_OFF_ANCHOR_SEC);
-    code[9] = enc_ldr_x_imm12(5, 2, VVAR_OFF_ANCHOR_NSEC);
-    code[10] = enc_subs_x(6, 9, 3); /* subs x6, x9, x3 (delta)  */
-    code[11] =
-        enc_bcond_imm19(COND_LO, svc_fallback_off - 0x2C); /* b.lo fallback */
-    code[12] = enc_movz_x(7, 125);
-    code[13] = enc_mul_x(6, 6, 7); /* delta * 125              */
-    code[14] = enc_movz_x(7, 3);
-    code[15] = enc_udiv_x(6, 6, 7); /* delta_ns = delta*125/3   */
-    code[16] = enc_add_x(5, 5, 6);  /* nsec + delta_ns          */
-    code[17] = enc_movz_x(7, 0xCA00);
-    code[18] = enc_movk_x_lsl16(7, 0x3B9A); /* x7 = 1e9                 */
-    code[19] = enc_udiv_x(8, 5, 7);         /* sec_carry                */
-    code[20] = enc_msub_x(5, 8, 7, 5);      /* nsec %= 1e9              */
-    code[21] = enc_add_x(4, 4, 8);          /* sec += carry             */
-    code[22] = enc_stp_x_imm7(4, 5, 1, 0);  /* stp x4, x5, [x1]         */
-    code[23] = enc_movz_x(0, 0);            /* return 0                 */
-    code[24] = 0xD65F03C0U;                 /* ret                      */
-    /* svc_fallback at offset 0x64: mov x8, #113; svc #0; ret */
-    code[25] = enc_movz_x(8, 113);
-    code[26] = 0xD4000001U; /* svc #0                   */
-    code[27] = 0xD65F03C0U; /* ret                      */
+    code[0] = 0xD53BE049U;                   /* mrs  x9, cntvct_el0           */
+    code[1] = enc_cbz_w(0, real_off - 0x04); /* cbz w0, .Lreal     */
+    code[2] = enc_cmp_w_imm12(0, 1);         /* cmp  w0, #1        */
+    code[3] = enc_bcond_imm19(COND_NE, svc_fallback_off - 0x0C);
+    /* b.ne svc_fallback  */
+    code[4] = enc_movz_x(7, VVAR_OFF_ANCHOR_MONO_SEC);
+    code[5] = enc_b(init_off - 0x14);                  /* b .Linit           */
+    code[6] = enc_movz_x(7, VVAR_OFF_ANCHOR_REAL_SEC); /* .Lreal       */
+    code[7] = enc_adr(2, vvar_rel);                    /* .Linit: adr x2,vv  */
+    code[8] = enc_add_x_imm12(10, 2, VVAR_OFF_ATTENTION);
+    code[9] = enc_ldar_w(3, 10);
+    code[10] = enc_cbnz_w(3, svc_fallback_off - 0x28);
+    code[11] = enc_ldar_w(3, 2);      /* ldar w3, [x2]      */
+    code[12] = enc_cmp_w_imm12(3, 1); /* cmp  w3, #1        */
+    code[13] = enc_bcond_imm19(COND_NE, svc_fallback_off - 0x34);
+    /* b.ne svc_fallback  */
+    code[14] = enc_ldr_x_imm12(3, 2, VVAR_OFF_ANCHOR_CNTVCT);
+    code[15] = enc_add_x(8, 2, 7);         /* add x8, x2, x7     */
+    code[16] = enc_ldp_x_imm7(4, 5, 8, 0); /* ldp x4, x5, [x8]   */
+    code[17] = enc_subs_x(6, 9, 3);        /* subs x6, x9, x3    */
+    code[18] = enc_bcond_imm19(COND_LO, svc_fallback_off - 0x48);
+    /* b.lo svc_fallback  */
+    code[19] = enc_movz_x(7, 125);
+    code[20] = enc_mul_x(6, 6, 7); /* delta * 125        */
+    code[21] = enc_movz_x(7, 3);
+    code[22] = enc_udiv_x(6, 6, 7); /* delta_ns           */
+    code[23] = enc_add_x(5, 5, 6);  /* nsec += delta_ns   */
+    code[24] = enc_movz_x(7, 0xCA00);
+    code[25] = enc_movk_x_lsl16(7, 0x3B9A); /* x7 = 1e9           */
+    code[26] = enc_udiv_x(8, 5, 7);         /* sec_carry          */
+    code[27] = enc_msub_x(5, 8, 7, 5);      /* nsec %= 1e9        */
+    code[28] = enc_add_x(4, 4, 8);          /* sec += carry       */
+    code[29] = enc_stp_x_imm7(4, 5, 1, 0);  /* stp x4, x5, [x1]   */
+    code[30] = enc_movz_x(0, 0);            /* mov x0, #0         */
+    code[31] = 0xD65F03C0U;                 /* ret                */
+    /* svc_fallback at offset 0x80 (instruction 32) */
+    code[32] = enc_movz_x(8, 113); /* mov x8, #113       */
+    code[33] = 0xD4000001U;        /* svc #0             */
+    code[34] = 0xD65F03C0U;        /* ret                */
 }
 
-_Static_assert(TEXT_GETTIME_SIZE == 28 * sizeof(uint32_t),
+_Static_assert(TEXT_GETTIME_SIZE == 35 * sizeof(uint32_t),
                "clock_gettime trampoline size must match emitter");
 
 /* The public sigret offset declared in core/vdso.h must match the
@@ -423,7 +509,14 @@ static uint32_t elf_hash(const char *name)
 
 uint64_t vdso_build(guest_t *g)
 {
-    uint8_t *page = (uint8_t *) guest_ptr(g, VDSO_BASE);
+    /* The vDSO page is host-built into the guest backing buffer before any
+     * page-table entry covers it, so route through vdso_host_page which
+     * just bounds-checks against guest_size. The earlier guest_ptr walk
+     * worked by coincidence (the slot happened to be reachable) but tied
+     * host construction to whatever EL0 permission walker state existed
+     * at the time -- a fragile coupling for host-owned memory.
+     */
+    uint8_t *page = vdso_host_page(g);
     if (!page) {
         log_error("vdso: VDSO_BASE 0x%llx out of guest memory",
                   (unsigned long long) VDSO_BASE);
@@ -627,10 +720,18 @@ uint64_t vdso_build(guest_t *g)
 
 void vdso_seed_anchor(guest_t *g,
                       uint64_t guest_cntvct,
-                      int64_t anchor_sec,
-                      int64_t anchor_nsec)
+                      int64_t mono_sec,
+                      int64_t mono_nsec,
+                      int64_t real_sec,
+                      int64_t real_nsec)
 {
-    uint8_t *page = (uint8_t *) guest_ptr(g, VDSO_BASE);
+    /* Match vdso_attention_or: host-owned vvar writes go through the
+     * direct host_base + VDSO_BASE accessor, not the guest permission
+     * walker. The vDSO is RX to EL0 so guest_ptr_w would silently bail
+     * here; guest_ptr happens to work because it only requires read
+     * perm, but that inconsistency is brittle.
+     */
+    uint8_t *page = vdso_host_page(g);
     if (!page)
         return;
     uint32_t *initialized = (uint32_t *) (page + VDSO_OFF_VVAR);
@@ -643,6 +744,14 @@ void vdso_seed_anchor(guest_t *g,
      * writes the fields and releases 1; losers bail. The guest trampoline
      * loads initialized with LDAR and only takes the fast path on
      * initialized == 1, so state 2 still routes to the SVC fallback.
+     *
+     * Both MONO and REAL anchor pairs are written together so a fast-path
+     * caller for either clockid sees a consistent pair after observing
+     * initialized == 1. The two pairs share anchor_cntvct (the trampoline's
+     * X9 at first call); macOS clock_gettime for MONO and REAL was issued
+     * by the host between then and now, so the anchor wall_clock values
+     * trail X9 by a small constant offset that propagates unchanged into
+     * every fast-path result.
      */
     uint32_t expected = 0;
     if (!__atomic_compare_exchange_n(initialized, &expected, 2,
@@ -651,8 +760,10 @@ void vdso_seed_anchor(guest_t *g,
         return;
 
     *(uint64_t *) (vvar + VVAR_OFF_ANCHOR_CNTVCT) = guest_cntvct;
-    *(uint64_t *) (vvar + VVAR_OFF_ANCHOR_SEC) = (uint64_t) anchor_sec;
-    *(uint64_t *) (vvar + VVAR_OFF_ANCHOR_NSEC) = (uint64_t) anchor_nsec;
+    *(uint64_t *) (vvar + VVAR_OFF_ANCHOR_MONO_SEC) = (uint64_t) mono_sec;
+    *(uint64_t *) (vvar + VVAR_OFF_ANCHOR_MONO_NSEC) = (uint64_t) mono_nsec;
+    *(uint64_t *) (vvar + VVAR_OFF_ANCHOR_REAL_SEC) = (uint64_t) real_sec;
+    *(uint64_t *) (vvar + VVAR_OFF_ANCHOR_REAL_NSEC) = (uint64_t) real_nsec;
 
     /* The release-store on initialized pairs with the trampoline's LDAR
      * load on the same address; observing 1 also makes the anchor fields
@@ -664,4 +775,49 @@ void vdso_seed_anchor(guest_t *g,
 uint64_t vdso_clock_gettime_svc_pc(void)
 {
     return VDSO_BASE + VDSO_CLOCK_GETTIME_SVC_PC;
+}
+
+bool vdso_anchor_is_seeded(guest_t *g)
+{
+    uint8_t *page = vdso_host_page(g);
+    if (!page)
+        return false;
+    uint32_t *initialized = (uint32_t *) (page + VDSO_OFF_VVAR);
+    /* Pairs with the release store in vdso_seed_anchor that publishes the
+     * anchor fields. Only state 1 (ready) qualifies; state 2 (one host
+     * thread reserving) still needs the seeding gate to run for any
+     * subsequent caller that wins after the reservation completes.
+     */
+    return __atomic_load_n(initialized, __ATOMIC_ACQUIRE) == 1;
+}
+
+void vdso_attention_or(guest_t *g, uint32_t bits)
+{
+    /* The vDSO is mapped RX to EL0, but the host owns the embedded vvar and
+     * must still be able to mirror shim attention into it. Bypass the
+     * guest-permission walker just like shim_globals does for shim_data.
+     */
+    uint8_t *page = vdso_host_page(g);
+    if (!page)
+        return;
+    uint32_t *attention =
+        (uint32_t *) (page + VDSO_OFF_VVAR + VVAR_OFF_ATTENTION);
+    /* SEQ_CST mirrors shim_globals_attn_or. The vDSO attention word is
+     * read by EL0 vDSO fast paths (libc time/getcpu/etc.) without going
+     * through HVC, so the same contrapositive-style ordering claim
+     * applies: a reader that LDAR-loads attn=0 must not observe later
+     * publish_creds stores. ACQ_REL alone does not provide that
+     * (release-acquire only orders the forward direction).
+     */
+    __atomic_fetch_or(attention, bits, __ATOMIC_SEQ_CST);
+}
+
+void vdso_attention_and(guest_t *g, uint32_t mask)
+{
+    uint8_t *page = vdso_host_page(g);
+    if (!page)
+        return;
+    uint32_t *attention =
+        (uint32_t *) (page + VDSO_OFF_VVAR + VVAR_OFF_ATTENTION);
+    __atomic_fetch_and(attention, mask, __ATOMIC_RELEASE);
 }

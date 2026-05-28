@@ -29,6 +29,8 @@
 #include "hvutil.h"
 #include "utils.h"
 
+#include "core/shim-globals.h"
+
 #include "runtime/forkipc.h"
 #include "runtime/fork-state.h"
 #include "runtime/futex.h"
@@ -299,6 +301,20 @@ int fork_child_main(int ipc_fd,
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, regs.sp_el1));
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_TPIDR_EL0, regs.tpidr_el0));
 
+    /* TPIDR_EL1 is set by the host (never inherited from the parent's
+     * register snapshot) because it must point at the child's own
+     * shim_globals base in the child's IPA; shim_data_base happens to
+     * be the same value in both processes (layout derives from
+     * guest_size + ipa_bits which match across fork), but installing
+     * it explicitly keeps the child consistent with the bootstrap path.
+     * CONTEXTIDR_EL1 holds the per-vCPU tid (== child pid for the
+     * single-threaded child at this point).
+     */
+    if (shim_globals_install_per_vcpu(vcpu, &g, hdr.child_pid) < 0) {
+        guest_destroy(&g);
+        return 1;
+    }
+
     /* Enable MMU directly (page tables already in guest memory from IPC).
      * SCTLR must include MMU-enable (M), caches (C, I), RES1 bits, and EL0
      * cache maintenance access (UCI, UCT) for JIT translators.
@@ -332,6 +348,39 @@ int fork_child_main(int ipc_fd,
      * dereference NULL.
      */
     thread_register_main(vcpu, vexit, hdr.child_pid, regs.sp_el1);
+
+    /* Re-publish identity into the child's shim-globals cache: the
+     * CoW / region copy inherits the parent's pid/uid values, and the
+     * shim's identity fast path would otherwise return the parent's
+     * pid to the child. Identity is now committed via the same path
+     * the bootstrap uses.
+     */
+    shim_globals_init(&g);
+    shim_globals_set_trace_enabled(&g, verbose);
+    shim_globals_publish_pid(&g, hdr.child_pid, hdr.parent_pid);
+    shim_globals_publish_creds(&g, hdr.uid, hdr.euid, hdr.gid, hdr.egid);
+    /* Fresh entropy for the child. Linux's vDSO getrandom epoch-bumps
+     * across fork; here we just re-fill the ring from arc4random_buf
+     * which seeds from the host kernel's RNG, so parent and child do
+     * not share future urandom output.
+     */
+    shim_globals_refill_urandom_ring(&g);
+    /* Register the singleton for the child's signal.c so its
+     * attention setters know which guest to update.
+     */
+    signal_set_shim_globals_guest(&g);
+    /* Same for the fd-table hooks. Must precede any fd_alloc the
+     * child performs (the fd-table-restore step has already run
+     * above, but those slots are populated via direct memcpy of the
+     * parent's entries; subsequent open/dup/close in the child rely
+     * on this registration to keep the bitmap in sync).
+     */
+    shim_globals_set_singleton(&g);
+    /* shim_globals_init above zeroed the urandom bitmap. Walk the inherited fd
+     * table and re-mark every readable FD_URANDOM slot so the shim's read fast
+     * path sees the correct state from the first syscall onward.
+     */
+    shim_globals_rebuild_urandom_bitmap();
 
     /* Now that current_thread is set, apply signal state. This must happen
      * after thread_register_main() so the per-thread blocked mask and altstack
@@ -669,6 +718,14 @@ static void *thread_create_and_run(void *arg)
     WORKER_HV(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_TTBR0_EL1, tca->ttbr0));
     WORKER_HV(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_CPACR_EL1, tca->cpacr));
 
+    /* All worker vCPUs in the process share the same shim_globals base
+     * (one VM per process); a fresh TPIDR_EL1 set is still required
+     * because HVF created this vCPU empty. CONTEXTIDR_EL1 holds the
+     * per-thread tid that the gettid shim fast path returns.
+     */
+    if (shim_globals_install_per_vcpu(vcpu, tca->guest, t->guest_tid) < 0)
+        goto startup_failed;
+
     /* MMU already on, so set SCTLR with M=1 directly (page tables exist) */
     WORKER_HV(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, tca->sctlr));
 
@@ -980,6 +1037,11 @@ static void *vm_clone_thread_run(void *arg)
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, tca->sctlr));
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, tca->sp_el1));
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL0, tca->child_stack));
+    if (shim_globals_install_per_vcpu(vcpu, tca->guest, t->guest_tid) < 0) {
+        thread_deactivate(t);
+        free(tca);
+        return NULL;
+    }
 
     /* TLS pointer */
     if (tca->flags & LINUX_CLONE_SETTLS) {

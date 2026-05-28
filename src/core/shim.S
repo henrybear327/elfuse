@@ -272,11 +272,220 @@ svc_handler:
     /* Extract SVC immediate (bits [15:0]) */
     and x11, x9, #0xFFFF
 
-    cmp x11, #0               /* SVC #0 = Linux syscall? */
-    b.eq handle_svc_0
+    /* Inverted from "b.eq handle_svc_0" so the SVC #0 fast-path
+     * dispatch can fall through without an extra branch.
+     */
+    cmp x11, #0
+    b.ne restore_and_bad
 
-    /* Unrecognized SVC; restore and report as bad exception */
-    b restore_and_bad
+    /* Identity-class fast path. X8 in [172, 179) is one of getpid (172),
+     * getppid (173), getuid (174), geteuid (175), getgid (176), getegid (177),
+     * or gettid (178). The first six read from the shim-globals cache
+     * (TPIDR_EL1 base, host-published scalar slots starting at offset 8);
+     * gettid reads its per-vCPU tid from CONTEXTIDR_EL1 directly. Layout-wise
+     * the cache has the attention flag at offset 0 (LDAR'd here to enforce the
+     * slow-path gate from Slice B and the --verbose trace gate) and six
+     * identity slots after it.
+     *
+     * Saved X8 is at [sp+64] per SAVE_GPRS. Scratch X10..X13 are restored from
+     * the frame by RESTORE_GPRS_KEEP_X0 at the named tail (svc_restore_eret),
+     * so the Linux ABI guarantee (X1..X30 preserved across SVC) is intact even
+     * on the fast path.
+     */
+    ldr x10, [sp, #64]               /* saved X8 (syscall nr) */
+    sub x11, x10, #172
+    cmp x11, #7                       /* in identity-class range? */
+    b.lo identity_class_fast          /* 172..178 -> identity / gettid */
+    cmp x10, #63                       /* SYS_read? */
+    b.eq urandom_read_fast
+    b handle_svc_0
+
+identity_class_fast:
+    mrs x12, tpidr_el1               /* shim-globals base */
+    ldar w13, [x12]                  /* attention flag, acquire */
+    cbnz w13, handle_svc_0           /* slow-path required */
+    cmp x11, #6                       /* bias == 6 ==> gettid (178) */
+    b.eq gettid_fast
+    add x12, x12, #8                 /* skip attention -> identity[0] */
+    ldr x0, [x12, x11, lsl #3]       /* identity[bias] for 172..177 */
+    b svc_restore_eret
+
+gettid_fast:
+    mrs x0, contextidr_el1            /* per-vCPU tid */
+    b svc_restore_eret
+
+    /* Urandom-read fast path (Slice D / P3). Serves
+     * read(urandom_fd, buf, len) with len in [1, 64] by popping
+     * len bytes from the shim-globals entropy ring (TPIDR_EL1 base +
+     * 0xC0) into the guest-supplied buffer (X1), advancing the ring
+     * head atomically. If the requested fd is not FD_URANDOM, or
+     * the ring is low, or the read would cross a ring-wrap boundary,
+     * falls through to handle_svc_0 so the host serves the read and
+     * refills the ring.
+     *
+     * Layout offsets (match core/shim-globals.h SHIM_URANDOM_OFF_*):
+     *   0x0038  URANDOM_FD_BITMAP   1024 bits = 128 bytes
+     *   0x00B8  RING_HEAD            uint32, atomic consumer cursor
+     *   0x00BC  RING_TAIL            uint32, host-released tail
+     *   0x00C0  RING                  4096 bytes
+     *   0x10C0  RING_LOCK             uint32
+     */
+urandom_read_fast:
+    mrs x12, tpidr_el1
+    ldar w13, [x12]                  /* attention flag */
+    cbnz w13, handle_svc_0
+
+    ldr x14, [sp, #0]                /* saved X0 = fd */
+    cmp x14, #1024                    /* FD_TABLE_SIZE */
+    b.hs handle_svc_0
+    ldr x15, [sp, #16]               /* saved X2 = len */
+    cbz x15, handle_svc_0            /* host handles len == 0 */
+    cmp x15, #64                      /* URANDOM_INLINE_LIMIT */
+    b.hi handle_svc_0
+
+    /* Bitmap test: word = fd >> 6, bit = fd & 63. */
+    add x16, x12, #0x38              /* SHIM_URANDOM_OFF_BITMAP */
+    lsr x17, x14, #6
+    ldr x17, [x16, x17, lsl #3]
+    and x18, x14, #63
+    lsr x17, x17, x18
+    tbz w17, #0, handle_svc_0
+
+    ldr x20, [sp, #8]                /* saved X1 = buf */
+    /* Probe the guest buffer for stage-1 EL0-write translations before
+     * doing any EL1 store. PROT_NONE or unmapped pages bail to the
+     * slow path here; the host's sys_read returns -EFAULT.
+     *
+     * The probe handles the STATIC case (buffer already unmapped at
+     * entry). The DYNAMIC case where a sibling vCPU munmaps the buffer
+     * in the window between probe and strb is caught later by the
+     * EL1 data abort vector routing into handle_el1_data_abort_recover
+     * (which rolls back the ring head, releases the lock, and returns
+     * -EFAULT). Without that recovery the EL1 strb would fault into
+     * BAD_VEC and halt the VM.
+     *
+     * len is in [1, 64]. Probing the first and last byte covers every page
+     * the inline copy can touch on Linux/AArch64, whose base page size is
+     * much larger than the inline limit.
+     */
+    at s1e0w, x20
+    isb
+    mrs x16, par_el1
+    tbnz x16, #0, urandom_slow_no_clrex
+    sub x16, x15, #1
+    adds x16, x20, x16
+    b.cs urandom_slow_no_clrex
+    at s1e0w, x16
+    isb
+    mrs x16, par_el1
+    tbnz x16, #0, urandom_slow_no_clrex
+
+    /* Serialize host refill against the shim's reserve-then-copy window.
+     * Lock word lives after the 4096-byte ring at offset 0x10C0.
+     */
+    add x19, x12, #0x1, lsl #12      /* base + 0x1000 */
+    add x19, x19, #0xC0              /* &ring_lock */
+    mov w18, #1
+urandom_lock_spin:
+    ldaxr w17, [x19]
+    cbnz w17, urandom_lock_busy
+    stxr w17, w18, [x19]
+    cbnz w17, urandom_lock_spin
+    b urandom_locked
+urandom_lock_busy:
+    clrex
+    yield
+    b urandom_lock_spin
+
+urandom_locked:
+    add x21, x12, #0xB8              /* &ring_head */
+    add x22, x12, #0xBC              /* &ring_tail */
+0:  ldxr w23, [x21]                  /* head */
+    ldar w24, [x22]                  /* tail (host release-store) */
+    sub  w25, w24, w23                /* fill = tail - head */
+    cmp  w25, w15
+    b.lo urandom_clrex_slow           /* ring too low */
+    and  w26, w23, #(4096 - 1)        /* pos = head & (RING_SIZE - 1) */
+    add  w27, w26, w15
+    cmp  w27, #4096
+    b.hi urandom_clrex_slow           /* would wrap: let slow path serve */
+    add  w27, w23, w15                /* new head = head + len */
+    stxr w28, w27, [x21]
+    cbnz w28, 0b
+
+    /* Head reserved; lock held. Snapshot ELR_EL1 + SPSR_EL1 into a
+     * recovery slot below the EL1 stack frame so the EL1 data abort
+     * recovery handler (handle_el1_data_abort_recover, below) can
+     * restore them if a subsequent strb faults. A sibling vCPU can
+     * munmap the guest buffer in the window between the AT probe and
+     * the byte copy; without this slot the resulting EL1 data abort
+     * overwrites ELR_EL1 with the strb PC and there is no way to
+     * resume EL0 at the post-SVC instruction. Both success exits
+     * pop the slot before svc_restore_eret.
+     */
+    mrs x29, elr_el1
+    mrs x30, spsr_el1
+    stp x29, x30, [sp, #-16]!
+
+    /* Copy bytes from ring[pos] to buf. len is in [1, 64].
+     * w26 holds pos in [0, 4096); writing to w26 above zero-extends
+     * into x26, so a plain reg add (no extension) is correct.
+     */
+    add  x16, x12, #0xC0             /* ring base */
+    add  x16, x16, x26                /* ring + pos */
+    cmp  x15, #1
+    b.ne urandom_copy_loop
+
+    /* Common case: 1-byte read. Single byte transfer. */
+.globl urandom_strb_1byte_start
+.globl urandom_strb_1byte_end
+urandom_strb_1byte_start:
+    ldrb w0, [x16]
+    strb w0, [x20]
+urandom_strb_1byte_end:
+    add  sp, sp, #16                 /* pop ELR/SPSR recovery slot */
+    mov  x0, #1
+    stlr wzr, [x19]                  /* release ring_lock */
+    b svc_restore_eret
+
+urandom_copy_loop:
+    /* Byte-wise copy for len in [2, 64]. Unrolling would help but
+     * the slow path is the realistic target for large reads. The
+     * loop runs at most 64 times; total cost is dwarfed by the EL0
+     * entry/exit transitions.
+     */
+    mov  x29, #0
+.globl urandom_strb_loop_start
+.globl urandom_strb_loop_end
+urandom_strb_loop_start:
+1:  ldrb w0, [x16, x29]
+    strb w0, [x20, x29]
+    add  x29, x29, #1
+    cmp  x29, x15
+    b.ne 1b
+urandom_strb_loop_end:
+    add  sp, sp, #16                 /* pop ELR/SPSR recovery slot */
+    mov  x0, x15
+    stlr wzr, [x19]                  /* release ring_lock */
+    b svc_restore_eret
+
+urandom_clrex_slow:
+    /* LDXR opened an exclusive monitor that the slow path will not
+     * release on its own. CLREX drops the monitor so subsequent
+     * LDXR/STXR sequences (including this shim's own next entry)
+     * are not poisoned. Release ring_lock before handing the read to
+     * the host; the host may need the same lock to refill the ring.
+     */
+    clrex
+    stlr wzr, [x19]                  /* release ring_lock */
+
+urandom_slow_no_clrex:
+    /* Reached on probe failure (no exclusive monitor open yet) or
+     * via the above clrex path. Both route into handle_svc_0 which
+     * runs the regular HVC #5 sys_read. The host then returns
+     * -EFAULT for the bad pointer or fulfills the read normally.
+     */
+    b handle_svc_0
 
 not_svc:
     /* EC=0x18: MSR/MRS / system instruction trap. */
@@ -305,6 +514,16 @@ not_svc:
     cmp x10, #0x3C
     b.eq handle_brk
 
+    /* EC=0x25: Data abort taken without a change in Exception level.
+     * The only legitimate source today is the urandom fast path: a
+     * sibling vCPU can munmap the guest buffer between the AT probe
+     * and the EL1 strb, faulting the store. Recover by returning
+     * -EFAULT to the guest instead of halting the VM (which is what
+     * the EL1-from-EL1 default below would do).
+     */
+    cmp x10, #0x25
+    b.eq handle_el1_data_abort_recover
+
     /* Unrecognized EC. Check if from EL0 (deliver signal) or EL1 (shim bug).
      * X11 is saved on stack, safe to use as scratch.
      */
@@ -312,6 +531,61 @@ not_svc:
     and x11, x11, #0xF
     cbnz x11, restore_and_bad   /* EL1 (M>=4): genuine shim bug */
     b handle_el0_fault           /* EL0 (M=0): forward for signal delivery */
+
+/* handle_el1_data_abort_recover: tag a data abort whose faulting PC sits
+ * inside the urandom-copy strb region as a recoverable EFAULT.
+ *
+ * Layout invariants exploited here:
+ *   - SAVE_GPRS allocated 256 bytes for THIS (inner) entry on top of
+ *     whatever the outer SVC entry already pushed. Dropping that 256
+ *     puts SP at the recovery slot urandom_read_fast pushed before
+ *     entering the strb region.
+ *   - Recovery slot is 16 bytes: [sp+0]=ELR_EL1, [sp+8]=SPSR_EL1.
+ *   - The lock at TPIDR_EL1 + 0x10C0 is held by this vCPU at the
+ *     time the strb faulted, so release before transferring out.
+ *
+ * If the fault PC is outside the urandom strb ranges this is a genuine
+ * shim bug; fall back to restore_and_bad.
+ */
+handle_el1_data_abort_recover:
+    mrs x11, elr_el1
+    adr x12, urandom_strb_1byte_start
+    cmp x11, x12
+    b.lo 2f
+    adr x12, urandom_strb_1byte_end
+    cmp x11, x12
+    b.lo 1f                      /* in [1byte_start, 1byte_end) */
+2:  adr x12, urandom_strb_loop_start
+    cmp x11, x12
+    b.lo restore_and_bad
+    adr x12, urandom_strb_loop_end
+    cmp x11, x12
+    b.hs restore_and_bad
+1:
+    /* Drop the inner SAVE_GPRS frame; SP back at the urandom recovery slot. */
+    add sp, sp, #256
+    /* Pop the saved EL0 return state. ldp/post-index restores SP to the
+     * outer SAVE_GPRS frame top so svc_restore_eret's RESTORE_GPRS_KEEP_X0
+     * pulls the original EL0 GPR values.
+     */
+    ldp x9, x10, [sp], #16
+    msr elr_el1, x9
+    msr spsr_el1, x10
+    /* Release the urandom ring_lock at TPIDR_EL1 + 0x10C0 (held by this
+     * vCPU since urandom_locked acquired it before the byte copy).
+     */
+    mrs x11, tpidr_el1
+    add x11, x11, #0x1, lsl #12
+    add x11, x11, #0xC0
+    stlr wzr, [x11]
+    /* Drop any open exclusive monitor (the byte loop does not hold one
+     * after the head STXR retired, but CLREX is cheap and removes a
+     * latent footgun for future readers of this code).
+     */
+    clrex
+    /* Linux EFAULT = 14; the kernel returns -14 to userspace. */
+    mov x0, #-14
+    b svc_restore_eret
 
 /* handle_sysreg_trap: EC=0x18: MSR/MRS / system instruction
  *
@@ -626,11 +900,19 @@ tlbi_selective:
     ic iallu
     dsb ish
     isb
-    b 1f
+    b svc_restore_eret
 
+svc_restore_eret:
 1:
     /* Restore all guest registers except X0, which now holds the syscall
      * return value.  Linux preserves X1-X30, including X8.
+     *
+     * Named alias for the cross-function jump from the identity fast
+     * path in svc_handler. A bare 'b 1f' from up there would resolve
+     * to the next forward '1:' -- which sits inside handle_inst_abort
+     * -- and silently re-route the identity result into a W^X toggle.
+     * Caught the hard way during the prior P2 attempt; keep the
+     * named symbol to make the intent explicit.
      */
     RESTORE_GPRS_KEEP_X0
 

@@ -20,6 +20,7 @@
 
 #include "utils.h"
 
+#include "core/shim-globals.h"
 #include "syscall/abi.h"
 #include "syscall/internal.h"
 
@@ -82,6 +83,33 @@ static inline void fd_init_entry(int fd,
     fd_table[fd].seals = 0;
     sock_opt_clear(&fd_table[fd]);
     fd_table[fd].cleanup = cleanup;
+    /* Start conservative. Callers that set linux_flags after allocation
+     * republish the readable-urandom state once the access mode is known.
+     */
+    shim_globals_mark_urandom_fd(fd, false);
+}
+
+void fd_refresh_urandom_bitmap(int fd)
+{
+    if (!RANGE_CHECK(fd, 0, FD_TABLE_SIZE))
+        return;
+
+    /* Hold fd_lock across both the read of (type, linux_flags) AND the
+     * shim_globals bitmap publish. Dropping the lock before the publish
+     * would let a concurrent sys_close flip the slot to FD_CLOSED in
+     * the gap; the subsequent mark would then stomp a stale 'readable
+     * urandom' bit onto a freed slot, and the EL1 fast path honors that
+     * bitmap. shim_globals_mark_urandom_fd is itself atomic on the
+     * bitmap word, but atomicity is meaningless without an in-lock
+     * source-to-publish window.
+     */
+    pthread_mutex_lock(&fd_lock);
+    int type = fd_table[fd].type;
+    int linux_flags = fd_table[fd].linux_flags;
+    bool readable_urandom =
+        type == FD_URANDOM && (linux_flags & LINUX_O_ACCMODE) != LINUX_O_WRONLY;
+    shim_globals_mark_urandom_fd(fd, readable_urandom);
+    pthread_mutex_unlock(&fd_lock);
 }
 
 /* Find the lowest free FD >= minfd using the bitmap.
@@ -241,6 +269,11 @@ int fd_alloc_at_relaxed(int fd, int type, int host_fd, void (*cleanup)(int))
  */
 void fd_mark_closed_unlocked(int fd)
 {
+    /* Clear before publishing FD_CLOSED/free. The EL1 urandom read fast path
+     * intentionally avoids fd_lock, so it must not observe a stale urandom
+     * bit after this slot has become invalid or reusable.
+     */
+    shim_globals_mark_urandom_fd(fd, false);
     fd_table[fd].type = FD_CLOSED;
     fd_table[fd].host_fd = -1;
     fd_table[fd].dir = NULL;

@@ -21,6 +21,7 @@
 #include "debug/log.h"
 #include "syscall/abi.h"
 #include "syscall/internal.h"
+#include "syscall/io.h"
 #include "syscall/mem.h"
 #include "syscall/proc.h"
 
@@ -32,6 +33,15 @@ int fork_ipc_write_all(int fd, const void *buf, size_t len)
         if (n < 0) {
             if (errno == EINTR)
                 continue;
+            return -1;
+        }
+        if (n == 0) {
+            /* Defensive: an unexpected zero return on a blocking socket
+             * would otherwise spin forever, since p and len stay at the
+             * same offset. Treat it as an IO failure so the parent and
+             * child both bail rather than wedge.
+             */
+            errno = EIO;
             return -1;
         }
         p += n;
@@ -249,9 +259,19 @@ int fork_ipc_send_fd_table(int ipc_sock)
         if (fd_table[i].type == FD_CLOSED)
             continue;
 
+        /* Synthetic-fd types are filtered here; see fd_type_is_synthetic
+         * in syscall/internal.h for the rationale (kqueue cannot cross
+         * SCM_RIGHTS on macOS, per-class side tables are not serialized).
+         * The child sees these slots as FD_CLOSED and recreates them via
+         * the appropriate syscall.
+         */
+        int t = fd_table[i].type;
+        if (fd_type_is_synthetic(t))
+            continue;
+
         int host_fd;
         bool was_duped = false;
-        if (fd_table[i].type != FD_STDIO) {
+        if (t != FD_STDIO) {
             int duped = dup(fd_table[i].host_fd);
             if (duped < 0)
                 continue;
@@ -315,8 +335,11 @@ int fork_ipc_recv_fd_table(int ipc_fd, guest_t *g)
         return -1;
     }
 
-    if (num_fds == 0)
+    if (num_fds == 0) {
+        for (int fd = 0; fd < 3; fd++)
+            fd_mark_closed(fd);
         return 0;
+    }
 
     ipc_fd_entry_t *fd_entries = calloc(num_fds, sizeof(ipc_fd_entry_t));
     if (!fd_entries)
@@ -327,6 +350,16 @@ int fork_ipc_recv_fd_table(int ipc_fd, guest_t *g)
         free(fd_entries);
         return -1;
     }
+
+    bool low_fd_present[3] = {false, false, false};
+    for (uint32_t i = 0; i < num_fds; i++) {
+        int gfd = fd_entries[i].guest_fd;
+        if (RANGE_CHECK(gfd, 0, 3) && !fd_type_is_synthetic(fd_entries[i].type))
+            low_fd_present[gfd] = true;
+    }
+    for (int fd = 0; fd < 3; fd++)
+        if (!low_fd_present[fd])
+            fd_mark_closed(fd);
 
     int *host_fds = calloc(num_fds, sizeof(int));
     if (!host_fds) {
@@ -361,15 +394,35 @@ int fork_ipc_recv_fd_table(int ipc_fd, guest_t *g)
         if (fd_entries[i].type == FD_STDIO) {
             close(host_fds[i]);
             fd_table[gfd].linux_flags = fd_entries[i].linux_flags;
+            fd_refresh_urandom_bitmap(gfd);
             memcpy(fd_table[gfd].proc_path, fd_entries[i].proc_path,
                    sizeof(fd_table[gfd].proc_path));
             fd_table[gfd].seals = fd_entries[i].seals;
+        } else if (fd_type_is_synthetic(fd_entries[i].type)) {
+            /* Defense in depth: the parent's fork_ipc_send_fd_table
+             * already filters synthetic types out of the SCM_RIGHTS
+             * payload (see fd_type_is_synthetic in syscall/internal.h).
+             * If anything still arrives here, drop the inherited host
+             * fd and leave the slot FD_CLOSED so the child must
+             * recreate the fd via the appropriate syscall.
+             */
+            log_debug(
+                "fork-child: dropping unexpected synthetic-type fd %d (type "
+                "%d)",
+                gfd, fd_entries[i].type);
+            close(host_fds[i]);
+            fd_mark_closed(gfd);
+            continue;
         } else {
-            fd_alloc_at(gfd, fd_entries[i].type, host_fds[i]);
+            void (*cleanup)(int) = fd_cleanup_for_type(fd_entries[i].type);
+            fd_alloc_at(gfd, fd_entries[i].type, host_fds[i], cleanup);
             fd_table[gfd].linux_flags = fd_entries[i].linux_flags;
+            fd_refresh_urandom_bitmap(gfd);
             memcpy(fd_table[gfd].proc_path, fd_entries[i].proc_path,
                    sizeof(fd_table[gfd].proc_path));
             fd_table[gfd].seals = fd_entries[i].seals;
+            if (fd_entries[i].type == FD_URANDOM)
+                urandom_fd_reset_cache(gfd);
 
             if (fd_entries[i].type != FD_DIR)
                 continue;
@@ -656,15 +709,25 @@ int fork_ipc_recv_process_state(int ipc_fd, guest_t *g, signal_state_t *sig)
         log_error("fork-child: failed to read region count");
         return -1;
     }
-    if (num_guest_regions > GUEST_MAX_REGIONS)
-        num_guest_regions = GUEST_MAX_REGIONS;
-    if (num_guest_regions > 0 &&
+    uint32_t recv_regions = num_guest_regions;
+    if (recv_regions > GUEST_MAX_REGIONS)
+        recv_regions = GUEST_MAX_REGIONS;
+    if (recv_regions > 0 &&
         fork_ipc_read_all(ipc_fd, g->regions,
-                          num_guest_regions * sizeof(guest_region_t)) < 0) {
+                          recv_regions * sizeof(guest_region_t)) < 0) {
         log_error("fork-child: failed to read regions");
         return -1;
     }
-    g->nregions = (int) num_guest_regions;
+    /* Drain any excess records the parent serialized beyond the local cap.
+     * Without this drain, the next read (num_preannounced) consumes stale
+     * region bytes and desynchronizes the rest of the IPC payload. Mirrors
+     * the preannounced-region drain below.
+     */
+    if (num_guest_regions > recv_regions &&
+        fork_ipc_drain_bytes(ipc_fd, (num_guest_regions - recv_regions) *
+                                         sizeof(guest_region_t)) < 0)
+        return -1;
+    g->nregions = (int) recv_regions;
 
     uint32_t num_preannounced = 0;
     if (fork_ipc_read_all(ipc_fd, &num_preannounced, sizeof(num_preannounced)) <

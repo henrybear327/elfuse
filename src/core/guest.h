@@ -127,20 +127,28 @@
 #define MEM_PERM_R (1 << 0)
 #define MEM_PERM_W (1 << 1)
 #define MEM_PERM_X (1 << 2)
+/* AP[2:1]=00: privileged-only (no EL0 read/write). Combine with MEM_PERM_R/W.
+ * Used for shim_data so the guest cannot directly read or store to the identity
+ * cache, urandom bitmap, ring, or attention flag. The EL1 shim still has full
+ * RW. EL0 reads/writes fault to the EL0-fault path (SIGSEGV in the guest),
+ * matching what Linux does for kernel-only pages exposed in /proc/self/maps .
+ */
+#define MEM_PERM_EL1_ONLY (1 << 3)
 #define MEM_PERM_RX (MEM_PERM_R | MEM_PERM_X)
 #define MEM_PERM_RW (MEM_PERM_R | MEM_PERM_W)
+#define MEM_PERM_RW_EL1_ONLY (MEM_PERM_R | MEM_PERM_W | MEM_PERM_EL1_ONLY)
 
 /* A contiguous region of guest memory to be mapped in page tables.
  *
- * Default mode (va_base == 0): identity-mapped, VA == GPA. Used by every
- * boot region (shim, vDSO, brk, stack) and every aarch64 ELF segment.
+ * Default mode (va_base == 0): identity-mapped, VA == GPA. Used by every boot
+ * region (shim, vDSO, brk, stack) and every aarch64 ELF segment.
  *
- * Rosetta segments use va_base != 0 to install a non-identity mapping:
- * the rosetta ELF is statically linked at 0x800000000000 (128 TiB) but its
- * bytes live in the primary buffer at a low GPA. Page-table entries are
- * indexed by va_base + (offset within region) and emit a block descriptor
- * whose output address is gpa_start + (offset within region). This is the
- * only place in elfuse where guest VA diverges from guest GPA.
+ * Rosetta segments use va_base != 0 to install a non-identity mapping: the
+ * rosetta ELF is statically linked at 0x800000000000 (128 TiB) but its bytes
+ * live in the primary buffer at a low GPA. Page-table entries are indexed by
+ * va_base + (offset within region) and emit a block descriptor whose output
+ * address is gpa_start + (offset within region). This is the only place in
+ * elfuse where guest VA diverges from guest GPA.
  */
 typedef struct {
     uint64_t gpa_start; /* Output GPA / IPA (2MiB aligned) */

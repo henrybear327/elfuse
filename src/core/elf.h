@@ -109,13 +109,20 @@ int elf_load(const char *path, elf_info_t *info);
  * Also copies program headers into guest memory for AT_PHDR.
  * load_base is added to all virtual addresses (0 for ET_EXEC at link addr,
  * non-zero for ET_DYN loaded at a chosen base).
+ * infra_lo and infra_hi delimit the runtime infra reserve (page-table pool,
+ * shim text, shim_data, vDSO). Any PT_LOAD or PT_PHDR copy whose destination
+ * intersects [infra_lo, infra_hi) is rejected: those writes go through
+ * host_base directly and would otherwise bypass the EL1-only page-table
+ * protection on shim_data. Pass 0,0 only when the guest_t is not yet built.
  * Returns 0 on success, -1 on failure.
  */
 int elf_map_segments(const elf_info_t *info,
                      const char *path,
                      void *guest_base,
                      uint64_t guest_size,
-                     uint64_t load_base);
+                     uint64_t load_base,
+                     uint64_t infra_lo,
+                     uint64_t infra_hi);
 
 /* Resolve a PT_INTERP path against a sysroot directory.
  * Tries three strategies:

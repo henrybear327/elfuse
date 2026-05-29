@@ -38,6 +38,7 @@
 #include <unistd.h>
 
 #include "core/guest.h"
+#include "core/startup-trace.h"
 #include "debug/log.h"
 #include "utils.h"
 #include "runtime/thread.h" /* thread_destroy_all_vcpus */
@@ -60,6 +61,7 @@ static void guest_region_clear(guest_t *g);
 #define PT_UXN (1ULL << 54)      /* Unprivileged Execute Never */
 #define PT_PXN (1ULL << 53)      /* Privileged Execute Never */
 #define PT_AP_RW_EL0 (1ULL << 6) /* AP[2:1]=01: RW at EL1, RW at EL0 */
+#define PT_AP_RW_EL1 (0ULL << 6) /* AP[2:1]=00: RW at EL1, no access EL0 */
 #define PT_AP_RO (3ULL << 6)     /* AP[2:1]=11: RO at EL1, RO at EL0 */
 
 /* PAGE_SIZE / ALIGN_2MB_* live in utils.h; BLOCK_2MIB lives in core/guest.h. */
@@ -202,6 +204,8 @@ static uint64_t *pt_at(const guest_t *g, uint64_t gpa)
 
 int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
 {
+    uint64_t t0;
+
     memset(g, 0, sizeof(*g));
     g->shm_fd = -1;
     g->ipa_base = GUEST_IPA_BASE;
@@ -257,6 +261,7 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
      * seconds max wait) to handle this gracefully.
      */
     hv_return_t ret = HV_ERROR;
+    t0 = startup_trace_now_ns();
     for (int attempt = 0; attempt < 30; attempt++) {
         hv_vm_config_t config = hv_vm_config_create();
         hv_vm_config_set_ipa_size(config, vm_ipa);
@@ -266,6 +271,7 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
             break;
         usleep(500000); /* 500ms between attempts */
     }
+    startup_trace_step("hv_vm_create", t0);
     if (ret != HV_SUCCESS) {
         log_error("guest: hv_vm_create failed: %d (ipa_bits=%u)", (int) ret,
                   vm_ipa);
@@ -307,8 +313,10 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
          * physical memory. Do NOT memset because that would touch every
          * page and defeat demand paging.
          */
+        t0 = startup_trace_now_ns();
         g->host_base = mmap(NULL, try_size, PROT_READ | PROT_WRITE,
                             MAP_ANON | MAP_PRIVATE, -1, 0);
+        startup_trace_step("primary_mmap", t0);
         if (g->host_base == MAP_FAILED) {
             perror("guest: mmap");
             g->host_base = NULL;
@@ -320,6 +328,7 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
          * path instead of SCM_RIGHTS fd passing.
          */
         char tmppath[] = "/tmp/elfuse-XXXXXX";
+        t0 = startup_trace_now_ns();
         int sfd = mkstemp(tmppath);
         if (sfd >= 0) {
             unlink(tmppath); /* Unlink immediately; fd keeps file alive */
@@ -335,9 +344,12 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
                 close(sfd);
             }
         }
+        startup_trace_step("cow_shm_upgrade", t0);
 
+        t0 = startup_trace_now_ns();
         ret = hv_vm_map(g->host_base, GUEST_IPA_BASE, try_size,
                         HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC);
+        startup_trace_step("hv_vm_map", t0);
         if (ret == HV_SUCCESS) {
             mapped_size = try_size;
             mapped = true;
@@ -380,6 +392,8 @@ int guest_init_from_shm(guest_t *g,
                         uint64_t size,
                         uint32_t ipa_bits)
 {
+    uint64_t t0;
+
     memset(g, 0, sizeof(*g));
     g->shm_fd = -1; /* Child does not own the shm */
     g->ipa_base = GUEST_IPA_BASE;
@@ -403,8 +417,10 @@ int guest_init_from_shm(guest_t *g,
      * the parent's frozen snapshot; writes are private to this process.
      * macOS CoW is page-granular: only modified pages are duplicated.
      */
+    t0 = startup_trace_now_ns();
     g->host_base =
         mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, shm_fd, 0);
+    startup_trace_step("shm_mmap", t0);
     if (g->host_base == MAP_FAILED) {
         perror("guest: mmap shm");
         g->host_base = NULL;
@@ -417,6 +433,7 @@ int guest_init_from_shm(guest_t *g,
 
     /* Create HVF VM with the same IPA width as the parent */
     hv_return_t ret = HV_ERROR;
+    t0 = startup_trace_now_ns();
     for (int attempt = 0; attempt < 30; attempt++) {
         hv_vm_config_t config = hv_vm_config_create();
         hv_vm_config_set_ipa_size(config, ipa_bits);
@@ -426,6 +443,7 @@ int guest_init_from_shm(guest_t *g,
             break;
         usleep(500000);
     }
+    startup_trace_step("hv_vm_create_shm", t0);
     if (ret != HV_SUCCESS) {
         log_error("guest: hv_vm_create (shm) failed: %d", (int) ret);
         munmap(g->host_base, size);
@@ -433,8 +451,10 @@ int guest_init_from_shm(guest_t *g,
         return -1;
     }
 
+    t0 = startup_trace_now_ns();
     ret = hv_vm_map(g->host_base, GUEST_IPA_BASE, size,
                     HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC);
+    startup_trace_step("hv_vm_map_shm", t0);
     if (ret != HV_SUCCESS) {
         log_error("guest: hv_vm_map (shm) failed: %d", (int) ret);
         hv_vm_destroy();
@@ -1106,6 +1126,16 @@ static int gva_translate_perm(const guest_t *g,
             return -1;
 
         int perms = desc_to_perms(l3[l3_idx]);
+        /* EL1-only pages (shim_data) are inaccessible to guest EL0 in the
+         * page tables; the host accessors that act on a guest-supplied GVA
+         * must refuse them too, otherwise a guest could pass a shim_data
+         * GVA as a syscall buffer and have the host write into the identity
+         * cache or entropy ring on its behalf. The host's own publishers
+         * use direct host_base+shim_data_base arithmetic and bypass this
+         * walker entirely.
+         */
+        if (perms & MEM_PERM_EL1_ONLY)
+            return -1;
         if ((perms & required_perms) != required_perms)
             return -1;
 
@@ -1136,6 +1166,12 @@ static int gva_translate_perm(const guest_t *g,
 
     /* L2 block descriptor: 2MiB granularity. */
     int perms = desc_to_perms(l2[l2_idx]);
+    /* See the L3 page-descriptor branch above: EL1-only blocks are
+     * inaccessible to host-on-behalf-of-guest accesses for the same
+     * reason. shim_data is mapped as a 2MiB EL1-only block at boot.
+     */
+    if (perms & MEM_PERM_EL1_ONLY)
+        return -1;
     if ((perms & required_perms) != required_perms)
         return -1;
 
@@ -2079,10 +2115,20 @@ static uint64_t make_block_desc(uint64_t gpa, int perms)
     }
 
     /* Write permissions via AP bits:
+     * AP[2:1]=00 -> RW for EL1 only (no EL0 access)
      * AP[2:1]=01 -> RW for EL1 and EL0
      * AP[2:1]=11 -> RO for EL1 and EL0
+     * MEM_PERM_EL1_ONLY drops EL0 access entirely; used for shim_data
+     * so the guest cannot directly read or store to the cache, ring,
+     * bitmap, or attention flag.
      */
-    if (perms & MEM_PERM_W) {
+    if (perms & MEM_PERM_EL1_ONLY) {
+        desc |= PT_AP_RW_EL1;
+        /* EL1-only data: never EL0-executable (already set above if
+         * MEM_PERM_X is unset, but assert defensively).
+         */
+        desc |= PT_UXN | PT_PXN;
+    } else if (perms & MEM_PERM_W) {
         desc |= PT_AP_RW_EL0;
     } else {
         desc |= PT_AP_RO;
@@ -2513,22 +2559,35 @@ static uint64_t make_page_desc(uint64_t pa, int perms)
     if (!(perms & MEM_PERM_X))
         desc |= PT_UXN | PT_PXN;
 
-    if (perms & MEM_PERM_W)
+    if (perms & MEM_PERM_EL1_ONLY) {
+        desc |= PT_AP_RW_EL1;
+        desc |= PT_UXN | PT_PXN; /* EL1-only data never executes */
+    } else if (perms & MEM_PERM_W) {
         desc |= PT_AP_RW_EL0;
-    else
+    } else {
         desc |= PT_AP_RO;
+    }
 
     return desc;
 }
 
-/* Extract MEM_PERM_* flags from a page table descriptor (block or page). */
+/* Extract MEM_PERM_* flags from a page table descriptor (block or page).
+ * The AP[2:1] field encodes the EL1/EL0 access matrix; map 00 to
+ * MEM_PERM_RW | MEM_PERM_EL1_ONLY so callers see the privileged-only
+ * shim_data slots correctly instead of treating them as read-only.
+ */
 static int desc_to_perms(uint64_t desc)
 {
     int perms = MEM_PERM_R;
     if (!(desc & PT_UXN))
         perms |= MEM_PERM_X;
-    if ((desc & (3ULL << 6)) == PT_AP_RW_EL0)
+    uint64_t ap = desc & (3ULL << 6);
+    if (ap == PT_AP_RW_EL0) {
         perms |= MEM_PERM_W;
+    } else if (ap == PT_AP_RW_EL1) {
+        perms |= MEM_PERM_W | MEM_PERM_EL1_ONLY;
+    }
+    /* PT_AP_RO (11) stays MEM_PERM_R only. */
     return perms;
 }
 

@@ -23,6 +23,7 @@ SRCS := \
     core/elf.c \
     core/stack.c \
     core/vdso.c \
+    core/shim-globals.c \
     core/bootstrap.c \
     core/rosetta.c \
     core/sysroot.c \
@@ -157,6 +158,24 @@ $(BUILD_DIR)/%: tests/%.c | $(BUILD_DIR)
 
 # test-pthread needs -lpthread
 $(BUILD_DIR)/test-pthread: tests/test-pthread.c | $(BUILD_DIR)
+	@echo "  CROSS   $< (with -lpthread)"
+	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+
+# test-shim-cred-race spawns a pthread reader while the main thread
+# toggles setresuid; the reader spins on the identity fast path.
+$(BUILD_DIR)/test-shim-cred-race: tests/test-shim-cred-race.c | $(BUILD_DIR)
+	@echo "  CROSS   $< (with -lpthread)"
+	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+
+# test-shim-urandom-smp spawns N pthreads racing on a shared FD_URANDOM
+# slot to exercise the shim's LDXR/STXR head-advance under contention.
+$(BUILD_DIR)/test-shim-urandom-smp: tests/test-shim-urandom-smp.c | $(BUILD_DIR)
+	@echo "  CROSS   $< (with -lpthread)"
+	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+
+# test-shim-urandom-toctou races mprotect(PROT_NONE) against urandom
+# reads to exercise the EL1 data abort recovery path. Needs pthreads.
+$(BUILD_DIR)/test-shim-urandom-toctou: tests/test-shim-urandom-toctou.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
 	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
 

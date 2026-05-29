@@ -25,6 +25,7 @@
 #include "core/bootstrap.h"
 #include "core/elf.h"
 #include "core/rosetta.h"
+#include "core/shim-globals.h"
 #include "core/stack.h"
 #include "core/vdso.h"
 
@@ -59,6 +60,37 @@ static void exec_sync_vcpu_regs(hv_vcpu_t vcpu)
     (void) vcpu_get_sysreg(vcpu, HV_SYS_REG_SP_EL0);
     (void) vcpu_get_sysreg(vcpu, HV_SYS_REG_SPSR_EL1);
     (void) vcpu_get_reg(vcpu, HV_REG_X8);
+}
+
+static void exec_republish_shim_globals_or_die(hv_vcpu_t vcpu,
+                                               guest_t *g,
+                                               bool verbose)
+{
+    /* guest_reset zeros shim_data. Reinitialize the host-owned fast-path
+     * state before returning to either native aarch64 code or the Rosetta
+     * runtime, otherwise identity and urandom fast paths observe all-zero
+     * cache state after exec.
+     */
+    shim_globals_init(g);
+    shim_globals_set_trace_enabled(g, verbose);
+
+    /* TPIDR_EL1 carries the shim_globals base. Past PNR, failure leaves the
+     * replacement image unable to use the EL1 shim safely, so abort in the
+     * same shape as other post-reset fatal errors.
+     */
+    if (shim_globals_install_tpidr(vcpu, g) < 0) {
+        log_fatal(
+            "execve failed after point of no return: "
+            "shim_globals_install_tpidr");
+        exit(128);
+    }
+
+    shim_globals_publish_pid(g, proc_get_pid(), proc_get_ppid());
+    shim_globals_publish_creds(g, proc_get_uid(), proc_get_euid(),
+                               proc_get_gid(), proc_get_egid());
+    shim_globals_rebuild_urandom_bitmap();
+    shim_globals_refill_urandom_ring(g);
+    shim_globals_recompute_attention(g);
 }
 
 /* Release the buffers and temporary host-side files that sys_execve allocates
@@ -728,6 +760,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
                 path);
             exit(128);
         }
+        exec_republish_shim_globals_or_die(vcpu, g, verbose);
 
         /* I-cache for the (possibly re-mapped) rosetta segments has already
          * been invalidated inside rosetta_prepare; only the shim needs an
@@ -760,8 +793,10 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     }
 
     /* Load the executable image that was validated before guest_reset(). */
+    uint64_t infra_lo = g->interp_base - INFRA_RESERVE;
+    uint64_t infra_hi = g->interp_base;
     if (elf_map_segments(&elf_info, path_host, g->host_base, g->guest_size,
-                         elf_load_base) < 0) {
+                         elf_load_base, infra_lo, infra_hi) < 0) {
         log_fatal(
             "execve failed after point of no return: "
             "failed to map ELF segments for %s",
@@ -782,7 +817,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     if (elf_info.interp_path[0] != '\0') {
         interp_base = g->interp_base;
         if (elf_map_segments(&interp_info, interp_resolved, g->host_base,
-                             g->guest_size, interp_base) < 0) {
+                             g->guest_size, interp_base, infra_lo,
+                             infra_hi) < 0) {
             log_fatal(
                 "execve failed after point of no return: "
                 "failed to map interpreter segments");
@@ -851,13 +887,18 @@ int64_t sys_execve(hv_vcpu_t vcpu,
                                           .gpa_end = g->shim_base + shim_size,
                                           .perms = MEM_PERM_RX};
 
-    /* EL1 exception handlers use this block for stack and scratch state. */
+    /* EL1 exception handlers use this block for stack and scratch state.
+     * EL1-only so EL0 cannot read or store directly to the identity cache,
+     * urandom ring, or attention word that the shim fast paths consult.
+     * Matches bootstrap.c; if this regresses to plain RW, execve quietly
+     * defeats the protection on every new image.
+     */
     if (nregions >= MAX_REGIONS)
         goto too_many_regions;
     regions[nregions++] =
         (mem_region_t) {.gpa_start = g->shim_data_base,
                         .gpa_end = g->shim_data_base + BLOCK_2MIB,
-                        .perms = MEM_PERM_RW};
+                        .perms = MEM_PERM_RW_EL1_ONLY};
 
     /* The vDSO sits in the same 2MiB block as the shim. The page-table builder
      * splits the block into 4KiB L3 pages when its regions don't fully cover
@@ -943,9 +984,12 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     guest_region_add(g, g->shim_base, g->shim_base + shim_size,
                      LINUX_PROT_READ | LINUX_PROT_EXEC, LINUX_MAP_PRIVATE, 0,
                      "[shim]");
+    /* Report PROT_NONE for [shim-data] to match the EL1-only mapping (see
+     * matching bootstrap.c registration). EL0 dereferences fault, so user
+     * tooling reading /proc/self/maps should see the same access state.
+     */
     guest_region_add(g, g->shim_data_base, g->shim_data_base + BLOCK_2MIB,
-                     LINUX_PROT_READ | LINUX_PROT_WRITE, LINUX_MAP_PRIVATE, 0,
-                     "[shim-data]");
+                     LINUX_PROT_NONE, LINUX_MAP_PRIVATE, 0, "[shim-data]");
     for (int i = 0; i < elf_info.num_segments; i++) {
         guest_region_add(g, elf_info.segments[i].gpa + elf_load_base,
                          elf_info.segments[i].gpa + elf_info.segments[i].memsz +
@@ -991,6 +1035,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
          * omit sa_restorer.
          */
         uint64_t exec_vdso = vdso_build(g);
+        exec_republish_shim_globals_or_die(vcpu, g, verbose);
 
         sp = build_linux_stack(g, g->stack_top, argc, argv_const, envp_const,
                                &elf_info, elf_load_base, interp_base, exec_vdso,

@@ -33,6 +33,7 @@
 #include "hvutil.h"
 #include "utils.h"
 
+#include "core/shim-globals.h"
 #include "core/vdso.h"
 
 #include "runtime/futex.h"
@@ -1156,6 +1157,17 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
 
                     /* Check guest ITIMER_REAL expiry (queues SIGALRM if due) */
                     signal_check_timer();
+
+                    /* Recompute the shim-globals attention flag now that
+                     * signal_check_timer has had a chance to drain pending
+                     * work. If nothing is pending and no itimer is armed, drop
+                     * the flag back to zero so the identity fast path
+                     * re-engages for the next getpid loop. Without this clear,
+                     * the attention flag set by signal_queue (e.g., on a
+                     * subprocess's SIGCHLD) would stick forever and
+                     * permanently disable the fast path.
+                     */
+                    shim_globals_recompute_attention(g);
 
                     /* Diagnostic: log signal state after exec/sigreturn
                      * to help debug signal delivery issues.

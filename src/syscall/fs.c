@@ -24,9 +24,12 @@
 #include "debug/log.h"
 #include "utils.h"
 
+#include "core/shim-globals.h" /* shim_globals_mark_urandom_fd */
+
 #include "runtime/procemu.h"
 
 #include "syscall/abi.h"
+#include "syscall/fd.h" /* eventfd_dup_fd */
 #include "syscall/fuse.h"
 #include "syscall/fs.h"
 #include "syscall/internal.h"
@@ -60,6 +63,16 @@ static int opened_fd_type(int host_fd, int linux_flags)
         return FD_DIR;
 
     return FD_REGULAR;
+}
+
+static int intercepted_fd_type(const char *path, int host_fd, int linux_flags)
+{
+    int type = opened_fd_type(host_fd, linux_flags);
+    if (type < 0)
+        return type;
+    if (type == FD_REGULAR && path && !strcmp(path, "/dev/urandom"))
+        return FD_URANDOM;
+    return type;
 }
 
 static const char *proc_virtual_dir_path(const char *path,
@@ -168,16 +181,11 @@ static const char *proc_virtual_dir_path(const char *path,
     return virt;
 }
 
-static int dup_fd_type(int guest_fd)
-{
-    return fd_table[guest_fd].type == FD_STDIO ? FD_REGULAR
-                                               : fd_table[guest_fd].type;
-}
-
 static int fd_alloc_opened_host(int host_fd,
                                 int type,
                                 int linux_flags,
-                                int min_guest_fd)
+                                int min_guest_fd,
+                                void (*cleanup)(int))
 {
     DIR *dir = NULL;
 
@@ -193,9 +201,10 @@ static int fd_alloc_opened_host(int host_fd,
         }
     }
 
-    int guest_fd = min_guest_fd >= 0
-                       ? fd_alloc_from_relaxed(min_guest_fd, type, host_fd)
-                       : fd_alloc_from_relaxed(0, type, host_fd);
+    int guest_fd =
+        min_guest_fd >= 0
+            ? fd_alloc_from_relaxed(min_guest_fd, type, host_fd, cleanup)
+            : fd_alloc_from_relaxed(0, type, host_fd, cleanup);
     if (guest_fd < 0) {
         int saved_errno = errno;
         if (dir)
@@ -204,9 +213,35 @@ static int fd_alloc_opened_host(int host_fd,
         return -1;
     }
 
-    fd_table[guest_fd].linux_flags = linux_flags;
-    if (dir)
-        fd_table[guest_fd].dir = dir;
+    /* Publish linux_flags, dir, and the urandom bitmap bit atomically
+     * with respect to the slot's identity. fd_alloc_*_relaxed drops
+     * fd_lock before returning, so a sibling vCPU's pathological
+     * close(guest_fd) + open() could reuse the slot between alloc and
+     * the metadata install below. Re-acquire fd_lock and verify the
+     * (type, host_fd) tuple still matches what just got allocated;
+     * if it does not, the slot belongs to a different file now and
+     * any install would clobber the sibling's entry. The sibling's
+     * close path already cleaned up our host_fd via fd_cleanup_entry,
+     * so this side only owns dir, which gets closed below.
+     */
+    bool installed = false;
+    pthread_mutex_lock(&fd_lock);
+    if (fd_table[guest_fd].type == type &&
+        fd_table[guest_fd].host_fd == host_fd) {
+        fd_table[guest_fd].linux_flags = linux_flags;
+        if (dir)
+            fd_table[guest_fd].dir = dir;
+        bool readable_urandom =
+            type == FD_URANDOM &&
+            (linux_flags & LINUX_O_ACCMODE) != LINUX_O_WRONLY;
+        shim_globals_mark_urandom_fd(guest_fd, readable_urandom);
+        installed = true;
+    }
+    pthread_mutex_unlock(&fd_lock);
+
+    if (!installed && dir)
+        closedir(dir);
+
     return guest_fd;
 }
 
@@ -249,7 +284,7 @@ int64_t sys_openat_path(guest_t *g,
                 return linux_errno();
             }
             int guest_fd =
-                fd_alloc_opened_host(sidecar_fd, type, linux_flags, -1);
+                fd_alloc_opened_host(sidecar_fd, type, linux_flags, -1, NULL);
             if (guest_fd < 0) {
                 close_keep_errno(sidecar_fd);
                 return linux_errno();
@@ -278,7 +313,8 @@ int64_t sys_openat_path(guest_t *g,
             close_keep_errno(host_fd);
             return linux_errno();
         }
-        int guest_fd = fd_alloc_opened_host(host_fd, type, linux_flags, -1);
+        int guest_fd =
+            fd_alloc_opened_host(host_fd, type, linux_flags, -1, NULL);
         if (guest_fd < 0) {
             close_keep_errno(host_fd);
             return linux_errno();
@@ -303,15 +339,17 @@ int64_t sys_openat_path(guest_t *g,
              * /proc files use fd_alloc_from(128) to avoid races with
              * concurrent GC finalizers that may close stale low-numbered fds.
              */
-            int type = opened_fd_type(intercepted, linux_flags);
+            int type = intercepted_fd_type(tx.intercept_path, intercepted,
+                                           linux_flags);
             if (type < 0) {
                 close_keep_errno(intercepted);
                 return linux_errno();
             }
             int min_guest_fd =
                 (!strncmp(tx.intercept_path, "/dev/", 5)) ? -1 : 128;
-            int guest_fd = fd_alloc_opened_host(intercepted, type, linux_flags,
-                                                min_guest_fd);
+            int guest_fd =
+                fd_alloc_opened_host(intercepted, type, linux_flags,
+                                     min_guest_fd, fd_cleanup_for_type(type));
             if (guest_fd < 0) {
                 close_keep_errno(intercepted);
                 return linux_errno();
@@ -336,7 +374,8 @@ int64_t sys_openat_path(guest_t *g,
             close_keep_errno(host_fd);
             return linux_errno();
         }
-        int guest_fd = fd_alloc_opened_host(host_fd, type, linux_flags, -1);
+        int guest_fd =
+            fd_alloc_opened_host(host_fd, type, linux_flags, -1, NULL);
         if (guest_fd < 0) {
             close_keep_errno(host_fd);
             return linux_errno();
@@ -358,7 +397,7 @@ int64_t sys_openat_path(guest_t *g,
         close_keep_errno(host_fd);
         return linux_errno();
     }
-    int guest_fd = fd_alloc_opened_host(host_fd, type, linux_flags, -1);
+    int guest_fd = fd_alloc_opened_host(host_fd, type, linux_flags, -1, NULL);
     if (guest_fd < 0) {
         close_keep_errno(host_fd);
         return linux_errno();
@@ -410,25 +449,6 @@ int64_t sys_close(int fd)
 
 /* dup/fcntl. */
 
-static int clone_dir_stream_if_needed(int src_fd, int dst_fd, int dst_host_fd)
-{
-    if (fd_table[src_fd].type != FD_DIR)
-        return 0;
-
-    int dir_fd = dup(dst_host_fd);
-    if (dir_fd < 0)
-        return -1;
-
-    DIR *dir = fdopendir(dir_fd);
-    if (!dir) {
-        close(dir_fd);
-        return -1;
-    }
-
-    fd_table[dst_fd].dir = dir;
-    return 0;
-}
-
 static void discard_allocated_fd(int guest_fd)
 {
     fd_entry_t snap;
@@ -436,15 +456,75 @@ static void discard_allocated_fd(int guest_fd)
         fd_cleanup_entry(guest_fd, &snap);
 }
 
-static void copy_fd_alias_metadata(int src_fd, int dst_fd, int linux_flags)
+/* Open a DIR stream over a dup of dst_host_fd if the source was an
+ * FD_DIR. Returns NULL on success-but-no-stream-needed (non-dir source)
+ * or on dup/fdopendir failure with errno preserved. Pulled out of the
+ * critical section in install_fd_alias_metadata_atomic because dup and
+ * fdopendir are slow syscalls that must not hold fd_lock.
+ */
+static DIR *clone_dir_stream(const fd_entry_t *src_snap,
+                             int dst_host_fd,
+                             bool *out_failed)
 {
-    int preserved_flags = fd_table[src_fd].linux_flags &
-                          (LINUX_O_PATH | LINUX_O_DIRECTORY | LINUX_O_NOFOLLOW |
-                           LINUX_O_DIRECT | LINUX_O_LARGEFILE);
-    fd_table[dst_fd].linux_flags = preserved_flags | linux_flags;
-    fd_table[dst_fd].seals = fd_table[src_fd].seals;
-    memcpy(fd_table[dst_fd].proc_path, fd_table[src_fd].proc_path,
-           sizeof(fd_table[dst_fd].proc_path));
+    *out_failed = false;
+    if (src_snap->type != FD_DIR)
+        return NULL;
+
+    int dir_fd = dup(dst_host_fd);
+    if (dir_fd < 0) {
+        *out_failed = true;
+        return NULL;
+    }
+    DIR *dir = fdopendir(dir_fd);
+    if (!dir) {
+        int saved_errno = errno;
+        close(dir_fd);
+        errno = saved_errno;
+        *out_failed = true;
+        return NULL;
+    }
+    return dir;
+}
+
+/* Install dup-alias metadata atomically with the slot identity. Uses
+ * the (type, host_fd) tuple as proof that the slot still belongs to
+ * the in-flight duplicate_guest_fd call; a sibling vCPU's pathological
+ * close + open between the relaxed allocator's lock release and this
+ * call could otherwise clobber the sibling's freshly-installed entry.
+ * Returns true on successful install, false if the slot was
+ * reallocated (caller must closedir any cloned dir to avoid a leak).
+ */
+static bool install_fd_alias_metadata_atomic(int dst_fd,
+                                             int expected_type,
+                                             int expected_host_fd,
+                                             const fd_entry_t *src_snap,
+                                             int linux_flags,
+                                             DIR *dir)
+{
+    int preserved_flags =
+        src_snap->linux_flags &
+        (LINUX_O_ACCMODE | LINUX_O_PATH | LINUX_O_DIRECTORY | LINUX_O_NOFOLLOW |
+         LINUX_O_DIRECT | LINUX_O_LARGEFILE);
+    int final_flags = preserved_flags | linux_flags;
+
+    bool installed = false;
+    pthread_mutex_lock(&fd_lock);
+    if (fd_table[dst_fd].type == expected_type &&
+        fd_table[dst_fd].host_fd == expected_host_fd) {
+        fd_table[dst_fd].linux_flags = final_flags;
+        fd_table[dst_fd].seals = src_snap->seals;
+        memcpy(fd_table[dst_fd].proc_path, src_snap->proc_path,
+               sizeof(fd_table[dst_fd].proc_path));
+        if (dir)
+            fd_table[dst_fd].dir = dir;
+        bool readable_urandom =
+            expected_type == FD_URANDOM &&
+            (final_flags & LINUX_O_ACCMODE) != LINUX_O_WRONLY;
+        shim_globals_mark_urandom_fd(dst_fd, readable_urandom);
+        installed = true;
+    }
+    pthread_mutex_unlock(&fd_lock);
+    return installed;
 }
 
 /* Duplicate a guest fd into either the next free slot >= min_guest_fd or a
@@ -457,28 +537,44 @@ static int duplicate_guest_fd(int src_fd,
                               bool fixed_slot,
                               int linux_flags)
 {
-    if (RANGE_CHECK(src_fd, 0, FD_TABLE_SIZE)) {
-        int t = fd_table[src_fd].type;
-        if (t == FD_FUSE_DEV || t == FD_FUSE_FILE || t == FD_FUSE_DIR)
-            return fuse_dup_fd(src_fd, min_guest_fd, fixed_guest_fd, fixed_slot,
-                               linux_flags);
-    }
-
-    host_fd_ref_t host_ref;
-    if (host_fd_ref_open(src_fd, &host_ref) < 0) {
+    /* Snapshot the source entry and dup its host fd in a single fd_lock
+     * critical section so the type, host fd, and metadata captured here
+     * cannot drift apart under a racing close + reopen.
+     */
+    fd_entry_t src_snap;
+    int new_host_fd = fd_snapshot_and_dup(src_fd, &src_snap);
+    if (new_host_fd < 0 && src_snap.type == FD_CLOSED) {
         errno = EBADF;
         return -1;
     }
-
-    int new_type = dup_fd_type(src_fd);
-    int new_host_fd = dup(host_ref.fd);
-    host_fd_ref_close(&host_ref);
+    if (src_snap.type == FD_FUSE_DEV || src_snap.type == FD_FUSE_FILE ||
+        src_snap.type == FD_FUSE_DIR) {
+        if (new_host_fd >= 0)
+            close_keep_errno(new_host_fd);
+        return fuse_dup_fd(src_fd, min_guest_fd, fixed_guest_fd, fixed_slot,
+                           linux_flags);
+    }
+    /* eventfd dup must share the underlying counter and pipe state across
+     * the source and destination fds (Linux contract). Pass src_snap's
+     * host_fd through so eventfd_dup_fd can verify the source fd still
+     * refers to the same live eventfd between the snapshot here and the
+     * bind there.
+     */
+    if (src_snap.type == FD_EVENTFD) {
+        if (new_host_fd >= 0)
+            close_keep_errno(new_host_fd);
+        return eventfd_dup_fd(src_fd, src_snap.host_fd, min_guest_fd,
+                              fixed_guest_fd, fixed_slot, linux_flags);
+    }
     if (new_host_fd < 0)
         return -1;
 
-    int guest_fd =
-        fixed_slot ? fd_alloc_at_relaxed(fixed_guest_fd, new_type, new_host_fd)
-                   : fd_alloc_from_relaxed(min_guest_fd, new_type, new_host_fd);
+    int new_type = (src_snap.type == FD_STDIO) ? FD_REGULAR : src_snap.type;
+    void (*cleanup)(int) = fd_cleanup_for_type(new_type);
+    int guest_fd = fixed_slot ? fd_alloc_at_relaxed(fixed_guest_fd, new_type,
+                                                    new_host_fd, cleanup)
+                              : fd_alloc_from_relaxed(min_guest_fd, new_type,
+                                                      new_host_fd, cleanup);
     if (guest_fd < 0) {
         if (fixed_slot)
             errno = EBADF;
@@ -486,12 +582,29 @@ static int duplicate_guest_fd(int src_fd,
         return -1;
     }
 
-    copy_fd_alias_metadata(src_fd, guest_fd, linux_flags);
-    if (clone_dir_stream_if_needed(src_fd, guest_fd, new_host_fd) < 0) {
+    /* Clone the DIR stream outside fd_lock (dup + fdopendir would block
+     * other fd ops), then install everything atomically under fd_lock
+     * with a tuple verification so a sibling close + reopen on the same
+     * guest_fd cannot make this install land on an unrelated slot.
+     */
+    bool dir_clone_failed = false;
+    DIR *dir = clone_dir_stream(&src_snap, new_host_fd, &dir_clone_failed);
+    if (dir_clone_failed) {
         int saved_errno = errno;
         discard_allocated_fd(guest_fd);
         errno = saved_errno;
         return -1;
+    }
+
+    if (!install_fd_alias_metadata_atomic(guest_fd, new_type, new_host_fd,
+                                          &src_snap, linux_flags, dir)) {
+        /* Slot was reallocated by a sibling while metadata install was
+         * pending; the sibling's close path already cleaned up new_host_fd
+         * via fd_cleanup_entry, so the only resource this side still
+         * owns is the cloned DIR stream.
+         */
+        if (dir)
+            closedir(dir);
     }
 
     return guest_fd;
@@ -600,7 +713,7 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
             return linux_errno();
         int linux_fl = mac_to_linux_status_flags(mac_fl);
         if (snap.type == FD_REGULAR || snap.type == FD_DIR ||
-            snap.type == FD_PATH)
+            snap.type == FD_PATH || snap.type == FD_URANDOM)
             linux_fl = (linux_fl & ~O_ACCMODE) | (snap.linux_flags & 3);
         linux_fl |= snap.linux_flags &
                     (LINUX_O_PATH | LINUX_O_DIRECTORY | LINUX_O_NOFOLLOW |

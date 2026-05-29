@@ -45,10 +45,18 @@ test-file-ops
 test-sysinfo
 test-io-opt
 test-syscall-smoke
+test-vdso
+test-shim-identity
+test-shim-identity-attention
+test-shim-verbose-trace
+test-shim-data-el1
+test-shim-urandom-smp
+test-shim-urandom-toctou
 test-poll                      # diff=skip
 
 [section] I/O subsystem tests
 test-eventfd
+test-eventfd-dup
 test-signalfd
 test-signalfd-hardening
 test-epoll
@@ -83,8 +91,9 @@ test-clone3                    # diff=skip
 test-fork-exec $TESTDIR/echo-test
 test-fork-lowbase
 
-[section] COW fork isolation tests
+[section] CoW fork isolation tests
 test-cow-fork
+test-fork-synthetic-fd
 
 [section] O_CLOEXEC tests
 test-cloexec
@@ -102,6 +111,8 @@ test-lowbase-mem-300000
 
 [section] mremap tests
 test-mremap
+test-mremap-infra
+test-shim-cred-race
 
 [section] msync MAP_SHARED tests
 test-msync

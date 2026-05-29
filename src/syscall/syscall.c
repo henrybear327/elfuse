@@ -56,10 +56,13 @@
 #include "syscall/poll.h"
 #include "syscall/path.h"
 #include "syscall/proc.h"
+#include "syscall/proc-pidfd.h"
 #include "syscall/signal.h"
 #include "syscall/sys.h"
 #include "syscall/sysvipc.h"
 #include "syscall/time.h"
+
+#include "core/shim-globals.h"
 
 /* Generated from src/syscall/dispatch.tbl into $(BUILD_DIR). */
 #include "dispatch.h"
@@ -84,6 +87,11 @@ void syscall_init(void)
 {
     fdtable_init();
     signal_init();
+    /* Mirror signal_init's attention_guest reset for the fd/urandom
+     * bitmap singleton in shim-globals. Defends against a stale
+     * parent-process pointer surviving across posix_spawn re-init.
+     */
+    shim_globals_reset_singleton();
 
     /* Initialize special FD subsystems (eventfd, signalfd, timerfd, inotify).
      * Must happen before any guest code runs so that concurrent CLONE_THREAD
@@ -95,6 +103,9 @@ void syscall_init(void)
     inotify_init();
     netlink_init();
     fuse_init();
+    pidfd_init();
+    io_init();
+    fd_register_cleanup(FD_URANDOM, urandom_fd_cleanup);
     wakeup_pipe_init();
 }
 
@@ -162,6 +173,35 @@ typedef int64_t (*syscall_handler_t)(guest_t *g,
     }
 
 #define SC_STUB(name, val) SC_FORWARD(name, (val))
+
+/* Bracket setuid/setgid family invocations so concurrent shim-fast-path
+ * readers cannot observe stale credentials. The host-side proc_sys_*
+ * mutators flip the _Atomic credential slots inside proc-identity.c;
+ * the shim cache must reflect that under the same atomic window.
+ *
+ * Sequence: OR ATTN_BIT_CRED -> mutator -> on success publish_creds ->
+ * AND ~ATTN_BIT_CRED. The OR-only update preserves whatever
+ * ATTN_BIT_SIGTIMER state the HVC #5 epilogue's recompute may have
+ * set or cleared in parallel; AND-only clear at the end leaves the
+ * SIGTIMER lane alone. Earlier revisions wrote the full word, which
+ * let a sibling's recompute drop the flag to zero mid-publish and
+ * reopened the torn-cred race the bracket was meant to close.
+ *
+ * Implemented as a statement-expression macro so the SC_FORWARD body
+ * stays a single expression and the mutator runs after the attention
+ * raise as part of normal C sequencing.
+ */
+#define CRED_BRACKETED(g_, mutator_)                                       \
+    __extension__({                                                        \
+        guest_t *_g = (g_);                                                \
+        shim_globals_attn_or(_g, ATTN_BIT_CRED);                           \
+        int64_t _rc = (mutator_);                                          \
+        if (_rc == 0)                                                      \
+            shim_globals_publish_creds(_g, proc_get_uid(), proc_get_euid(),\
+                                       proc_get_gid(), proc_get_egid());   \
+        shim_globals_attn_and(_g, ~ATTN_BIT_CRED);                         \
+        _rc;                                                               \
+    })
 
 /* sc_xxx forwarding wrappers: thin adapters that unpack the syscall ABI
  * argument tuple (x0..x5) into a sys_xxx() call.
@@ -494,12 +534,12 @@ SC_FORWARD(sc_getuid,   (int64_t) proc_get_uid())
 SC_FORWARD(sc_geteuid,  (int64_t) proc_get_euid())
 SC_FORWARD(sc_getgid,   (int64_t) proc_get_gid())
 SC_FORWARD(sc_getegid,  (int64_t) proc_get_egid())
-SC_FORWARD(sc_setuid,   proc_sys_setuid((uint32_t) x0))
-SC_FORWARD(sc_setgid,   proc_sys_setgid((uint32_t) x0))
-SC_FORWARD(sc_setreuid,  proc_sys_setreuid((uint32_t) x0, (uint32_t) x1))
-SC_FORWARD(sc_setregid,  proc_sys_setregid((uint32_t) x0, (uint32_t) x1))
-SC_FORWARD(sc_setresuid, proc_sys_setresuid((uint32_t) x0, (uint32_t) x1, (uint32_t) x2))
-SC_FORWARD(sc_setresgid, proc_sys_setresgid((uint32_t) x0, (uint32_t) x1, (uint32_t) x2))
+SC_FORWARD(sc_setuid,   CRED_BRACKETED(g, proc_sys_setuid((uint32_t) x0)))
+SC_FORWARD(sc_setgid,   CRED_BRACKETED(g, proc_sys_setgid((uint32_t) x0)))
+SC_FORWARD(sc_setreuid,  CRED_BRACKETED(g, proc_sys_setreuid((uint32_t) x0, (uint32_t) x1)))
+SC_FORWARD(sc_setregid,  CRED_BRACKETED(g, proc_sys_setregid((uint32_t) x0, (uint32_t) x1)))
+SC_FORWARD(sc_setresuid, CRED_BRACKETED(g, proc_sys_setresuid((uint32_t) x0, (uint32_t) x1, (uint32_t) x2)))
+SC_FORWARD(sc_setresgid, CRED_BRACKETED(g, proc_sys_setresgid((uint32_t) x0, (uint32_t) x1, (uint32_t) x2)))
 SC_FORWARD(sc_setpgid, proc_sys_setpgid((int64_t) x0, (int64_t) x1))
 SC_STUB(sc_fadvise64,           0)
 SC_STUB(sc_sched_yield,         (sched_yield(), 0))

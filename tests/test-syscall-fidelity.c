@@ -6,7 +6,7 @@
  * Covers Linux syscalls whose semantics elfuse must emulate exactly:
  * fchmodat2 (SYS 452) including AT_SYMLINK_NOFOLLOW, getcpu (SYS 168),
  * openat2 (SYS 437) with each RESOLVE_* flag variant (BENEATH,
- * IN_ROOT, NO_SYMLINKS, NO_MAGICLINKS), O_PATH descriptor enforcement
+ * IN_ROOT, NO_SYMLINKS, NO_MAGICLINKS, NO_XDEV), O_PATH descriptor enforcement
  * for read/write/fstat, madvise corner cases (MADV_COLD acceptance and
  * MADV_DONTNEED across an unmapped hole), and the low-address mmap
  * hint preservation that ET_EXEC layout depends on.
@@ -165,10 +165,11 @@ struct open_how {
     unsigned long long flags, mode, resolve;
 };
 
-#define RESOLVE_BENEATH 0x08
-#define RESOLVE_IN_ROOT 0x10
+#define RESOLVE_NO_XDEV 0x01
 #define RESOLVE_NO_MAGICLINKS 0x02
 #define RESOLVE_NO_SYMLINKS 0x04
+#define RESOLVE_BENEATH 0x08
+#define RESOLVE_IN_ROOT 0x10
 
 static void test_openat2_basic(void)
 {
@@ -456,6 +457,441 @@ static void test_openat2_resolve_no_magiclinks_proc_cwd(void)
     EXPECT_TRUE(errno == ELOOP, "wrong errno");
 }
 
+static void test_openat2_resolve_no_xdev_rejects_proc(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects crossing into /proc");
+    int dirfd = open("/tmp", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /tmp");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd =
+        syscall(SYS_openat2, dirfd, "/proc/self/status", &how, sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_allows_same_mount(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV allows same-mount path");
+    int dirfd = open("/tmp", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /tmp");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    /* /tmp is a regular dir; another regular path stays in the same class. */
+    long fd = syscall(SYS_openat2, dirfd, "/etc/passwd", &how, sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        PASS();
+        return;
+    }
+    /* Acceptable if /etc/passwd doesn't exist on the host running the test,
+     * as long as the error is not EXDEV.
+     */
+    EXPECT_TRUE(errno != EXDEV, "should not return EXDEV for same-class path");
+}
+
+static void test_openat2_resolve_no_xdev_absolute_ignores_dirfd_mount(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV absolute path ignores dirfd mount");
+    int dirfd = open("/proc", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /proc");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd = syscall(SYS_openat2, dirfd, "/etc/passwd", &how, sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        PASS();
+        return;
+    }
+    EXPECT_TRUE(errno != EXDEV, "absolute /etc should start from root mount");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_relative_proc(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects relative crossing into /proc");
+    int dirfd = open("/", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd =
+        syscall(SYS_openat2, dirfd, "proc/self/status", &how, sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_relative_escape(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects relative escape from /proc");
+    int dirfd = open("/proc", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /proc");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd = syscall(SYS_openat2, dirfd, "../etc/passwd", &how, sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_allows_regular_proc_name(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV allows regular dir named proc");
+    char dir_template[] = "/tmp/elfuse-openat2-xdev-XXXXXX";
+    char *dir = mkdtemp(dir_template);
+    if (!dir) {
+        FAIL("mkdtemp");
+        return;
+    }
+    char proc_dir[PATH_MAX];
+    char file_path[PATH_MAX];
+    if (snprintf(proc_dir, sizeof(proc_dir), "%s/proc", dir) >=
+            (int) sizeof(proc_dir) ||
+        snprintf(file_path, sizeof(file_path), "%s/status", proc_dir) >=
+            (int) sizeof(file_path)) {
+        FAIL("path too long");
+        rmdir(dir);
+        return;
+    }
+    if (mkdir(proc_dir, 0700) < 0) {
+        FAIL("mkdir proc");
+        rmdir(dir);
+        return;
+    }
+    int fd = open(file_path, O_CREAT | O_WRONLY, 0600);
+    if (fd < 0) {
+        FAIL("create status");
+        rmdir(proc_dir);
+        rmdir(dir);
+        return;
+    }
+    close(fd);
+
+    int dirfd = open(dir, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open temp dir");
+        unlink(file_path);
+        rmdir(proc_dir);
+        rmdir(dir);
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long opened = syscall(SYS_openat2, dirfd, "proc/status", &how, sizeof(how));
+    close(dirfd);
+    unlink(file_path);
+    rmdir(proc_dir);
+    rmdir(dir);
+    if (opened >= 0) {
+        close((int) opened);
+        PASS();
+        return;
+    }
+    EXPECT_TRUE(errno != EXDEV, "regular proc name is not a mount crossing");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_dev(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects crossing into /dev");
+    int dirfd = open("/tmp", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /tmp");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd = syscall(SYS_openat2, dirfd, "/dev/null", &how, sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_dev_shm_from_dev(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects /dev to /dev/shm");
+    int dirfd = open("/dev", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /dev");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd = syscall(SYS_openat2, dirfd, "shm/missing", &how, sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_relative_tmp(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects relative crossing into /tmp");
+    int dirfd = open("/", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd = syscall(SYS_openat2, dirfd, "tmp/elfuse-no-xdev-missing", &how,
+                      sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_transient_proc(void)
+{
+    /* A naive endpoint-only check would accept /proc/self/../../tmp/foo
+     * because the lexical normalization collapses /proc/self/../.. to /
+     * and the final classifier sees only /tmp/foo. Linux walks the path
+     * component by component and catches the transient crossing into
+     * /proc. The component walker must do the same.
+     */
+    TEST("openat2 RESOLVE_NO_XDEV catches transient /proc visit");
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd =
+        syscall(SYS_openat2, AT_FDCWD,
+                "/proc/self/../../tmp/elfuse-no-xdev-probe", &how, sizeof(how));
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("walker accepted a path that traversed /proc");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_bare_proc(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects bare /proc");
+    struct open_how how = {
+        .flags = O_RDONLY | O_DIRECTORY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd = syscall(SYS_openat2, AT_FDCWD, "/proc", &how, sizeof(how));
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV opening bare /proc");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_symlink_to_proc(void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects symlink crossing into /proc");
+    char dir_template[] = "/tmp/elfuse-openat2-xdev-link-XXXXXX";
+    char *dir = mkdtemp(dir_template);
+    if (!dir) {
+        FAIL("mkdtemp");
+        return;
+    }
+
+    char link_path[PATH_MAX];
+    if (snprintf(link_path, sizeof(link_path), "%s/link", dir) >=
+        (int) sizeof(link_path)) {
+        FAIL("path too long");
+        rmdir(dir);
+        return;
+    }
+    if (symlink("/proc/self", link_path) < 0) {
+        FAIL("symlink");
+        rmdir(dir);
+        return;
+    }
+
+    int dirfd = open(dir, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open temp dir");
+        unlink(link_path);
+        rmdir(dir);
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd = syscall(SYS_openat2, dirfd, "link/status", &how, sizeof(how));
+    close(dirfd);
+    unlink(link_path);
+    rmdir(dir);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_in_root_clamps_dotdot(void)
+{
+    /* IN_ROOT clamps ".." at the dirfd. The combined NO_XDEV precheck must
+     * use the same floor, otherwise a path like /../../tmp from a /proc/1
+     * dirfd lexically pops above /proc and the walker would falsely report
+     * EXDEV even though the actual resolution clamps and stays inside the
+     * proc class.
+     */
+    TEST("openat2 RESOLVE_IN_ROOT | NO_XDEV clamps .. at dirfd");
+    int dirfd = open("/proc/self", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /proc/self");
+        return;
+    }
+    struct open_how how = {.flags = O_RDONLY,
+                           .mode = 0,
+                           .resolve = RESOLVE_NO_XDEV | RESOLVE_IN_ROOT};
+    long fd = syscall(SYS_openat2, dirfd, "/../../status", &how, sizeof(how));
+    close(dirfd);
+    if (fd >= 0) {
+        close((int) fd);
+        PASS();
+        return;
+    }
+    EXPECT_TRUE(errno != EXDEV,
+                "IN_ROOT clamp should keep the walk inside /proc/self");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_proc_fd_magiclink(void)
+{
+    /* /proc/self/fd/N is a magic link whose target lives in whatever mount
+     * holds the underlying fd. Following it out of procfs is a mount
+     * crossing under Linux NO_XDEV. Without this guard the post-open
+     * check sees proc_path stamped as /proc/self/fd/N and falsely
+     * agrees with the PROC start class.
+     */
+    TEST("openat2 RESOLVE_NO_XDEV rejects /proc/self/fd magic link");
+    int helper = open("/tmp", O_RDONLY | O_DIRECTORY);
+    if (helper < 0) {
+        FAIL("open /tmp helper");
+        return;
+    }
+    char link_path[64];
+    snprintf(link_path, sizeof(link_path), "/proc/self/fd/%d", helper);
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    long fd = syscall(SYS_openat2, AT_FDCWD, link_path, &how, sizeof(how));
+    close(helper);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV for magic-link traversal");
+        return;
+    }
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
+static void test_openat2_resolve_no_xdev_rejects_normalized_proc_fd_magiclink(
+    void)
+{
+    TEST("openat2 RESOLVE_NO_XDEV rejects normalized proc fd magic links");
+    int helper = open("/tmp", O_RDONLY | O_DIRECTORY);
+    if (helper < 0) {
+        FAIL("open /tmp helper");
+        return;
+    }
+
+    int dirfd = open("/proc/self", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        close(helper);
+        FAIL("open /proc/self");
+        return;
+    }
+
+    char dot_path[64];
+    char dotdot_path[64];
+    snprintf(dot_path, sizeof(dot_path), "./fd/%d", helper);
+    snprintf(dotdot_path, sizeof(dotdot_path), "task/../fd/%d", helper);
+
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_NO_XDEV};
+    const char *paths[] = {dot_path, dotdot_path};
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        long fd = syscall(SYS_openat2, dirfd, paths[i], &how, sizeof(how));
+        if (fd >= 0) {
+            close((int) fd);
+            close(dirfd);
+            close(helper);
+            FAIL("expected EXDEV for normalized magic-link traversal");
+            return;
+        }
+        if (errno != EXDEV) {
+            close(dirfd);
+            close(helper);
+            EXPECT_TRUE(errno == EXDEV, "wrong errno");
+            return;
+        }
+    }
+
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        close(dirfd);
+        close(helper);
+        FAIL("getcwd");
+        return;
+    }
+    if (chdir("/proc/self") < 0) {
+        close(dirfd);
+        close(helper);
+        FAIL("chdir /proc/self");
+        return;
+    }
+
+    long fd = syscall(SYS_openat2, AT_FDCWD, dotdot_path, &how, sizeof(how));
+    int saved_errno = errno;
+    if (chdir(cwd) < 0) {
+        close(dirfd);
+        close(helper);
+        FAIL("restore cwd");
+        return;
+    }
+
+    close(dirfd);
+    close(helper);
+    if (fd >= 0) {
+        close((int) fd);
+        FAIL("expected EXDEV for cwd magic-link traversal");
+        return;
+    }
+    errno = saved_errno;
+    EXPECT_TRUE(errno == EXDEV, "wrong errno");
+}
+
 /* O_PATH enforcement. */
 
 #ifndef O_PATH
@@ -595,6 +1031,21 @@ int main(void)
     test_openat2_resolve_beneath_rejects_symlink_escape();
     test_openat2_resolve_no_magiclinks_proc_fd();
     test_openat2_resolve_no_magiclinks_proc_cwd();
+    test_openat2_resolve_no_xdev_rejects_proc();
+    test_openat2_resolve_no_xdev_rejects_dev();
+    test_openat2_resolve_no_xdev_allows_same_mount();
+    test_openat2_resolve_no_xdev_absolute_ignores_dirfd_mount();
+    test_openat2_resolve_no_xdev_rejects_relative_proc();
+    test_openat2_resolve_no_xdev_rejects_relative_escape();
+    test_openat2_resolve_no_xdev_allows_regular_proc_name();
+    test_openat2_resolve_no_xdev_rejects_dev_shm_from_dev();
+    test_openat2_resolve_no_xdev_rejects_relative_tmp();
+    test_openat2_resolve_no_xdev_rejects_transient_proc();
+    test_openat2_resolve_no_xdev_rejects_bare_proc();
+    test_openat2_resolve_no_xdev_rejects_symlink_to_proc();
+    test_openat2_resolve_no_xdev_in_root_clamps_dotdot();
+    test_openat2_resolve_no_xdev_rejects_proc_fd_magiclink();
+    test_openat2_resolve_no_xdev_rejects_normalized_proc_fd_magiclink();
 
     /* O_PATH */
     test_opath_read_fails();

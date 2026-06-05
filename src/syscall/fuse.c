@@ -1488,6 +1488,20 @@ bool fuse_path_matches_mount(const char *path)
     return matched;
 }
 
+int fuse_path_mount_id(const char *path)
+{
+    if (!path || path[0] != '/')
+        return -1;
+    char canon[LINUX_PATH_MAX];
+    if (fuse_canonical_abs(path, canon, sizeof(canon)) < 0)
+        return -1;
+    pthread_mutex_lock(&fuse_lock);
+    fuse_mount_t *m = fuse_mount_for_path_locked(canon, NULL);
+    int id = m ? m->mount_id : -1;
+    pthread_mutex_unlock(&fuse_lock);
+    return id;
+}
+
 /* Resolve a guest-absolute path to a (session, mount_id, nodeid, attr).
  * retain_final_lookup controls whether the terminal LOOKUP's nlookup is kept
  * alive for a later open/release cycle, or forgotten before return for

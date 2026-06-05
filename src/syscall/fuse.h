@@ -20,6 +20,11 @@ int fuse_proc_stat(struct stat *st);
 
 int64_t fuse_open_path(guest_t *g, const char *path, int linux_flags, int mode);
 bool fuse_path_matches_mount(const char *path);
+/* Returns the mount_id of the FUSE mount containing path, or -1 if path is
+ * not inside any live or tombstoned FUSE mount. Distinct FUSE mounts have
+ * distinct mount_ids; used by RESOLVE_NO_XDEV to detect cross-mount paths.
+ */
+int fuse_path_mount_id(const char *path);
 /* Stat a FUSE-mounted path. at_flags carries the Linux AT_* mask from the
  * caller; only LINUX_AT_SYMLINK_NOFOLLOW is consulted today. When the
  * daemon returns S_IFLNK for the final component and the caller did not

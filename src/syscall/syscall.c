@@ -1394,11 +1394,11 @@ static int64_t sc_openat2(guest_t *g,
         return -LINUX_EAGAIN;
 
     /* For RESOLVE_NO_SYMLINKS, RESOLVE_NO_MAGICLINKS, RESOLVE_BENEATH,
-     * RESOLVE_IN_ROOT: read the guest path and enforce constraints before
-     * opening.
+     * RESOLVE_IN_ROOT, RESOLVE_NO_XDEV: read the guest path and enforce
+     * constraints before opening.
      */
     if (resolve & (RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
-                   RESOLVE_BENEATH | RESOLVE_IN_ROOT)) {
+                   RESOLVE_BENEATH | RESOLVE_IN_ROOT | RESOLVE_NO_XDEV)) {
         char path[LINUX_PATH_MAX];
         if (guest_read_str(g, x1, path, sizeof(path)) < 0)
             return -LINUX_EFAULT;
@@ -1429,6 +1429,38 @@ static int64_t sc_openat2(guest_t *g,
             path_openat2_is_proc_magiclink((int) x0, path))
             return -LINUX_ELOOP;
 
+        int no_xdev_start_class = -1;
+        if (resolve & RESOLVE_NO_XDEV) {
+            /* A /proc/self/fd/N traversal follows a magic link out of procfs
+             * into whatever mount holds the target fd, which is a mount
+             * crossing under Linux NO_XDEV. The post-open class check cannot
+             * detect this because procemu stamps the resulting fd's proc_path
+             * with the symbolic /proc/self/fd/N path, hiding the real landing
+             * mount. Reject the traversal up front.
+             * path_openat2_is_proc_magiclink normalizes both absolute and
+             * dirfd/cwd-relative forms against /proc, so /proc/self/fd/N,
+             * "self/fd/N" / "fd/N" from a /proc or /proc/self anchor, and
+             * traversals like "task/../fd/N" all collapse onto the same
+             * /proc/self/fd/N candidate.
+             *
+             * Not yet detected: /dev/fd/N (procemu intercepts this as an
+             * alias for /proc/self/fd/N and dup()s the underlying fd) and
+             * /proc/<pid>/fd/N with an explicit pid. A NO_XDEV resolution
+             * landing on either is still a real cross, but the precheck has
+             * no normalization path for /dev or for explicit-pid procfs
+             * anchors yet, so the bypass remains.
+             */
+            if (path_openat2_is_proc_magiclink((int) x0, path))
+                return -LINUX_EXDEV;
+            int crossed = path_openat2_crosses_mount(
+                (int) x0, path, (resolve & RESOLVE_IN_ROOT) != 0,
+                &no_xdev_start_class);
+            if (crossed < 0)
+                return linux_errno();
+            if (crossed > 0)
+                return -LINUX_EXDEV;
+        }
+
         if (resolve & (RESOLVE_BENEATH | RESOLVE_IN_ROOT)) {
             if (path_openat2_resolved_within_root(
                     (int) x0, path, oflags, (resolve & RESOLVE_IN_ROOT) != 0) <
@@ -1439,20 +1471,51 @@ static int64_t sc_openat2(guest_t *g,
             }
         }
 
+        int64_t opened;
         if (resolve & RESOLVE_IN_ROOT) {
             char rooted[LINUX_PATH_MAX];
             if (path_openat2_normalize_in_root(path, rooted, sizeof(rooted)) <
                 0) {
                 return -LINUX_ENAMETOOLONG;
             }
-            return sys_openat_path(g, (int) x0, rooted, (int) oflags,
-                                   (int) mode);
+            opened =
+                sys_openat_path(g, (int) x0, rooted, (int) oflags, (int) mode);
+        } else {
+            /* Reuse the precheck-validated path[] rather than re-reading from
+             * guest VA x1, so a sibling vCPU cannot swap the string between
+             * the constraint checks above and the actual open.
+             */
+            opened =
+                sys_openat_path(g, (int) x0, path, (int) oflags, (int) mode);
         }
+        if (opened >= 0 && (resolve & RESOLVE_NO_XDEV) &&
+            no_xdev_start_class >= 0) {
+            /* The string walker cannot see symlinks that the kernel
+             * followed during the actual open (sysroot case-fold sidecar
+             * shadows hide the link node from the precheck's fstatat
+             * walk). Re-classify the opened fd's resolved host path; if
+             * it landed in a different mount class, drop the fd and
+             * return EXDEV. This also tightens the precheck-vs-open
+             * TOCTOU window since the post-check sees the exact path
+             * the kernel resolved.
+             *
+             * Fail closed on post-check errors: a fd whose class cannot
+             * be derived must not silently bypass the NO_XDEV contract.
+             */
+            int crossed =
+                path_openat2_check_fd_xdev((int) opened, no_xdev_start_class);
+            if (crossed < 0) {
+                int err = linux_errno();
+                sys_close((int) opened);
+                return err;
+            }
+            if (crossed > 0) {
+                sys_close((int) opened);
+                return -LINUX_EXDEV;
+            }
+        }
+        return opened;
     }
-
-    /* RESOLVE_NO_XDEV is not enforced yet. elfuse currently resolves all
-     * guest paths within one host-backed filesystem view.
-     */
 
     return sys_openat(g, (int) x0, x1, (int) oflags, (int) mode);
 }

@@ -653,34 +653,28 @@ int path_openat2_is_proc_magiclink(guest_fd_t dirfd, const char *path)
     if (!path)
         return 0;
 
-    if (!strncmp(path, "/proc/self/fd/", 14))
-        return 1;
-    if (path[0] == '/')
-        return 0;
+    char normalized[LINUX_PATH_MAX];
+    const char *candidate = path;
 
-    if (dirfd == LINUX_AT_FDCWD) {
-        proc_cwd_view_t view;
-        if (proc_acquire_cwd_view(&view) == 0) {
-            int is_magiclink =
-                (!strcmp(view.path, "/proc") &&
-                 !strncmp(path, "self/fd/", 8)) ||
-                (!strcmp(view.path, "/proc/self") && !strncmp(path, "fd/", 3));
-            proc_release_cwd_view(&view);
-            if (is_magiclink)
-                return 1;
-        }
+    if (path[0] == '/') {
+        if (strncmp(path, "/proc", 5) || (path[5] != '\0' && path[5] != '/'))
+            return 0;
+
+        size_t marks[PROC_PATH_COMPONENTS_MAX];
+        size_t depth;
+        if (proc_seed_absolute_path(path, normalized, sizeof(normalized), marks,
+                                    ARRAY_SIZE(marks), &depth) < 0)
+            return 0;
+        candidate = normalized;
+    } else {
+        int rc =
+            resolve_proc_at_path(dirfd, path, normalized, sizeof(normalized));
+        if (rc <= 0)
+            return 0;
+        candidate = normalized;
     }
 
-    fd_entry_t snap;
-    if (!fd_snapshot(dirfd, &snap) || snap.proc_path[0] == '\0')
-        return 0;
-
-    if (!strcmp(snap.proc_path, "/proc"))
-        return !strncmp(path, "self/fd/", 8);
-    if (!strcmp(snap.proc_path, "/proc/self"))
-        return !strncmp(path, "fd/", 3);
-
-    return 0;
+    return !strncmp(candidate, "/proc/self/fd/", 14);
 }
 
 static int path_openat2_dirfd_host_path(guest_fd_t dirfd,
@@ -781,4 +775,504 @@ int path_openat2_resolved_within_root(guest_fd_t dirfd,
     }
 
     return 0;
+}
+
+/* Mount-class taxonomy used by RESOLVE_NO_XDEV. Distinct return values
+ * mean distinct logical filesystems from the guest's perspective. FUSE
+ * mounts encode mount_id into the high bits so two distinct FUSE mounts
+ * compare unequal.
+ */
+#define PATH_MOUNT_ROOT 0
+#define PATH_MOUNT_PROC 1
+#define PATH_MOUNT_DEV 2
+#define PATH_MOUNT_SYS 3
+#define PATH_MOUNT_TMP 4
+#define PATH_MOUNT_DEV_SHM 5
+/* fuse_next_mount_id is a monotonic int starting at 100 (see fuse.c).
+ * The base is sized well clear of any realistic mount_id so the four
+ * non-FUSE classes never collide with the FUSE class numbers even after
+ * hundreds of millions of mount cycles. mount_id values that ever do
+ * approach this bound would represent a runtime that long outlived
+ * elfuse's intended lifetime.
+ */
+#define PATH_MOUNT_FUSE_BASE 0x10000000
+
+static int classify_guest_path_mount(const char *guest_path)
+{
+    if (!guest_path || guest_path[0] != '/')
+        return -1;
+
+    int fuse_id = fuse_path_mount_id(guest_path);
+    if (fuse_id >= 0)
+        return PATH_MOUNT_FUSE_BASE + fuse_id;
+
+    if (path_prefix_match(guest_path, "/proc", 5))
+        return PATH_MOUNT_PROC;
+    if (path_prefix_match(guest_path, "/tmp", 4))
+        return PATH_MOUNT_TMP;
+    if (path_prefix_match(guest_path, "/dev/shm", 8))
+        return PATH_MOUNT_DEV_SHM;
+    if (path_prefix_match(guest_path, "/dev", 4))
+        return PATH_MOUNT_DEV;
+    if (path_prefix_match(guest_path, "/sys", 4))
+        return PATH_MOUNT_SYS;
+
+    return PATH_MOUNT_ROOT;
+}
+
+static int host_path_to_guest_path(const char *host_path,
+                                   char *out,
+                                   size_t outsz)
+{
+    char sysroot[LINUX_PATH_MAX];
+    const char *guest_path = host_path;
+
+    if (proc_sysroot_snapshot(sysroot, sizeof(sysroot))) {
+        size_t sysroot_len = strlen(sysroot);
+        if (!strncmp(host_path, sysroot, sysroot_len) &&
+            (host_path[sysroot_len] == '\0' || host_path[sysroot_len] == '/')) {
+            guest_path = host_path + sysroot_len;
+            if (*guest_path == '\0')
+                guest_path = "/";
+        }
+    }
+
+    size_t len = str_copy_trunc(out, guest_path, outsz);
+    if (len >= outsz) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    return 0;
+}
+
+static int dirfd_guest_base_path(guest_fd_t dirfd, char *out, size_t outsz)
+{
+    if (dirfd == LINUX_AT_FDCWD) {
+        proc_cwd_view_t view;
+        if (proc_acquire_cwd_view(&view) < 0) {
+            errno = EBADF;
+            return -1;
+        }
+        size_t len = str_copy_trunc(out, view.path, outsz);
+        proc_release_cwd_view(&view);
+        if (len >= outsz) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        return 0;
+    }
+
+    fd_entry_t snap;
+    if (!fd_snapshot(dirfd, &snap)) {
+        errno = EBADF;
+        return -1;
+    }
+    if (snap.proc_path[0] != '\0') {
+        size_t len = str_copy_trunc(out, snap.proc_path, outsz);
+        if (len >= outsz) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        return 0;
+    }
+
+    if (snap.type == FD_FUSE_DIR) {
+        int rc = fuse_resolve_at_path(dirfd, ".", out, outsz);
+        if (rc < 0)
+            return -1;
+        if (rc > 0)
+            return 0;
+    }
+
+    char host_path[LINUX_PATH_MAX];
+    if (path_openat2_dirfd_host_path(dirfd, host_path, sizeof(host_path)) == 0)
+        return host_path_to_guest_path(host_path, out, outsz);
+
+    if (snap.type != FD_DIR) {
+        errno = EBADF;
+        return -1;
+    }
+
+    /* Some host-backed directory handles cannot be named back through
+     * F_GETPATH. Keep a root-class fallback for those rare cases so regular
+     * relative paths can still proceed.
+     */
+    out[0] = '/';
+    out[1] = '\0';
+    return 0;
+}
+
+/* Pop one trailing component from an absolute path, refusing to drop
+ * below the supplied floor length. floor_len is strlen of the walk root
+ * (1 == "/" for the bare-absolute case, dirfd-base length for IN_ROOT
+ * resolution). At the floor the path is left unchanged, matching Linux's
+ * ".." at "/" semantics and RESOLVE_IN_ROOT's clamp-at-dirfd rule.
+ */
+static void guest_path_pop(char *current, size_t floor_len)
+{
+    size_t len = strlen(current);
+    if (len <= floor_len)
+        return;
+    char *slash = strrchr(current, '/');
+    if (!slash || slash == current) {
+        current[0] = '/';
+        current[1] = '\0';
+        return;
+    }
+    if ((size_t) (slash - current) < floor_len)
+        return;
+    *slash = '\0';
+}
+
+static int guest_path_append(char *current,
+                             size_t currentsz,
+                             const char *comp,
+                             size_t len)
+{
+    size_t cur_len = strlen(current);
+    bool need_slash = (cur_len == 0 || current[cur_len - 1] != '/');
+    size_t want = cur_len + (need_slash ? 1 : 0) + len + 1;
+    if (want > currentsz) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (need_slash)
+        current[cur_len++] = '/';
+    memcpy(current + cur_len, comp, len);
+    current[cur_len + len] = '\0';
+    return 0;
+}
+
+static int open_guest_walk_root_fd(guest_fd_t dirfd,
+                                   bool absolute,
+                                   host_fd_t *out)
+{
+    if (absolute) {
+        char sysroot[LINUX_PATH_MAX];
+        const char *root = "/";
+        if (proc_sysroot_snapshot(sysroot, sizeof(sysroot)))
+            root = sysroot;
+        *out = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        return *out < 0 ? -1 : 0;
+    }
+
+    host_fd_ref_t dir_ref;
+    if (host_dirfd_ref_open(dirfd, &dir_ref) < 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    if (dir_ref.fd == AT_FDCWD)
+        *out = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    else
+        *out = dup(dir_ref.fd);
+    host_fd_ref_close(&dir_ref);
+    return *out < 0 ? -1 : 0;
+}
+
+static int replace_walk_fd(host_fd_t *current_fd, host_fd_t next_fd)
+{
+    if (next_fd < 0)
+        return -1;
+    if (*current_fd >= 0)
+        close(*current_fd);
+    *current_fd = next_fd;
+    return 0;
+}
+
+static int reset_walk_fd(host_fd_t *current_fd, host_fd_t root_fd)
+{
+    host_fd_t next_fd = dup(root_fd);
+    if (next_fd < 0)
+        return -1;
+    return replace_walk_fd(current_fd, next_fd);
+}
+
+int path_openat2_crosses_mount(guest_fd_t dirfd,
+                               const char *path,
+                               bool in_root,
+                               int *out_start_class)
+{
+    if (out_start_class)
+        *out_start_class = -1;
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char current[LINUX_PATH_MAX];
+    const char *walk = path;
+    char pending[LINUX_PATH_MAX];
+    host_fd_t current_fd = -1;
+    host_fd_t root_fd = -1;
+    host_fd_t absolute_root_fd = -1;
+    bool host_walk = true;
+    int symlink_count = 0;
+    int rc = -1;
+
+    /* The walk has to track every intermediate prefix because lexical
+     * collapsing of ".." would erase a transient mount crossing (e.g.
+     * "/proc/self/../../tmp" passes through /proc before the upward
+     * components apply, and Linux NO_XDEV detects that). The start frame
+     * matches how the kernel anchors resolution: absolute paths begin at
+     * "/" regardless of dirfd; relative paths and RESOLVE_IN_ROOT begin at
+     * the dirfd's tracked guest path.
+     */
+    if (path[0] == '/' && !in_root) {
+        current[0] = '/';
+        current[1] = '\0';
+    } else if (dirfd_guest_base_path(dirfd, current, sizeof(current)) < 0) {
+        goto out;
+    }
+
+    /* IN_ROOT clamps ".." at dirfd; outside IN_ROOT the walker can
+     * traverse up to "/" so a transition like /proc/1 -> /proc -> /
+     * surfaces as the expected cross. The floor matches whichever rule
+     * applies so the precheck never out-rejects the actual resolution
+     * that follows in path_openat2_normalize_in_root.
+     */
+    size_t floor_len = in_root ? strlen(current) : 1;
+
+    int start_class = classify_guest_path_mount(current);
+    if (start_class < 0) {
+        errno = EINVAL;
+        goto out;
+    }
+    if (out_start_class)
+        *out_start_class = start_class;
+
+    if (open_guest_walk_root_fd(dirfd, path[0] == '/' && !in_root,
+                                &current_fd) < 0) {
+        if (path[0] == '/' || errno != EBADF)
+            goto out;
+        host_walk = false;
+        errno = 0;
+    }
+    if (host_walk) {
+        root_fd = dup(current_fd);
+        if (root_fd < 0)
+            goto out;
+        if (open_guest_walk_root_fd(LINUX_AT_FDCWD, true, &absolute_root_fd) <
+            0)
+            goto out;
+    }
+
+    while (*walk) {
+        while (*walk == '/')
+            walk++;
+        if (!*walk)
+            break;
+
+        const char *comp = walk;
+        while (*walk && *walk != '/')
+            walk++;
+        size_t len = (size_t) (walk - comp);
+
+        if (len == 1 && comp[0] == '.')
+            continue;
+
+        if (len == 2 && comp[0] == '.' && comp[1] == '.') {
+            size_t before_len = strlen(current);
+            guest_path_pop(current, floor_len);
+            if (host_walk && strlen(current) < before_len) {
+                host_fd_t parent_fd = openat(
+                    current_fd, "..", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                if (replace_walk_fd(&current_fd, parent_fd) < 0)
+                    goto out;
+            }
+        } else {
+            char name[NAME_MAX + 1];
+            char parent[LINUX_PATH_MAX];
+            if (len > NAME_MAX) {
+                errno = ENAMETOOLONG;
+                goto out;
+            }
+            memcpy(name, comp, len);
+            name[len] = '\0';
+            if (str_copy_trunc(parent, current, sizeof(parent)) >=
+                sizeof(parent)) {
+                errno = ENAMETOOLONG;
+                goto out;
+            }
+
+            struct stat st;
+            if (host_walk &&
+                fstatat(current_fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+                if (S_ISLNK(st.st_mode)) {
+                    if (guest_path_append(current, sizeof(current), comp, len) <
+                        0)
+                        goto out;
+
+                    int cls = classify_guest_path_mount(current);
+                    if (cls < 0) {
+                        errno = EINVAL;
+                        goto out;
+                    }
+                    if (cls != start_class) {
+                        rc = 1;
+                        goto out;
+                    }
+                    str_copy_trunc(current, parent, sizeof(current));
+
+                    char target[LINUX_PATH_MAX];
+                    ssize_t target_len = readlinkat(current_fd, name, target,
+                                                    sizeof(target) - 1);
+                    if (target_len < 0)
+                        goto out;
+                    if (++symlink_count > MAXSYMLINKS) {
+                        errno = ELOOP;
+                        goto out;
+                    }
+                    target[target_len] = '\0';
+
+                    char rest_buf[LINUX_PATH_MAX];
+                    const char *rest = walk;
+                    while (*rest == '/')
+                        rest++;
+                    if (str_copy_trunc(rest_buf, rest, sizeof(rest_buf)) >=
+                        sizeof(rest_buf)) {
+                        errno = ENAMETOOLONG;
+                        goto out;
+                    }
+                    if (snprintf(pending, sizeof(pending), "%s%s%s", target,
+                                 rest_buf[0] ? "/" : "",
+                                 rest_buf) >= (int) sizeof(pending)) {
+                        errno = ENAMETOOLONG;
+                        goto out;
+                    }
+                    walk = pending;
+
+                    if (target[0] == '/') {
+                        host_fd_t reset_fd =
+                            in_root ? root_fd : absolute_root_fd;
+                        if (reset_walk_fd(&current_fd, reset_fd) < 0)
+                            goto out;
+                        if (in_root) {
+                            if (dirfd_guest_base_path(dirfd, current,
+                                                      sizeof(current)) < 0)
+                                goto out;
+                        } else {
+                            current[0] = '/';
+                            current[1] = '\0';
+                        }
+                    }
+                    continue;
+                }
+            } else if (host_walk && errno != ENOENT) {
+                goto out;
+            }
+
+            if (guest_path_append(current, sizeof(current), comp, len) < 0)
+                goto out;
+        }
+
+        int cls = classify_guest_path_mount(current);
+        if (cls < 0) {
+            errno = EINVAL;
+            goto out;
+        }
+        if (cls != start_class) {
+            rc = 1;
+            goto out;
+        }
+
+        const char *rest = walk;
+        while (*rest == '/')
+            rest++;
+        if (host_walk && *rest != '\0' &&
+            !(len == 2 && comp[0] == '.' && comp[1] == '.')) {
+            char name[NAME_MAX + 1];
+            if (len > NAME_MAX) {
+                errno = ENAMETOOLONG;
+                goto out;
+            }
+            memcpy(name, comp, len);
+            name[len] = '\0';
+            host_fd_t next_fd =
+                openat(current_fd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            if (replace_walk_fd(&current_fd, next_fd) < 0)
+                goto out;
+        }
+    }
+
+    rc = 0;
+
+out:
+    if (current_fd >= 0)
+        close(current_fd);
+    if (root_fd >= 0)
+        close(root_fd);
+    if (absolute_root_fd >= 0)
+        close(absolute_root_fd);
+    return rc;
+}
+
+int path_openat2_check_fd_xdev(int guest_fd, int start_class)
+{
+    if (start_class < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    fd_entry_t snap;
+    if (!fd_snapshot(guest_fd, &snap)) {
+        errno = EBADF;
+        return -1;
+    }
+
+    /* Synthetic /dev fds (FD_URANDOM) and FUSE fds have no resolvable host
+     * path, but their semantic class is fixed by the fd type; classify those
+     * without F_GETPATH so a NO_XDEV resolution that intended to land outside
+     * /dev or outside the originating FUSE mount catches them.
+     *
+     * The post-check is only meaningful for resolutions that started in the
+     * root class. For PROC/DEV/SYS/TMP/DEV_SHM/FUSE the precheck's walker
+     * already classified the dirfd against the right intercept, and any
+     * successful open went through the intercept layer (procfs emulation backs
+     * FD_REGULAR with a /tmp/elfuse-proc-XXXXXX temp file whose F_GETPATH would
+     * mis-classify as /tmp). Trust the precheck in those cases and only
+     * re-derive the class when the resolution started at root: that is
+     * precisely the window where a symlink can escape into an intercept class
+     * without the walker seeing it (sidecar shadows hide the link node from
+     * fstatat).
+     *
+     * The /proc/self/fd/N magic-link case (where snap.proc_path stamps the
+     * resulting fd with a PROC label even though the real mount of the dup
+     * target may be elsewhere) is closed at the precheck by rejecting magic
+     * links under NO_XDEV, so this post-check does not have to second-guess
+     * proc_path here.
+     */
+    if (start_class != PATH_MOUNT_ROOT)
+        return 0;
+
+    char guest_path[LINUX_PATH_MAX];
+    int end_class;
+    if (snap.proc_path[0] != '\0') {
+        end_class = classify_guest_path_mount(snap.proc_path);
+    } else if (snap.type == FD_URANDOM) {
+        end_class = PATH_MOUNT_DEV;
+    } else if (snap.type == FD_FUSE_DIR || snap.type == FD_FUSE_FILE ||
+               snap.type == FD_FUSE_DEV) {
+        int mnt_id;
+        if (fuse_fd_mnt_id(guest_fd, &mnt_id) < 0)
+            return -1;
+        end_class = PATH_MOUNT_FUSE_BASE + mnt_id;
+    } else if (snap.host_fd >= 0) {
+        char host_path[LINUX_PATH_MAX];
+        if (fcntl(snap.host_fd, F_GETPATH, host_path) < 0)
+            return -1;
+        if (host_path_to_guest_path(host_path, guest_path, sizeof(guest_path)) <
+            0)
+            return -1;
+        end_class = classify_guest_path_mount(guest_path);
+    } else {
+        errno = EBADF;
+        return -1;
+    }
+    if (end_class < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return (end_class != start_class) ? 1 : 0;
 }

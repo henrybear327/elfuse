@@ -463,9 +463,8 @@ int fork_ipc_send_pty_keepalives(int ipc_sock)
     /* PTY_KEEPALIVE_MAX upper bound on entries; allocate to that. */
     proc_pty_ipc_entry_t snapshot[256];
     int snapshot_slave_fds[256];
-    const int max_entries = (int) (sizeof(snapshot) / sizeof(snapshot[0]));
-    int num_snap =
-        proc_pty_snapshot_keepalive(snapshot, snapshot_slave_fds, max_entries);
+    int num_snap = proc_pty_snapshot_keepalive(snapshot, snapshot_slave_fds,
+                                               ARRAY_SIZE(snapshot));
 
     /* Match each keepalive's master_host_fd against a live fd_table entry to
      * recover the guest_fd, which is the stable identifier across fork.
@@ -509,27 +508,22 @@ int fork_ipc_send_pty_keepalives(int ipc_sock)
     }
     pthread_mutex_unlock(&fd_lock);
 
-    if (fork_ipc_write_all(ipc_sock, &num_send, sizeof(num_send)) < 0)
-        goto fail;
-    if (num_send > 0) {
+    int rc = 0;
+    if (fork_ipc_write_all(ipc_sock, &num_send, sizeof(num_send)) < 0) {
+        rc = -1;
+    } else if (num_send > 0) {
         if (fork_ipc_write_all(ipc_sock, payload,
-                               num_send * sizeof(payload[0])) < 0)
-            goto fail;
-        if (fork_ipc_send_fds(ipc_sock, payload_slave_fds, (int) num_send) <
-            0) {
+                               num_send * sizeof(payload[0])) < 0) {
+            rc = -1;
+        } else if (fork_ipc_send_fds(ipc_sock, payload_slave_fds,
+                                     (int) num_send) < 0) {
             log_error("clone: failed to send pty keepalive fds");
-            goto fail;
+            rc = -1;
         }
     }
-
     for (uint32_t i = 0; i < num_send; i++)
         close(payload_slave_fds[i]);
-    return 0;
-
-fail:
-    for (uint32_t i = 0; i < num_send; i++)
-        close(payload_slave_fds[i]);
-    return -1;
+    return rc;
 }
 
 int fork_ipc_recv_pty_keepalives(int ipc_fd)

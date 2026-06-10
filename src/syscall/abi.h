@@ -117,6 +117,8 @@
 #define SYS_getresuid 148
 #define SYS_setresgid 149
 #define SYS_getresgid 150
+#define SYS_setfsuid 151
+#define SYS_setfsgid 152
 #define SYS_setpgid 154
 #define SYS_getpgid 155
 #define SYS_getsid 156
@@ -225,8 +227,8 @@
 #define SYS_mlockall 230
 #define SYS_munlockall 231
 /* memory policy stubs */
-#define SYS_set_mempolicy 238
-#define SYS_get_mempolicy 239
+#define SYS_get_mempolicy 236
+#define SYS_set_mempolicy 237
 /* System V IPC */
 #define SYS_msgget 186
 #define SYS_msgctl 187

@@ -168,10 +168,10 @@ static void test_msgctl_rmid(void)
  * Use raw syscall since glibc may not wrap them.
  */
 #ifndef __NR_get_mempolicy
-#define __NR_get_mempolicy 239
+#define __NR_get_mempolicy 236
 #endif
 #ifndef __NR_set_mempolicy
-#define __NR_set_mempolicy 238
+#define __NR_set_mempolicy 237
 #endif
 
 static void test_get_mempolicy(void)

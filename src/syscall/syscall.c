@@ -542,6 +542,15 @@ SC_FORWARD(sc_setreuid,  CRED_BRACKETED(g, proc_sys_setreuid((uint32_t) x0, (uin
 SC_FORWARD(sc_setregid,  CRED_BRACKETED(g, proc_sys_setregid((uint32_t) x0, (uint32_t) x1)))
 SC_FORWARD(sc_setresuid, CRED_BRACKETED(g, proc_sys_setresuid((uint32_t) x0, (uint32_t) x1, (uint32_t) x2)))
 SC_FORWARD(sc_setresgid, CRED_BRACKETED(g, proc_sys_setresgid((uint32_t) x0, (uint32_t) x1, (uint32_t) x2)))
+
+/* setfs{uid,gid}: Linux returns the previous fs{uid,gid} and only mutates state
+ * on a permitted transition. elfuse does not track fsuid separately from euid,
+ * so report the current e{uid,gid} and ignore the change. procps brackets /proc
+ * walks with setfsuid(uid)/setfsuid(0); both calls observe a stable cred
+ * snapshot, which is what it needs.
+ */
+SC_FORWARD(sc_setfsuid, (int64_t) proc_get_euid())
+SC_FORWARD(sc_setfsgid, (int64_t) proc_get_egid())
 SC_FORWARD(sc_setpgid, proc_sys_setpgid(g, (int64_t) x0, (int64_t) x1))
 SC_STUB(sc_fadvise64,           0)
 SC_STUB(sc_sched_yield,         (sched_yield(), 0))

@@ -18,6 +18,8 @@
 #define __NR_getresuid 148
 #define __NR_getresgid 150
 #define __NR_setreuid 145
+#define __NR_setfsuid 151
+#define __NR_setfsgid 152
 #define __NR_capset 91
 #define __NR_setpriority 140
 #define __NR_getpriority 141
@@ -118,6 +120,39 @@ int main(void)
 
     TEST("setgid(0) returns -EPERM");
     EXPECT_TRUE(raw_syscall1(__NR_setgid, 0) == -1, "expected -EPERM");
+
+    /* setfsuid / setfsgid: Linux contract is to return the previous fsuid /
+     * fsgid. elfuse reports the current euid / egid (1000) on every call,
+     * with no state mutation, which is what procps relies on when it
+     * brackets /proc reads with setfsuid(uid) / setfsuid(0).
+     */
+    TEST("setfsuid(0) returns 1000");
+    EXPECT_TRUE(raw_syscall1(__NR_setfsuid, 0) == 1000,
+                "setfsuid(0) did not return current euid");
+
+    TEST("setfsuid(1000) returns 1000");
+    EXPECT_TRUE(raw_syscall1(__NR_setfsuid, 1000) == 1000,
+                "setfsuid(1000) did not return current euid");
+
+    TEST("setfsgid(0) returns 1000");
+    EXPECT_TRUE(raw_syscall1(__NR_setfsgid, 0) == 1000,
+                "setfsgid(0) did not return current egid");
+
+    TEST("setfsgid(1000) returns 1000");
+    EXPECT_TRUE(raw_syscall1(__NR_setfsgid, 1000) == 1000,
+                "setfsgid(1000) did not return current egid");
+
+    /* setfsuid(-1) / setfsgid(-1) is the canonical glibc "read fsuid without
+     * changing it" idiom: -1 is never a valid uid, so the kernel only
+     * reports the current fsuid.
+     */
+    TEST("setfsuid(-1) reports current fsuid");
+    EXPECT_TRUE(raw_syscall1(__NR_setfsuid, (long) (unsigned) -1) == 1000,
+                "setfsuid(-1) did not report current euid");
+
+    TEST("setfsgid(-1) reports current fsgid");
+    EXPECT_TRUE(raw_syscall1(__NR_setfsgid, (long) (unsigned) -1) == 1000,
+                "setfsgid(-1) did not report current egid");
 
     /* capset: unprivileged process cannot set capabilities */
     TEST("capset returns -EPERM");

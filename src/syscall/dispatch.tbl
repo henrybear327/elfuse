@@ -157,6 +157,8 @@ SYS_setresuid sc_setresuid 1
 SYS_getresuid sc_getresuid 0
 SYS_setresgid sc_setresgid 1
 SYS_getresgid sc_getresgid 0
+SYS_setfsuid sc_setfsuid 0
+SYS_setfsgid sc_setfsgid 0
 SYS_setpgid sc_setpgid 0
 SYS_getpgid sc_getpgid 1
 SYS_getsid sc_getsid 1

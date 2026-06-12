@@ -223,9 +223,9 @@ void net_socket_cache_init_accept(int guest_fd, int inherit_passcred)
 
     net_socket_cache_set_many_zero(guest_fd, zero_opts, ARRAY_SIZE(zero_opts));
 
-    /* AF_UNIX accept inherits SO_PASSCRED from the listener. For local
-     * connects the accept path receives the value captured when the
-     * connection was queued; otherwise it falls back to the listener value.
+    /* AF_UNIX accept inherits SO_PASSCRED from the listener. For local connects
+     * the accept path receives the value captured when the connection was
+     * queued; otherwise it falls back to the listener value.
      */
     net_socket_cache_set_index(guest_fd, SOCK_OPT_PASSCRED,
                                inherit_passcred ? 1 : 0);

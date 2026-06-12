@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests basic fork semantics: parent forks child, child writes a message
- * and exits with a specific code, parent waits and verifies exit status.
+ * Tests basic fork semantics: parent forks child, child writes a message and
+ * exits with a specific code, parent waits and verifies exit status.
  */
 
 #include <stdio.h>

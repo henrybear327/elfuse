@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * The shim's urandom-read fast path advances a shared ring head via
- * LDXR/STXR. Concurrent vCPUs reading /dev/urandom must:
+ * The shim's urandom-read fast path advances a shared ring head via LDXR/STXR.
+ * Concurrent vCPUs reading /dev/urandom must:
  *   1. Never see a torn or zero-filled byte (host always refills
  *      with arc4random_buf output).
  *   2. Never observe the same byte sequence as a sibling thread
@@ -12,17 +12,17 @@
  *      of the ring).
  *   3. Keep the head from overflowing or underflowing the ring.
  *
- * Each thread reads N 1-byte samples and records them in a private
- * histogram. After the run we check:
+ * Each thread reads N 1-byte samples and records them in a private histogram.
+ * After the run we check:
  *   - Total bytes consumed across all threads equals N * threads.
  *   - No thread's per-byte distribution is degenerate (all-zero or
  *     all-one buckets indicate the fast path served stale memory).
  *   - The sums across threads differ from each other (a hard test
  *     that the threads are actually getting independent bytes).
  *
- * The test runs only under elfuse, where the urandom fast path is
- * live; on native Linux the read() goes straight to the kernel and
- * the same invariants hold trivially.
+ * The test runs only under elfuse, where the urandom fast path is live; on
+ * native Linux the read() goes straight to the kernel and the same invariants
+ * hold trivially.
  */
 
 #include <errno.h>
@@ -66,9 +66,9 @@ static void *worker(void *arg)
 
 int main(void)
 {
-    /* One shared fd: every thread shares the same FD_URANDOM slot,
-     * so the shim's fast path is exercised on the same bitmap bit
-     * by all threads simultaneously.
+    /* One shared fd: every thread shares the same FD_URANDOM slot, so the
+     * shim's fast path is exercised on the same bitmap bit by all threads
+     * simultaneously.
      */
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd < 0) {
@@ -96,9 +96,9 @@ int main(void)
             failures++;
             continue;
         }
-        /* Per-thread distribution sanity: each bucket should be
-         * roughly NSAMPLES / 256 = 64 with stddev about 8. Flag any
-         * thread whose distribution is wildly off.
+        /* Per-thread distribution sanity: each bucket should be roughly
+         * NSAMPLES / 256 = 64 with stddev about 8. Flag any thread whose
+         * distribution is wildly off.
          */
         int min = NSAMPLES, max = 0, zeros = 0;
         for (int b = 0; b < 256; b++) {
@@ -124,9 +124,9 @@ int main(void)
     }
     close(fd);
 
-    /* Threads must have seen different total sums. Equal sums imply
-     * they consumed identical byte sequences, which means the shim's
-     * head-advance lost the race or served stale ring data.
+    /* Threads must have seen different total sums. Equal sums imply they
+     * consumed identical byte sequences, which means the shim's head-advance
+     * lost the race or served stale ring data.
      */
     for (int i = 0; i < NTHREADS; i++) {
         for (int j = i + 1; j < NTHREADS; j++) {

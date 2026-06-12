@@ -4,17 +4,17 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * The integration tests in tests/test-mprotect-mt.c exercise the operand
- * end-to-end inside a VM, but they happily pass on M4 even when the
- * encoder dropped the TG=01 bit (the M-series PE silently falls back to
- * TCR_EL1.TGn). This host-side test decodes the operand bit-by-bit and
- * asserts every field matches the ARM ARM DDI 0487J.a D8.7.6 layout, so a
- * future regression in the encoder surfaces as a build / CI failure
- * regardless of the running PE's tolerance for reserved encodings.
+ * end-to-end inside a VM, but they happily pass on M4 even when the encoder
+ * dropped the TG=01 bit (the M-series PE silently falls back to TCR_EL1.TGn).
+ * This host-side test decodes the operand bit-by-bit and asserts every field
+ * matches the ARM ARM DDI 0487J.a D8.7.6 layout, so a future regression in the
+ * encoder surfaces as a build / CI failure regardless of the running PE's
+ * tolerance for reserved encodings.
  *
  * Native macOS binary; no HVF entitlement needed (the encoder is pure C).
- * Symbols pulled from core/guest.h that the encoder does not actually
- * reference still need to link, so a stub cpu_tlbi_req / g_tlbi_range_*
- * definition lives below.
+ * Symbols pulled from core/guest.h that the encoder does not actually reference
+ * still need to link, so a stub cpu_tlbi_req / g_tlbi_range_* definition lives
+ * below.
  */
 
 #include <stdbool.h>
@@ -24,8 +24,9 @@
 
 #include "core/guest.h"
 
-/* Stubs for the extern symbols guest.h declares. The encoder under test
- * does not read them, but the linker needs definitions. */
+/* Stubs for the extern symbols guest.h declares. The encoder under test does
+ * not read them, but the linker needs definitions.
+ */
 _Thread_local tlbi_request_t cpu_tlbi_req;
 bool g_tlbi_range_supported;
 
@@ -43,10 +44,11 @@ static void check_field(const char *label, uint64_t got, uint64_t expect)
     }
 }
 
-/* Decompose the operand per ARM ARM D8.7.6 and compare each field against
- * the expected value. baseADDR is VA>>12 masked to 37 bits; TG must be 01
- * (4 KiB); SCALE must be 0; TTL must be 0; ASID must be 0. NUM derives
- * from the page count via the ceil(pages/2) - 1 SCALE=0 encoding. */
+/* Decompose the operand per ARM ARM D8.7.6 and compare each field against the
+ * expected value. baseADDR is VA>>12 masked to 37 bits; TG must be 01 (4 KiB);
+ * SCALE must be 0; TTL must be 0; ASID must be 0. NUM derives from the page
+ * count via the ceil(pages/2) - 1 SCALE=0 encoding.
+ */
 static void verify_operand(uint64_t start_va,
                            uint16_t pages,
                            uint64_t expect_num)
@@ -105,8 +107,9 @@ int main(void)
     verify_operand(0x10000000ULL, 63, 31);
     verify_operand(0x10000000ULL, 64, 31);
 
-    /* Boundary VAs. 4 KiB-aligned, low-VA, MMAP_BASE (8 GiB), high-VA
-     * just below the 48-bit BaseADDR truncation point. */
+    /* Boundary VAs. 4 KiB-aligned, low-VA, MMAP_BASE (8 GiB), high-VA just
+     * below the 48-bit BaseADDR truncation point.
+     */
     verify_operand(0x00000000ULL, 32, 15);         /* zero base */
     verify_operand(0x200000000ULL, 32, 15);        /* MMAP_BASE */
     verify_operand(0x800000000000ULL, 32, 15);     /* Rosetta image */
@@ -121,10 +124,10 @@ int main(void)
     verify_operand(0x10000000ULL, 1, 0);
     verify_operand(0x10000000ULL, UINT16_MAX, 31);
 
-    /* TG bit is the architectural lynchpin -- if the encoder ever drops
-     * it the integration tests on Apple Silicon would still pass. Pin a
-     * direct bit-46 inspection so a regression to TG=00 fails this test
-     * immediately. */
+    /* TG bit is the architectural lynchpin -- if the encoder ever drops it the
+     * integration tests on Apple Silicon would still pass. Pin a direct bit-46
+     * inspection so a regression to TG=00 fails this test immediately.
+     */
     uint64_t op = tlbi_rvae1is_operand(0x10000000ULL, 32);
     if (op & (1ULL << 46)) {
         passes++;

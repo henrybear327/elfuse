@@ -3,11 +3,11 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Verifies semantics of the eventfd/timerfd/signalfd family of
- * descriptors. The current coverage focuses on signalfd's promise
- * that an EFAULT during read leaves the pending signal queue intact
- * so a subsequent good-pointer read still observes the signal.
- * Future eventfd and timerfd primitive tests should land here.
+ * Verifies semantics of the eventfd/timerfd/signalfd family of descriptors. The
+ * current coverage focuses on signalfd's promise that an EFAULT during read
+ * leaves the pending signal queue intact so a subsequent good-pointer read
+ * still observes the signal. Future eventfd and timerfd primitive tests should
+ * land here.
  */
 
 #include <errno.h>

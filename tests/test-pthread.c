@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Uses the standard POSIX thread API (musl implementation) to verify
- * that elfuse's clone(CLONE_THREAD) + futex + TLS support is sufficient
- * for real-world threading.
+ * Uses the standard POSIX thread API (musl implementation) to verify that
+ * elfuse's clone(CLONE_THREAD) + futex + TLS support is sufficient for
+ * real-world threading.
  */
 
 #include <pthread.h>
@@ -149,8 +149,8 @@ static void *increment_fn(void *arg)
 {
     int count = (int) (long) arg;
     for (int i = 0; i < count; i++) {
-        /* Non-atomic increment; the test only checks that the threads
-         * actually share memory, not about race conditions
+        /* Non-atomic increment; the test only checks that the threads actually
+         * share memory, not about race conditions
          */
         shared_counter++;
     }
@@ -163,8 +163,8 @@ static void test_shared_memory(void)
 
     shared_counter = 0;
 
-    /* Use a single thread to avoid race condition complexity.
-     * This tests that the thread can read/write the parent's memory.
+    /* Use a single thread to avoid race condition complexity. This tests that
+     * the thread can read/write the parent's memory.
      */
     pthread_t t;
     int err = pthread_create(&t, NULL, increment_fn, (void *) (long) 1000);

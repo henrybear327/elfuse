@@ -26,16 +26,16 @@
 
 /* Memory layout constants.
  *
- * Guest memory size is determined dynamically from the VM's IPA width (36-bit
- * = 64GiB on M2, 40-bit = 1TiB on M3+). See guest.c for the runtime probe that
+ * Guest memory size is determined dynamically from the VM's IPA width (36-bit =
+ * 64GiB on M2, 40-bit = 1TiB on M3+). See guest.c for the runtime probe that
  * selects the correct size.
  *
  * Infrastructure layout (page-table pool, shim code, shim data): a 16MiB
  * reserve placed just below g->interp_base, in the dead zone between
  * g->mmap_limit and g->interp_base. The exact base is computed at guest_init
  * time and stored in guest_t.pt_pool_base / pt_pool_end / shim_base /
- * shim_data_base. EL0 user binaries are therefore free to load at low
- * addresses (down to 64KiB) without colliding with the runtime.
+ * shim_data_base. EL0 user binaries are therefore free to load at low addresses
+ * (down to 64KiB) without colliding with the runtime.
  *
  * The reserve is demand-paged (MAP_ANON): unused page-table-pool pages cost no
  * host RAM, and the whole reserve consumes a negligible slice of the ~4 GiB
@@ -60,14 +60,14 @@
  *   +0x0E00000 .. +0x1000000  shim data + EL1 stack (full 2MiB L2 block, RW)
  *
  * Invariant: shim_data occupies the top 2MiB block of the reserve, so
- * INFRA_SHIM_DATA_OFF == INFRA_RESERVE - BLOCK_2MIB and
- * shim_data_base + BLOCK_2MIB == interp_base. The PT pool ends where the shim
- * code slot begins (INFRA_PT_POOL_END_OFF == INFRA_SHIM_OFF), and the slot is
- * INFRA_SHIM_SLOT == INFRA_SHIM_DATA_OFF - INFRA_SHIM_OFF wide.
+ * INFRA_SHIM_DATA_OFF == INFRA_RESERVE - BLOCK_2MIB and shim_data_base +
+ * BLOCK_2MIB == interp_base. The PT pool ends where the shim code slot begins
+ * (INFRA_PT_POOL_END_OFF == INFRA_SHIM_OFF), and the slot is INFRA_SHIM_SLOT ==
+ * INFRA_SHIM_DATA_OFF - INFRA_SHIM_OFF wide.
  */
 
-/* Total size of the runtime infrastructure reserve. Shifted to
- * [g->interp_base - INFRA_RESERVE, g->interp_base) at guest_init.
+/* Total size of the runtime infrastructure reserve. Shifted to [g->interp_base
+ * - INFRA_RESERVE, g->interp_base) at guest_init.
  */
 #define INFRA_RESERVE 0x01000000ULL         /* 16MiB */
 #define INFRA_PT_POOL_OFF 0x00010000ULL     /* PT pool start */
@@ -112,11 +112,11 @@
  */
 #define BLOCK_2MIB (2ULL * 1024 * 1024)
 
-/* IPA base: guest memory is mapped at this IPA in the hypervisor.
- * All guest physical addresses = GUEST_IPA_BASE + offset.
- * Must be 0 so that guest virtual addresses match ELF link addresses (e.g.
- * 0x400000). A non-zero IPA base would require all ELF binaries to be linked at
- * IPA_BASE+vaddr, which is impractical.
+/* IPA base: guest memory is mapped at this IPA in the hypervisor. All guest
+ * physical addresses = GUEST_IPA_BASE + offset. Must be 0 so that guest virtual
+ * addresses match ELF link addresses (e.g. 0x400000). A non-zero IPA base would
+ * require all ELF binaries to be linked at IPA_BASE+vaddr, which is
+ * impractical.
  */
 #define GUEST_IPA_BASE 0x0ULL
 
@@ -124,13 +124,13 @@
  *
  * Rosetta issues MAP_FIXED at bits-63-set addresses (0xFFFFFFFFF0000000+) for
  * its internal kernel-VA allocations. With EPD1=1 (default TCR), TTBR1 walks
- * are disabled and such VAs fault. The kbuf window enables TTBR1, backs a
- * 256 MiB region in the primary buffer at kbuf_gpa, and installs an L0[511]/
+ * are disabled and such VAs fault. The kbuf window enables TTBR1, backs a 256
+ * MiB region in the primary buffer at kbuf_gpa, and installs an L0[511]/
  * L1[511]/L2[384..511] page-table tree.
  *
  * KBUF_USER_VA is the bits-47:0 alias used by rosetta's TaggedPointer
- * extraction (which strips bits 63:48). Mapping the SAME physical kbuf pages
- * at both KBUF_VA_BASE under TTBR1 and KBUF_USER_VA under TTBR0 lets a single
+ * extraction (which strips bits 63:48). Mapping the SAME physical kbuf pages at
+ * both KBUF_VA_BASE under TTBR1 and KBUF_USER_VA under TTBR0 lets a single
  * physical region service both views.
  *
  * Aliasing-proof invariant: the kbuf is RW under both mappings; nothing
@@ -182,12 +182,12 @@ typedef struct {
 
 /* Semantic region tracking. */
 
-/* Maximum number of tracked memory regions (heap/stack/mmap/ELF/etc.).
- * Adjacent anonymous regions with matching permissions are automatically
- * coalesced (see regions_mergeable in core/guest.c). Threaded runtimes create
- * many thread stacks with guard pages; with coalescing, typical workloads use
- * ~50 regions. 4096 provides ample headroom for edge cases (many interleaved
- * guard pages, file-backed mappings, etc.).
+/* Maximum number of tracked memory regions (heap/stack/mmap/ELF/etc.). Adjacent
+ * anonymous regions with matching permissions are automatically coalesced (see
+ * regions_mergeable in core/guest.c). Threaded runtimes create many thread
+ * stacks with guard pages; with coalescing, typical workloads use ~50 regions.
+ * 4096 provides ample headroom for edge cases (many interleaved guard pages,
+ * file-backed mappings, etc.).
  */
 #define GUEST_MAX_REGIONS 4096
 
@@ -200,9 +200,9 @@ typedef struct {
 
 /* HVF stage-2 mapping segment. The slab is mapped to HVF in pieces so that
  * file-backed MAP_SHARED regions can have real host-VA overlays applied via
- * mmap MAP_FIXED|MAP_SHARED of a file fd. HVF requires hv_vm_unmap to target
- * an exactly-previously-mapped range; sub-range unmap of a larger map fails
- * with HV_BAD_ARGUMENT. To allow a 2 MiB-aligned middle range to be unmapped +
+ * mmap MAP_FIXED|MAP_SHARED of a file fd. HVF requires hv_vm_unmap to target an
+ * exactly-previously-mapped range; sub-range unmap of a larger map fails with
+ * HV_BAD_ARGUMENT. To allow a 2 MiB-aligned middle range to be unmapped +
  * remapped (refreshing HVF stage-2 caching after a host mmap MAP_FIXED), the
  * slab is split into 2 MiB-aligned segments around each affected block. All
  * segments are 2 MiB-aligned and 2 MiB-sized at minimum.
@@ -250,12 +250,12 @@ typedef struct {
     char name[64];          /* Label: "[heap]", "[stack]", ELF path, etc. */
 } guest_region_t;
 
-/* TLB invalidation request kinds. After every page-table modification, the
- * shim flushes the TLB on syscall return. The host accumulates the smallest
- * sufficient request across the syscall and emits it via the X8/X9/X10
- * register channel. Kind values are an internal enum independent of the
- * X8 wire codes; the syscall epilogue does the mapping (src/syscall/syscall.c
- * holds the canonical table):
+/* TLB invalidation request kinds. After every page-table modification, the shim
+ * flushes the TLB on syscall return. The host accumulates the smallest
+ * sufficient request across the syscall and emits it via the X8/X9/X10 register
+ * channel. Kind values are an internal enum independent of the X8 wire codes;
+ * the syscall epilogue does the mapping (src/syscall/syscall.c holds the
+ * canonical table):
  *   TLBI_NONE      -> X8 = 0  (no TLB flush)
  *   TLBI_BROADCAST -> X8 = 1  (TLBI VMALLE1IS, broadest)
  *   TLBI_RANGE     -> X8 = 3, X9 = start VA, X10 = page count
@@ -273,11 +273,11 @@ typedef enum {
                            * X8 = 4 on the wire. */
 } tlbi_kind_t;
 
-/* Cap selective per-page TLBI VAE1IS at this many 4 KiB pages. Beyond this,
- * use TLBI RVAE1IS if FEAT_TLBIRANGE is available, else fall back to
+/* Cap selective per-page TLBI VAE1IS at this many 4 KiB pages. Beyond this, use
+ * TLBI RVAE1IS if FEAT_TLBIRANGE is available, else fall back to
  * TLBI_BROADCAST: per-instruction issue cost outweighs the benefit once the
- * range is large. 16 pages == 64 KiB covers RELRO and other typical mprotect
- * / munmap targets.
+ * range is large. 16 pages == 64 KiB covers RELRO and other typical mprotect /
+ * munmap targets.
  */
 #define TLBI_SELECTIVE_MAX_PAGES 16
 
@@ -285,13 +285,13 @@ typedef enum {
  * RVAE1IS operand encoding covers (NUM+1)*2 pages with NUM in [0..31], so a
  * single instruction reaches 64 pages == 256 KiB. Beyond that the host would
  * need SCALE=1 (NUM*64 step), which over-invalidates for the typical
- * dynamic-linker RELRO / glibc-bring-up storm sizes seen in practice; stay
- * at SCALE=0 for now and broadcast above 64 pages.
+ * dynamic-linker RELRO / glibc-bring-up storm sizes seen in practice; stay at
+ * SCALE=0 for now and broadcast above 64 pages.
  */
 #define TLBI_RVAE_MAX_PAGES 64
 
-/* TLBI RVAE1IS operand bit-field constants. Per ARM ARM DDI 0487J.a D8.7.6
- * the operand layout is:
+/* TLBI RVAE1IS operand bit-field constants. Per ARM ARM DDI 0487J.a D8.7.6 the
+ * operand layout is:
  *   bits [36:0]   BaseADDR  (VA[48:12] for 4 KiB granule, DS=0)
  *   bits [38:37]  TTL       (0 = any level)
  *   bits [43:39]  NUM
@@ -299,23 +299,24 @@ typedef enum {
  *   bits [47:46]  TG        (00 = RESERVED, 01 = 4 KiB, 10 = 16 KiB,
  *                            11 = 64 KiB)
  *   bits [63:48]  ASID
- * elfuse only ever issues 4 KiB-granule TLBIs (TCR_EL1.TG0 = 4 KiB), so
- * TG is hard-pinned to 01 and the corresponding bit is named here. */
+ * elfuse only ever issues 4 KiB-granule TLBIs (TCR_EL1.TG0 = 4 KiB), so TG is
+ * hard-pinned to 01 and the corresponding bit is named here.
+ */
 #define RVAE_OPERAND_BADDR_MASK ((1ULL << 37) - 1)
 #define RVAE_OPERAND_NUM_SHIFT 39
 #define RVAE_OPERAND_TG_4KB (1ULL << 46)
 
-/* Pure encoder: build the TLBI RVAE1IS Xt operand from a 4 KiB-aligned VA
- * and a page count in the SCALE=0 range (1..TLBI_RVAE_MAX_PAGES). Lives in
- * the header as `static inline` so tlbi_request_emit_to_vcpu and any
- * future caller (host-side unit tests included) compile to the same
- * expression. NUM = ceil(pages / 2) - 1 over-invalidates odd page counts
- * by exactly one page, which is a perf-only side effect (the extra
- * invalidation evicts a neighbour TLB entry that the guest's next access
- * reloads). pages < 2 is clamped to 2 because SCALE=0 NUM=0 means 2
- * pages -- the encoder cannot represent a single page through RVAE1IS;
- * single-page callers go through the per-page VAE1IS path instead, but
- * the clamp keeps the encoder total in any pathological input. */
+/* Pure encoder: build the TLBI RVAE1IS Xt operand from a 4 KiB-aligned VA and a
+ * page count in the SCALE=0 range (1..TLBI_RVAE_MAX_PAGES). Lives in the header
+ * as static inline so tlbi_request_emit_to_vcpu and any future caller
+ * (host-side unit tests included) compile to the same expression. NUM =
+ * ceil(pages / 2) - 1 over-invalidates odd page counts by exactly one page,
+ * which is a perf-only side effect (the extra invalidation evicts a neighbour
+ * TLB entry that the guest's next access reloads). pages < 2 is clamped to 2
+ * because SCALE=0 NUM=0 means 2 pages -- the encoder cannot represent a single
+ * page through RVAE1IS; single-page callers go through the per-page VAE1IS path
+ * instead, but the clamp keeps the encoder total in any pathological input.
+ */
 static inline uint64_t tlbi_rvae1is_operand(uint64_t start_va, uint16_t pages)
 {
     if (pages < 2)
@@ -329,7 +330,8 @@ static inline uint64_t tlbi_rvae1is_operand(uint64_t start_va, uint16_t pages)
 
 /* Runtime feature flag: TRUE when the host PE implements FEAT_TLBIRANGE
  * (ARMv8.4+, present on every Apple Silicon M1+). Probed once at bootstrap.
- * Read-only after startup so callers do not need an atomic load. */
+ * Read-only after startup so callers do not need an atomic load.
+ */
 extern bool g_tlbi_range_supported;
 
 typedef struct {
@@ -341,9 +343,10 @@ typedef struct {
     uint16_t pages;       /* Page count when kind == TLBI_RANGE (1..MAX) */
     uint64_t start;       /* Page-aligned VA when kind == TLBI_RANGE */
 } tlbi_request_t;
-/* Layout contract: 16 bytes (1+1+2+4 padding+8). Documents the padding and
- * pins the TLS slot size so future field additions surface as a build break
- * rather than silently growing the per-vCPU footprint. */
+/* Layout contract: 16 bytes (1+1+2+4 padding+8). Documents the padding and pins
+ * the TLS slot size so future field additions surface as a build break rather
+ * than silently growing the per-vCPU footprint.
+ */
 _Static_assert(sizeof(tlbi_request_t) == 16,
                "tlbi_request_t must stay 16 bytes; update tlbi_request_clear "
                "and the syscall epilogue if the layout changes");
@@ -357,8 +360,8 @@ _Static_assert(sizeof(tlbi_request_t) == 16,
  * recorded in guest_t.mappings[] so guest_ptr / gva_resolve can translate
  * page-table-walk results that land outside the primary buffer.
  *
- * macOS user-space cannot directly mmap at host VA 128 TiB, so the host VA
- * is unrelated to the guest IPA. The mapping records both.
+ * macOS user-space cannot directly mmap at host VA 128 TiB, so the host VA is
+ * unrelated to the guest IPA. The mapping records both.
  */
 #define GUEST_MAX_MAPPINGS 8
 typedef struct {
@@ -375,8 +378,8 @@ typedef struct {
  * 1016 GiB on M3+) but rosetta JIT/PIE/slab traffic at 85 TB / 240 TB issues
  * many 2 MiB blocks that consume the pool quickly on hosts where Stage-2 caps
  * the primary buffer at 36-bit IPA. Overflow segments are 1 GiB host buffers
- * mapped at IPAs stacked just above guest_size; a bump allocator hands out
- * 2 MiB blocks. New segments are created lazily so untouched overflow costs
+ * mapped at IPAs stacked just above guest_size; a bump allocator hands out 2
+ * MiB blocks. New segments are created lazily so untouched overflow costs
  * nothing.
  */
 #define GUEST_MAX_OVERFLOW 4
@@ -443,10 +446,10 @@ typedef struct {
     hv_vcpu_exit_t *exit; /* vCPU exit info */
     uint32_t ipa_bits;    /* IPA bits requested from HVF */
 
-    /* x86_64-via-Rosetta state. All zero for aarch64 guests. Populated when
-     * the rosetta feature flag is on and an EM_X86_64 binary is loaded.
-     * Survives guest_reset so execve of another x86_64 binary keeps the same
-     * placement and kbuf wiring.
+    /* x86_64-via-Rosetta state. All zero for aarch64 guests. Populated when the
+     * rosetta feature flag is on and an EM_X86_64 binary is loaded. Survives
+     * guest_reset so execve of another x86_64 binary keeps the same placement
+     * and kbuf wiring.
      *
      *   rosetta_guest_base : Stage-2 GPA where rosetta segments are installed
      *                        via guest_add_mapping (typically 128 TiB).
@@ -489,11 +492,11 @@ typedef struct {
     guest_region_t regions[GUEST_MAX_REGIONS];
     int nregions; /* Number of active regions */
     /* Sticky flag set when guest_region_set_prot could not honor a request
-     * because the region table was full. After this point the tracker no
-     * longer faithfully reflects PTE state, so the mprotect fast path must
-     * fall back to unconditional PTE work. Propagated across fork IPC with
-     * the semantic region snapshot so children inherit the same fast-path
-     * guard as the parent.
+     * because the region table was full. After this point the tracker no longer
+     * faithfully reflects PTE state, so the mprotect fast path must fall back
+     * to unconditional PTE work. Propagated across fork IPC with the semantic
+     * region snapshot so children inherit the same fast-path guard as the
+     * parent.
      */
     bool regions_tracker_stale;
     guest_region_t preannounced[GUEST_MAX_PREANNOUNCED];
@@ -507,9 +510,9 @@ typedef struct {
     hvf_segment_t segments[GUEST_MAX_HVF_SEGMENTS];
     int n_segments;
 
-    /* Page table generation counter: incremented on every PT modification.
-     * Used by the per-thread GVA TLB cache to detect stale entries.
-     * 64-bit to avoid wrap-around stale hits over long-running sessions.
+    /* Page table generation counter: incremented on every PT modification. Used
+     * by the per-thread GVA TLB cache to detect stale entries. 64-bit to avoid
+     * wrap-around stale hits over long-running sessions.
      */
     _Atomic uint64_t pt_gen;
 
@@ -536,8 +539,8 @@ typedef struct {
     void *hvc6_userdata;
 } guest_t;
 
-/* Bump the page table generation counter (call after any PT modification).
- * This invalidates all per-thread GVA TLB caches.
+/* Bump the page table generation counter (call after any PT modification). This
+ * invalidates all per-thread GVA TLB caches.
  */
 static inline void guest_pt_gen_bump(guest_t *g)
 {
@@ -547,35 +550,34 @@ static inline void guest_pt_gen_bump(guest_t *g)
 /* TLB invalidation request helpers.
  *
  * Per-vCPU TLS slot. Each guest thread (= one host pthread + one HVF vCPU)
- * accumulates its own pending TLBI request as its syscall handlers mutate
- * the page tables. The syscall epilogue (src/syscall/syscall.c) reads its
- * own thread's slot, emits the X8/X9/X10 protocol, and clears it.
+ * accumulates its own pending TLBI request as its syscall handlers mutate the
+ * page tables. The syscall epilogue (src/syscall/syscall.c) reads its own
+ * thread's slot, emits the X8/X9/X10 protocol, and clears it.
  *
  * Why per-vCPU and not a guest_t-global accumulator: a global slot lets one
  * vCPU's syscall epilogue drain (and clear) another vCPU's pending request
- * before that vCPU has eret'd back to EL0, allowing the second vCPU to use
- * a stale TLB until the broadcast TLBI from the first vCPU's shim catches
- * up. A per-vCPU slot makes each thread strictly responsible for issuing
- * the TLBI for its own changes before its own eret. Page-table changes are
- * still global (guest memory and page tables are shared), but TLBI VAE1IS
- * and TLBI VMALLE1IS in the inner-shareable domain broadcast to all PEs,
- * so one vCPU's own TLBI is sufficient to invalidate stale entries on its
- * own PE before resuming guest code.
+ * before that vCPU has eret'd back to EL0, allowing the second vCPU to use a
+ * stale TLB until the broadcast TLBI from the first vCPU's shim catches up. A
+ * per-vCPU slot makes each thread strictly responsible for issuing the TLBI for
+ * its own changes before its own eret. Page-table changes are still global
+ * (guest memory and page tables are shared), but TLBI VAE1IS and TLBI VMALLE1IS
+ * in the inner-shareable domain broadcast to all PEs, so one vCPU's own TLBI is
+ * sufficient to invalidate stale entries on its own PE before resuming guest
+ * code.
  *
- * No locking is needed for the slot itself; only the owning thread reads
- * or writes it. Page-table updates remain serialized by mmap_lock.
+ * No locking is needed for the slot itself; only the owning thread reads or
+ * writes it. Page-table updates remain serialized by mmap_lock.
  *
- * Cross-vCPU shootdown window: between vCPU A releasing mmap_lock at the
- * end of an mprotect/munmap and the shim on A issuing the TLBI, sibling
- * vCPU B may continue executing EL0 code that hits A's now-stale TLB
- * entries. Real Linux closes this with cross-CPU IPI synchronization in
- * the kernel; user-space emulation on Hypervisor.framework cannot inject
- * a synchronous IPI into a sibling vCPU thread, so the window remains.
- * The guest is responsible for serializing concurrent PT mutations
- * against concurrent accesses (futex / pthread_mutex), which is the same
- * contract real Linux requires of well-behaved multi-threaded code. A
- * bounded-retry on stale-TLB data aborts is a known hardening direction
- * if a workload ever surfaces an actual reproducer.
+ * Cross-vCPU shootdown window: between vCPU A releasing mmap_lock at the end of
+ * an mprotect/munmap and the shim on A issuing the TLBI, sibling vCPU B may
+ * continue executing EL0 code that hits A's now-stale TLB entries. Real Linux
+ * closes this with cross-CPU IPI synchronization in the kernel; user-space
+ * emulation on Hypervisor.framework cannot inject a synchronous IPI into a
+ * sibling vCPU thread, so the window remains. The guest is responsible for
+ * serializing concurrent PT mutations against concurrent accesses (futex /
+ * pthread_mutex), which is the same contract real Linux requires of
+ * well-behaved multi-threaded code. A bounded-retry on stale-TLB data aborts is
+ * a known hardening direction if a workload ever surfaces an actual reproducer.
  */
 extern _Thread_local tlbi_request_t cpu_tlbi_req;
 
@@ -592,11 +594,11 @@ static inline void tlbi_request_broadcast(void)
     cpu_tlbi_req.kind = TLBI_BROADCAST;
 }
 
-/* True if the accumulator is already at TLBI_BROADCAST. PT mutation helpers
- * use this to skip the per-page bounding-box bookkeeping (changed_lo /
- * changed_hi tracking and the final tlbi_request_range call) once a broadcast
- * is already promised; the inline tlbi_request_range itself short-circuits
- * for the same reason but the call-site loops still pay for the compares.
+/* True if the accumulator is already at TLBI_BROADCAST. PT mutation helpers use
+ * this to skip the per-page bounding-box bookkeeping (changed_lo / changed_hi
+ * tracking and the final tlbi_request_range call) once a broadcast is already
+ * promised; the inline tlbi_request_range itself short-circuits for the same
+ * reason but the call-site loops still pay for the compares.
  */
 static inline bool tlbi_request_is_broadcast(void)
 {
@@ -604,23 +606,23 @@ static inline bool tlbi_request_is_broadcast(void)
 }
 
 /* Mark that the current syscall's PT mutation introduced executable content
- * visible to EL0 (a new X mapping, or an mprotect that added MEM_PERM_X to
- * a previously-NX page). The shim consults this via X11 on syscall return
- * to decide whether IC IALLU is needed after the TLBI sequence. Data-only
- * page-table changes (mprotect RW<->R, munmap of data, etc.) leave this
- * cleared so the I-cache invalidation is skipped.
+ * visible to EL0 (a new X mapping, or an mprotect that added MEM_PERM_X to a
+ * previously-NX page). The shim consults this via X11 on syscall return to
+ * decide whether IC IALLU is needed after the TLBI sequence. Data-only
+ * page-table changes (mprotect RW<->R, munmap of data, etc.) leave this cleared
+ * so the I-cache invalidation is skipped.
  */
 static inline void tlbi_request_mark_icache(void)
 {
     cpu_tlbi_req.icache_flush = 1;
 }
 
-/* Encode the pending TLBI request into the vCPU's X8/X9/X10/X11 registers
- * for the shim's post-HVC dispatch and clear the per-vCPU accumulator.
- * Both the syscall HVC #5 epilogue and the HVC #11 EL0-fault handler use
- * this so the same X8 wire codes (and X11 I-cache hint) drive every TLBI
- * the host issues on behalf of the guest. Keeping the helper inline lets
- * the call sites compile to the same switch in both files.
+/* Encode the pending TLBI request into the vCPU's X8/X9/X10/X11 registers for
+ * the shim's post-HVC dispatch and clear the per-vCPU accumulator. Both the
+ * syscall HVC #5 epilogue and the HVC #11 EL0-fault handler use this so the
+ * same X8 wire codes (and X11 I-cache hint) drive every TLBI the host issues on
+ * behalf of the guest. Keeping the helper inline lets the call sites compile to
+ * the same switch in both files.
  */
 static inline void tlbi_request_emit_to_vcpu(hv_vcpu_t vcpu)
 {
@@ -636,13 +638,14 @@ static inline void tlbi_request_emit_to_vcpu(hv_vcpu_t vcpu)
         hv_vcpu_set_reg(vcpu, HV_REG_X11, cpu_tlbi_req.icache_flush ? 1 : 0);
         break;
     case TLBI_RANGE_LARGE: {
-        /* Single-shot TLBI RVAE1IS for ranges in (16..64] pages. The
-         * operand format and the SCALE=0 / TG=01 / ASID=0 assumptions are
-         * documented at tlbi_rvae1is_operand above. ASID stays 0 because
-         * the shim runs single-ASID (TCR_EL1.A1=0, TTBR0 ASID=0; rosetta
-         * does not allocate a separate ASID). If a future change
-         * introduces non-zero ASIDs, the helper signature and the
-         * tlbi_request_t accumulator both need an ASID field. */
+        /* Single-shot TLBI RVAE1IS for ranges in (16..64] pages. The operand
+         * format and the SCALE=0 / TG=01 / ASID=0 assumptions are documented at
+         * tlbi_rvae1is_operand above. ASID stays 0 because the shim runs
+         * single-ASID (TCR_EL1.A1=0, TTBR0 ASID=0; rosetta does not allocate a
+         * separate ASID). If a future change introduces non-zero ASIDs, the
+         * helper signature and the tlbi_request_t accumulator both need an ASID
+         * field.
+         */
         uint64_t operand =
             tlbi_rvae1is_operand(cpu_tlbi_req.start, cpu_tlbi_req.pages);
         hv_vcpu_set_reg(vcpu, HV_REG_X8, 4);
@@ -664,9 +667,9 @@ static inline void tlbi_request_range(uint64_t start, uint64_t end)
         return;
     if (end <= start)
         return;
-    /* Page-align: TLBI VAE1IS operates on 4 KiB granules. ALIGN_UP can
-     * overflow if end is within PAGE_SIZE-1 of UINT64_MAX; saturate to
-     * broadcast in that pathological case rather than wrap to 0.
+    /* Page-align: TLBI VAE1IS operates on 4 KiB granules. ALIGN_UP can overflow
+     * if end is within PAGE_SIZE-1 of UINT64_MAX; saturate to broadcast in that
+     * pathological case rather than wrap to 0.
      */
     const uint64_t mask = 0xFFFULL;
     if (end > UINT64_MAX - mask) {
@@ -676,12 +679,13 @@ static inline void tlbi_request_range(uint64_t start, uint64_t end)
     uint64_t s = start & ~mask;
     uint64_t e = (end + mask) & ~mask;
     uint64_t n = (e - s) >> 12;
-    /* Two thresholds. (a) <= TLBI_SELECTIVE_MAX_PAGES uses the per-page
-     * VAE1IS loop, which preserves the most TLB entries. (b) <=
-     * TLBI_RVAE_MAX_PAGES uses a single TLBI RVAE1IS via FEAT_TLBIRANGE,
-     * which still preserves unrelated TLB entries but costs only one
-     * instruction issue. Above TLBI_RVAE_MAX_PAGES or when the feature is
-     * absent, broadcast (TLBI VMALLE1IS). */
+    /* Two thresholds. (a) <= TLBI_SELECTIVE_MAX_PAGES uses the per-page VAE1IS
+     * loop, which preserves the most TLB entries. (b) <= TLBI_RVAE_MAX_PAGES
+     * uses a single TLBI RVAE1IS via FEAT_TLBIRANGE, which still preserves
+     * unrelated TLB entries but costs only one instruction issue. Above
+     * TLBI_RVAE_MAX_PAGES or when the feature is absent, broadcast (TLBI
+     * VMALLE1IS).
+     */
     uint64_t large_cap =
         g_tlbi_range_supported ? TLBI_RVAE_MAX_PAGES : TLBI_SELECTIVE_MAX_PAGES;
     if (n > large_cap) {
@@ -696,14 +700,15 @@ static inline void tlbi_request_range(uint64_t start, uint64_t end)
         return;
     }
     /* Coalesce by union. Disjoint ranges still produce a single bounding
-     * interval; if it stays within the active cap, the range TLBI still
-     * wins over a full flush by preserving unrelated TLB entries.
+     * interval; if it stays within the active cap, the range TLBI still wins
+     * over a full flush by preserving unrelated TLB entries.
      */
     uint64_t es = cpu_tlbi_req.start;
     uint64_t pe = (uint64_t) cpu_tlbi_req.pages * 4096ULL;
-    /* The accumulator only ever holds page counts <= large_cap (enforced by
-     * the cap check above), so es + pe never overflows on real callers, but
-     * be explicit. */
+    /* The accumulator only ever holds page counts <= large_cap (enforced by the
+     * cap check above), so es + pe never overflows on real callers, but be
+     * explicit.
+     */
     if (es > UINT64_MAX - pe) {
         tlbi_request_broadcast();
         return;
@@ -720,7 +725,8 @@ static inline void tlbi_request_range(uint64_t start, uint64_t end)
     cpu_tlbi_req.pages = (uint16_t) un;
     /* Promote kind if the coalesced range now exceeds the per-page cap. The
      * inverse direction (LARGE -> RANGE) is impossible because un >= pe / 4096
-     * after coalescing. */
+     * after coalescing.
+     */
     if (un > TLBI_SELECTIVE_MAX_PAGES)
         cpu_tlbi_req.kind = TLBI_RANGE_LARGE;
 }
@@ -731,13 +737,12 @@ static inline uint64_t guest_ipa(const guest_t *g, uint64_t offset)
     return g->ipa_base + offset;
 }
 
-/* True iff [start, end) overlaps the runtime infra reserve
- * [interp_base - INFRA_RESERVE, interp_base). Covers the full
- * reserve including the 64 KiB null-guard slot at the bottom (which
- * has no PT entries but must not become semantically reachable from
- * guest mmap state). Used by sys_mmap (MAP_FIXED), sys_munmap, and
- * sys_mprotect to reject guest attempts to touch page tables, shim
- * code, or shim data through the syscall surface.
+/* True iff [start, end) overlaps the runtime infra reserve [interp_base -
+ * INFRA_RESERVE, interp_base). Covers the full reserve including the 64 KiB
+ * null-guard slot at the bottom (which has no PT entries but must not become
+ * semantically reachable from guest mmap state). Used by sys_mmap (MAP_FIXED),
+ * sys_munmap, and sys_mprotect to reject guest attempts to touch page tables,
+ * shim code, or shim data through the syscall surface.
  */
 static inline bool guest_range_hits_infra(const guest_t *g,
                                           uint64_t start,
@@ -762,17 +767,17 @@ static inline bool guest_addr_in_infra(const guest_t *g, uint64_t addr)
 
 /* API */
 
-/* Allocate guest memory, create VM, map to hypervisor.
- * size: primary buffer size (0 = auto-detect from IPA capacity).
- * ipa_bits: IPA width for HVF VM (0 = auto-detect).
+/* Allocate guest memory, create VM, map to hypervisor. size: primary buffer
+ * size (0 = auto-detect from IPA capacity). ipa_bits: IPA width for HVF VM (0 =
+ * auto-detect).
  * Returns 0 on success, -1 on failure.
  */
 int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits);
 
-/* Initialize guest from a POSIX shared memory fd (CoW fork path).
- * Maps shm_fd MAP_PRIVATE (copy-on-write), creates HVF VM, maps to
- * hypervisor. The child gets an instant CoW snapshot of parent's guest
- * memory without copying. shm_fd is closed after mapping.
+/* Initialize guest from a POSIX shared memory fd (CoW fork path). Maps shm_fd
+ * MAP_PRIVATE (copy-on-write), creates HVF VM, maps to hypervisor. The child
+ * gets an instant CoW snapshot of parent's guest memory without copying. shm_fd
+ * is closed after mapping.
  * Returns 0 on success, -1 on failure.
  */
 int guest_init_from_shm(guest_t *g,
@@ -785,19 +790,21 @@ void guest_destroy(guest_t *g);
 
 /* Install a Stage-2 mapping for a high IPA range that the primary buffer does
  * not cover (e.g. rosetta's segments at 128 TiB). Calls hv_vm_map with the
- * supplied permissions. If host_va_inout points to NULL, allocates an anon
- * host buffer of the requested size and records ownership so guest_destroy
- * frees it. Otherwise the caller-supplied host_va is mapped as-is and the
- * mapping does not own it. size and gpa must be page-aligned.
+ * supplied permissions. If host_va_inout points to NULL, allocates an anon host
+ * buffer of the requested size and records ownership so guest_destroy frees it.
+ * Otherwise the caller-supplied host_va is mapped as-is and the mapping does
+ * not own it. size and gpa must be page-aligned.
  *
  * The new region is appended to g->mappings[] for guest_ptr / gva_resolve
- * fall-through. Returns 0 on success, -1 if GUEST_MAX_MAPPINGS is exhausted,
- * if the allocation/mapping fails, or if the range collides with the primary
- * buffer or an existing extra mapping.
+ * fall-through.
+ *
+ * Returns 0 on success, -1 if GUEST_MAX_MAPPINGS is exhausted, if the
+ * allocation/mapping fails, or if the range collides with the primary buffer or
+ * an existing extra mapping.
  *
  * Locking: callers MUST hold mmap_lock. gva_resolve_perm reads mappings[]
- * lock-free during page-table walks, so mutating n_mappings / mappings[]
- * from concurrent vCPUs without serialization would race.
+ * lock-free during page-table walks, so mutating n_mappings / mappings[] from
+ * concurrent vCPUs without serialization would race.
  */
 int guest_add_mapping(guest_t *g,
                       uint64_t gpa,
@@ -814,39 +821,43 @@ int guest_add_mapping(guest_t *g,
  */
 void guest_clear_rosetta_state(guest_t *g);
 
-/* Linear scan of g->mappings[] for the entry covering gpa. Returns NULL if
- * gpa is below g->guest_size (i.e. inside the primary buffer) or not covered
- * by any extra mapping.
+/* Linear scan of g->mappings[] for the entry covering gpa.
+ *
+ * Returns NULL if gpa is below g->guest_size (i.e. inside the primary buffer)
+ * or not covered by any extra mapping.
  */
 const guest_mapping_t *guest_find_mapping(const guest_t *g, uint64_t gpa);
 
-/* Bump-allocate a 2 MiB block from the overflow segments. Lazily creates a
- * new 1 GiB segment (via mmap + hv_vm_map at g->overflow_ipa_next) when the
- * existing segments are exhausted. Returns the GPA of the allocated block,
- * or UINT64_MAX if all GUEST_MAX_OVERFLOW segments are full or a host/HVF
- * allocation step failed. Callers should treat UINT64_MAX as -ENOMEM.
+/* Bump-allocate a 2 MiB block from the overflow segments. Lazily creates a new
+ * 1 GiB segment (via mmap + hv_vm_map at g->overflow_ipa_next) when the
+ * existing segments are exhausted.
+ *
+ * Returns the GPA of the allocated block, or UINT64_MAX if all
+ * GUEST_MAX_OVERFLOW segments are full or a host/HVF allocation step failed.
+ * Callers should treat UINT64_MAX as -ENOMEM.
  *
  * Locking: callers MUST hold mmap_lock. gva_resolve_perm reads overflow[]
  * lock-free during page-table walks.
  */
 uint64_t guest_overflow_alloc(guest_t *g);
 
-/* Locate the overflow segment covering gpa. Returns NULL if gpa is not within
- * any overflow segment.
+/* Locate the overflow segment covering gpa.
+ *
+ * Returns NULL if gpa is not within any overflow segment.
  */
 const guest_overflow_t *guest_find_overflow(const guest_t *g, uint64_t gpa);
 
 /* Returns true when [gpa, gpa+len) is fully contained within the primary
- * buffer, OR fully contained within a single extra mapping, OR fully
- * contained within a single overflow segment. The check rejects ranges that
- * straddle region boundaries -- host pointers cannot safely span discontiguous
- * backing regions. len == 0 returns true (zero-length ranges are well-formed
- * by convention; syscall handlers that disallow them check separately).
+ * buffer, OR fully contained within a single extra mapping, OR fully contained
+ * within a single overflow segment. The check rejects ranges that straddle
+ * region boundaries -- host pointers cannot safely span discontiguous backing
+ * regions. len == 0 returns true (zero-length ranges are well-formed by
+ * convention; syscall handlers that disallow them check separately).
  *
  * Use this for syscalls that need to validate a guest IPA range without
  * coupling to the primary-buffer-only assumption: sys_mmap MAP_FIXED,
- * sys_munmap, sys_mremap, sys_mprotect, sys_msync, and any future caller
- * that handles rosetta high-VA traffic.
+ * sys_munmap, sys_mremap, sys_mprotect, sys_msync, and any future caller that
+ * handles rosetta high-VA traffic.
  */
 bool guest_is_valid_range(const guest_t *g, uint64_t gpa, uint64_t len);
 
@@ -856,49 +867,48 @@ bool guest_is_valid_range(const guest_t *g, uint64_t gpa, uint64_t len);
  * L0[511] -> L1, L1[511] -> L2, and L2[384..511] = 128 x 2 MiB block
  * descriptors with PT_AP_RW_EL0 | PT_UXN | PT_PXN (RW, non-executable).
  * Stores the resulting TTBR1 IPA in g->ttbr1 and sets g->kbuf_gpa /
- * g->kbuf_base. On any failure all three fields are scrubbed to 0/NULL
- * so the caller cannot read stale state.
+ * g->kbuf_base. On any failure all three fields are scrubbed to 0/NULL so the
+ * caller cannot read stale state.
  *
  * Returns 0 on success, -1 on alignment / bounds / PT-pool-exhaustion failure.
  *
- * Locking: callers MUST hold mmap_lock. The function mutates the PT pool
- * and the kbuf fields; gva translation reads ttbr1 lock-free.
+ * Locking: callers MUST hold mmap_lock. The function mutates the PT pool and
+ * the kbuf fields; gva translation reads ttbr1 lock-free.
  */
 int guest_init_kbuf(guest_t *g, uint64_t kbuf_gpa);
 
-/* Install the TTBR0 user-VA mirror of the kbuf window. Walks the existing
- * TTBR0 tree (at g->ttbr0) to L0[511]/L1[511]/L2[384..511] and writes
- * 128 x 2 MiB block descriptors mapping [KBUF_USER_VA, KBUF_USER_VA +
- * KBUF_SIZE) to [g->kbuf_gpa, g->kbuf_gpa + KBUF_SIZE) with RW + UXN + PXN
- * perms. Rosetta's TaggedPointer extraction strips bits 63:48 so the same
- * physical pages must be reachable through both TTBR1 (kernel VA) and
- * TTBR0 (the user-VA alias).
+/* Install the TTBR0 user-VA mirror of the kbuf window. Walks the existing TTBR0
+ * tree (at g->ttbr0) to L0[511]/L1[511]/L2[384..511] and writes 128 x 2 MiB
+ * block descriptors mapping [KBUF_USER_VA, KBUF_USER_VA + KBUF_SIZE) to
+ * [g->kbuf_gpa, g->kbuf_gpa + KBUF_SIZE) with RW + UXN + PXN perms. Rosetta's
+ * TaggedPointer extraction strips bits 63:48 so the same physical pages must be
+ * reachable through both TTBR1 (kernel VA) and TTBR0 (the user-VA alias).
  *
- * Must be called after guest_build_page_tables (g->ttbr0 must point at a
- * valid L0 page) and after guest_init_kbuf (g->kbuf_gpa must be set).
+ * Must be called after guest_build_page_tables (g->ttbr0 must point at a valid
+ * L0 page) and after guest_init_kbuf (g->kbuf_gpa must be set).
  * Returns 0 on success, -1 on PT-pool exhaustion or invalid state.
  *
  * Locking: callers MUST hold mmap_lock.
  */
 int guest_install_kbuf_user_alias(guest_t *g);
 
-/* Install L2 block descriptors mapping [va_start, va_end) to
- * [gpa_start, gpa_start + (va_end-va_start)) under TTBR0. Both addresses
- * and the size must be 2 MiB-aligned. Walks the existing TTBR0 tree at
- * g->ttbr0 and allocates L1/L2 tables from the PT pool as needed.
+/* Install L2 block descriptors mapping [va_start, va_end) to [gpa_start,
+ * gpa_start + (va_end-va_start)) under TTBR0. Both addresses and the size must
+ * be 2 MiB-aligned. Walks the existing TTBR0 tree at g->ttbr0 and allocates
+ * L1/L2 tables from the PT pool as needed.
  *
- * If an L2 slot is already populated, the function leaves it untouched
- * and continues with the next block; the caller is expected to use
+ * If an L2 slot is already populated, the function leaves it untouched and
+ * continues with the next block; the caller is expected to use
  * guest_update_perms (or split + update_perms) if it needs to refine
  * permissions on an already-mapped 2 MiB block.
  *
- * Records a guest_pt_gen_bump and a TLBI request covering the new range
- * so the shim invalidates matching TLB entries on the way back to EL0.
+ * Records a guest_pt_gen_bump and a TLBI request covering the new range so the
+ * shim invalidates matching TLB entries on the way back to EL0.
  *
  * Returns 0 on success, -1 on alignment, PT-pool-exhaustion, or out-of-L0
- * failure. Used by sys_mmap for high-VA MAP_FIXED requests (rosetta's
- * JIT slabs at 240 TiB, code caches at 85 TiB) where the VA lives outside
- * the primary buffer but the GPA still does.
+ * failure. Used by sys_mmap for high-VA MAP_FIXED requests (rosetta's JIT slabs
+ * at 240 TiB, code caches at 85 TiB) where the VA lives outside the primary
+ * buffer but the GPA still does.
  *
  * Locking: callers MUST hold mmap_lock.
  */
@@ -908,16 +918,16 @@ int guest_map_va_range(guest_t *g,
                        uint64_t gpa_start,
                        int perms);
 
-/* Install (or overwrite) 4 KiB L3 page descriptors mapping [va, va+length)
- * to [gpa, gpa+length) with the requested perms. Unlike guest_update_perms,
- * which only edits existing descriptors and falls back to region metadata
- * for invalid entries, this helper always writes a fresh make_page_desc so
- * a previously-invalidated L3 slot is restored without consulting the
- * region table. Splits L2 block descriptors on the path lazily.
+/* Install (or overwrite) 4 KiB L3 page descriptors mapping [va, va+length) to
+ * [gpa, gpa+length) with the requested perms. Unlike guest_update_perms, which
+ * only edits existing descriptors and falls back to region metadata for invalid
+ * entries, this helper always writes a fresh make_page_desc so a
+ * previously-invalidated L3 slot is restored without consulting the region
+ * table. Splits L2 block descriptors on the path lazily.
  *
- * All three arguments (va, length, gpa) must be PAGE_SIZE aligned. The L2
- * chain (L0->L1->L2) must already be in place (caller's responsibility,
- * typically via a prior guest_map_va_range).
+ * All three arguments (va, length, gpa) must be PAGE_SIZE aligned. The L2 chain
+ * (L0->L1->L2) must already be in place (caller's responsibility, typically via
+ * a prior guest_map_va_range).
  *
  * Returns 0 on success, -1 on alignment, missing L2 chain, or PT-pool
  * exhaustion.
@@ -935,12 +945,12 @@ int guest_install_va_pages(guest_t *g,
  */
 bool guest_va_block_mapped(const guest_t *g, uint64_t va);
 
-/* Returns true when the VA range [va, va+size) overlaps the user-VA kbuf
- * alias window [KBUF_USER_VA, KBUF_USER_VA+KBUF_SIZE). Callers that install
- * TTBR0 mappings (the future rosetta_finalize, sys_mmap MAP_FIXED touching
- * this range, the page-table-build pass) must reject MEM_PERM_X when this
- * helper returns true: TTBR1 maps the same physical pages RW only, and an
- * executable TTBR0 alias would defeat HVF's per-mapping W^X enforcement.
+/* Returns true when the VA range [va, va+size) overlaps the user-VA kbuf alias
+ * window [KBUF_USER_VA, KBUF_USER_VA+KBUF_SIZE). Callers that install TTBR0
+ * mappings (the future rosetta_finalize, sys_mmap MAP_FIXED touching this
+ * range, the page-table-build pass) must reject MEM_PERM_X when this helper
+ * returns true: TTBR1 maps the same physical pages RW only, and an executable
+ * TTBR0 alias would defeat HVF's per-mapping W^X enforcement.
  */
 static inline bool guest_kbuf_user_va_overlap(uint64_t va, uint64_t size)
 {
@@ -964,9 +974,9 @@ void *guest_ptr_w(const guest_t *g, uint64_t gva);
 
 /* Get a host pointer for a guest virtual address, with available byte count.
  * *avail receives the number of contiguous bytes from gva whose page table
- * entries are valid and satisfy required_perms (MEM_PERM_R/W/X bitmask).
- * The function walks forward across adjacent L2 blocks and L3 pages until it
- * hits an invalid, permission-mismatched, or physically non-contiguous entry.
+ * entries are valid and satisfy required_perms (MEM_PERM_R/W/X bitmask). The
+ * function walks forward across adjacent L2 blocks and L3 pages until it hits
+ * an invalid, permission-mismatched, or physically non-contiguous entry.
  * Returns NULL if the starting page is unmapped or lacks required_perms.
  */
 void *guest_ptr_avail(const guest_t *g,
@@ -976,7 +986,9 @@ void *guest_ptr_avail(const guest_t *g,
 
 /* Get a host pointer for a guest range, capped to a caller-provided limit.
  * *avail receives the number of contiguous bytes available from gva, up to
- * len_limit. Returns NULL if the starting address is unmapped or lacks perms.
+ * len_limit.
+ *
+ * Returns NULL if the starting address is unmapped or lacks perms.
  */
 void *guest_ptr_bound(const guest_t *g,
                       uint64_t gva,
@@ -989,9 +1001,9 @@ void *guest_ptr_bound(const guest_t *g,
  */
 int guest_read(const guest_t *g, uint64_t gva, void *dst, size_t len);
 
-/* Optimized guest-to-host copy for small fixed-size inputs.
- * Uses a direct guest pointer when the full range is contiguous and readable,
- * otherwise falls back to guest_read() for boundary-crossing safety.
+/* Optimized guest-to-host copy for small fixed-size inputs. Uses a direct guest
+ * pointer when the full range is contiguous and readable, otherwise falls back
+ * to guest_read() for boundary-crossing safety.
  */
 int guest_read_small(const guest_t *g, uint64_t gva, void *dst, size_t len);
 
@@ -1000,36 +1012,37 @@ int guest_read_small(const guest_t *g, uint64_t gva, void *dst, size_t len);
  */
 int guest_write(guest_t *g, uint64_t gva, const void *src, size_t len);
 
-/* Optimized host-to-guest copy for small fixed-size outputs.
- * Uses a direct guest pointer when the full range is contiguous and writable,
- * otherwise falls back to guest_write() for boundary-crossing safety.
+/* Optimized host-to-guest copy for small fixed-size outputs. Uses a direct
+ * guest pointer when the full range is contiguous and writable, otherwise falls
+ * back to guest_write() for boundary-crossing safety.
  */
 int guest_write_small(guest_t *g, uint64_t gva, const void *src, size_t len);
 
-/* Read a null-terminated string from guest memory.
- * Copies up to max-1 bytes + NUL into dst.
+/* Read a null-terminated string from guest memory. Copies up to max-1 bytes +
+ * NUL into dst.
  * Returns string length or -1 if out of bounds / unterminated.
  */
 int guest_read_str(const guest_t *g, uint64_t gva, char *dst, size_t max);
 
-/* Optimized guest string read for short, contiguous paths.
- * Uses a direct guest pointer when a full max-1-byte window is readable,
- * otherwise falls back to guest_read_str() for boundary-safe scanning.
+/* Optimized guest string read for short, contiguous paths. Uses a direct guest
+ * pointer when a full max-1-byte window is readable, otherwise falls back to
+ * guest_read_str() for boundary-safe scanning.
  */
 int guest_read_str_small(const guest_t *g, uint64_t gva, char *dst, size_t max);
 
-/* Build L0->L1->L2 page tables from an array of memory regions.
- * Uses 2MiB block descriptors. Returns the TTBR0 value (GPA of L0 table),
- * or 0 on failure.
+/* Build L0->L1->L2 page tables from an array of memory regions. Uses 2MiB block
+ * descriptors.
+ *
+ * Returns the TTBR0 value (GPA of L0 table), or 0 on failure.
  */
 uint64_t guest_build_page_tables(guest_t *g,
                                  const mem_region_t *regions,
                                  int n);
 
-/* Extend page tables to cover a new address range [start, end) with 2MiB
- * block descriptors. Reuses the existing L0->L1 table structure and
- * allocates new L2 tables as needed. Records a TLBI request covering the
- * affected range (range or broadcast).
+/* Extend page tables to cover a new address range [start, end) with 2MiB block
+ * descriptors. Reuses the existing L0->L1 table structure and allocates new L2
+ * tables as needed. Records a TLBI request covering the affected range (range
+ * or broadcast).
  * Returns 0 on success, -1 on failure.
  */
 int guest_extend_page_tables(guest_t *g,
@@ -1037,49 +1050,47 @@ int guest_extend_page_tables(guest_t *g,
                              uint64_t end,
                              int perms);
 
-/* Split a 2MiB block descriptor into 512 x 4KiB L3 page descriptors.
- * block_gpa must be within a currently-mapped 2MiB block. The block's
- * permissions are inherited by all 512 page entries. If the block is
- * already split (L2 entry is a table descriptor), this is a no-op.
+/* Split a 2MiB block descriptor into 512 x 4KiB L3 page descriptors. block_gpa
+ * must be within a currently-mapped 2MiB block. The block's permissions are
+ * inherited by all 512 page entries. If the block is already split (L2 entry is
+ * a table descriptor), this is a no-op.
  *
- * No TLBI request is issued: the split alone preserves every VA->PA
- * translation in the block (each L3 page descriptor inherits the block's
- * permissions). Every caller follows the split with guest_invalidate_ptes
- * or guest_update_perms on the actually-changing range; that subsequent
- * call records the TLBI, and TLBI VAE1IS for any VA in the block also
- * invalidates the cached 2 MiB block entry covering that VA (ARM ARM
- * B2.2.5.6), so a single per-page TLBI suffices to retire the stale
- * block translation as soon as any affected page is accessed.
+ * No TLBI request is issued: the split alone preserves every VA->PA translation
+ * in the block (each L3 page descriptor inherits the block's permissions).
+ * Every caller follows the split with guest_invalidate_ptes or
+ * guest_update_perms on the actually-changing range; that subsequent call
+ * records the TLBI, and TLBI VAE1IS for any VA in the block also invalidates
+ * the cached 2 MiB block entry covering that VA (ARM ARM B2.2.5.6), so a single
+ * per-page TLBI suffices to retire the stale block translation as soon as any
+ * affected page is accessed.
  *
  * Returns 0 on success, -1 on failure.
  */
 int guest_split_block(guest_t *g, uint64_t block_gpa);
 
-/* Invalidate page table entries for the range [start, end).
- * Sets L2 block descriptors and L3 page descriptors to 0 (invalid),
- * causing translation faults on access. Used when mprotect sets
- * PROT_NONE; the correct behavior is for the guest to fault.
- * If a 2MiB block is only partially invalidated, the block is split
- * into L3 pages first (preserving the non-invalidated pages).
+/* Invalidate page table entries for the range [start, end). Sets L2 block
+ * descriptors and L3 page descriptors to 0 (invalid), causing translation
+ * faults on access. Used when mprotect sets PROT_NONE; the correct behavior is
+ * for the guest to fault. If a 2MiB block is only partially invalidated, the
+ * block is split into L3 pages first (preserving the non-invalidated pages).
  * Records a TLBI request covering the invalidated range.
  * Returns 0 on success, -1 on failure.
  */
 int guest_invalidate_ptes(guest_t *g, uint64_t start, uint64_t end);
 
-/* Update page table permissions for the range [start, end).
- * If a 2MiB block needs mixed permissions (only part of it is being
- * updated), the block is automatically split into 4KiB L3 pages first.
- * If the entire 2MiB block is being updated, the block descriptor is
- * modified in place without splitting.
- * perms is a MEM_PERM_R/W/X combination. Records a TLBI request only for
- * pages whose descriptor actually changed.
+/* Update page table permissions for the range [start, end). If a 2MiB block
+ * needs mixed permissions (only part of it is being updated), the block is
+ * automatically split into 4KiB L3 pages first. If the entire 2MiB block is
+ * being updated, the block descriptor is modified in place without splitting.
+ * perms is a MEM_PERM_R/W/X combination. Records a TLBI request only for pages
+ * whose descriptor actually changed.
  * Returns 0 on success, -1 on failure.
  */
 int guest_update_perms(guest_t *g, uint64_t start, uint64_t end, int perms);
 
-/* Reset guest memory for execve. Zeros ELF, brk, stack, mmap regions and
- * resets page table pool, brk, and mmap allocation state. Preserves the
- * host_base mapping and VM/vCPU handles.
+/* Reset guest memory for execve. Zeros ELF, brk, stack, mmap regions and resets
+ * page table pool, brk, and mmap allocation state. Preserves the host_base
+ * mapping and VM/vCPU handles.
  */
 void guest_reset(guest_t *g);
 
@@ -1089,9 +1100,11 @@ typedef struct {
     uint64_t size;   /* Size in bytes */
 } used_region_t;
 
-/* Enumerate used memory regions for fork state transfer.
- * Writes up to max entries into out[]. Returns the count written.
- * shim_size is the shim binary size (needed to determine shim region).
+/* Enumerate used memory regions for fork state transfer. Writes up to max
+ * entries into out[].
+ *
+ * Returns the count written. shim_size is the shim binary size (needed to
+ * determine shim region).
  */
 int guest_get_used_regions(const guest_t *g,
                            unsigned int shim_size,
@@ -1101,8 +1114,10 @@ int guest_get_used_regions(const guest_t *g,
 /* Semantic region tracking API. */
 
 /* Add a region to the sorted tracking array. Overlapping regions are NOT
- * merged; each call adds a distinct entry. Returns 0 on success, -1 if the
- * region table is full or backing fd duplication fails.
+ * merged; each call adds a distinct entry.
+ *
+ * Returns 0 on success, -1 if the region table is full or backing fd
+ * duplication fails.
  */
 int guest_region_add(guest_t *g,
                      uint64_t start,
@@ -1149,16 +1164,15 @@ int guest_region_add_ex_owned_gpa(guest_t *g,
                                   const char *name,
                                   int owned_backing_fd);
 
-/* Add a preannounced region that appears in /proc/self/maps only.
- * These entries are kept separate from regions[] so they do not cause
- * -EEXIST on guest MAP_FIXED_NOREPLACE reservations.
+/* Add a preannounced region that appears in /proc/self/maps only. These entries
+ * are kept separate from regions[] so they do not cause -EEXIST on guest
+ * MAP_FIXED_NOREPLACE reservations.
  *
- * No producer wires this up today. The storage, fork-IPC, and
- * /proc/self/maps consumer are kept as scaffolding for runtimes that
- * consult /proc/self/maps before reserving VA ranges. Preannouncing
- * the x86_64 image during Rosetta bring-up was tried and rejected: it
- * perturbed Rosetta's internal allocation tracker. The hook stays
- * until a workload needs an advertise-only entry.
+ * No producer wires this up today. The storage, fork-IPC, and /proc/self/maps
+ * consumer are kept as scaffolding for runtimes that consult /proc/self/maps
+ * before reserving VA ranges. Preannouncing the x86_64 image during Rosetta
+ * bring-up was tried and rejected: it perturbed Rosetta's internal allocation
+ * tracker. The hook stays until a workload needs an advertise-only entry.
  */
 int guest_preannounce(guest_t *g,
                       uint64_t start,
@@ -1173,47 +1187,49 @@ int guest_preannounce(guest_t *g,
  */
 void guest_region_remove(guest_t *g, uint64_t start, uint64_t end);
 
-/* Find the region containing addr. Returns a pointer to the region (inside
- * the guest_t regions array) or NULL if addr is not in any tracked region.
+/* Find the region containing addr.
+ *
+ * Returns a pointer to the region (inside the guest_t regions array) or NULL if
+ * addr is not in any tracked region.
  */
 const guest_region_t *guest_region_find(const guest_t *g, uint64_t addr);
 
-/* Update protection bits for all region coverage in [start, end).
- * Splits regions at boundaries as needed.
+/* Update protection bits for all region coverage in [start, end). Splits
+ * regions at boundaries as needed.
  */
 void guest_region_set_prot(guest_t *g, uint64_t start, uint64_t end, int prot);
 
-/* Index of the first region whose end is strictly above addr. Earlier
- * regions sort entirely below addr (regions[] is start-sorted and
- * non-overlapping, so ends are monotonic). Callers use this to skip the
- * untouched prefix in O(log n) before a linear walk over the overlap.
+/* Index of the first region whose end is strictly above addr. Earlier regions
+ * sort entirely below addr (regions[] is start-sorted and non-overlapping, so
+ * ends are monotonic). Callers use this to skip the untouched prefix in O(log
+ * n) before a linear walk over the overlap.
  */
 int guest_region_first_end_above(const guest_t *g, uint64_t addr);
 
 /* True if every tracked region overlapping [start, end) already has prot.
- * Returns true vacuously when no region overlaps the range, since callers
- * use this to decide whether page-table maintenance can be skipped and an
- * untracked sub-range has no PTEs of its own to update.
+ * Returns true vacuously when no region overlaps the range, since callers use
+ * this to decide whether page-table maintenance can be skipped and an untracked
+ * sub-range has no PTEs of its own to update.
  */
 bool guest_region_range_prot_uniform(const guest_t *g,
                                      uint64_t start,
                                      uint64_t end,
                                      int prot);
 
-/* True if any tracked region overlapping [start, end) is MAP_NORESERVE.
- * Callers must run page-table maintenance for such ranges even when prot
- * already matches, because lazy materialization may have produced PTEs
- * that need re-permissioning.
+/* True if any tracked region overlapping [start, end) is MAP_NORESERVE. Callers
+ * must run page-table maintenance for such ranges even when prot already
+ * matches, because lazy materialization may have produced PTEs that need
+ * re-permissioning.
  */
 bool guest_region_range_has_noreserve(const guest_t *g,
                                       uint64_t start,
                                       uint64_t end);
 
-/* Try to materialize a lazy (MAP_NORESERVE) page at the given offset.
- * Called from the data/instruction abort handler when the faulting address
- * falls within a noreserve region. Creates page table entries for one 2MiB
- * block containing the fault address, zeros the memory, and clears the
- * noreserve flag for the materialized sub-range.
+/* Try to materialize a lazy (MAP_NORESERVE) page at the given offset. Called
+ * from the data/instruction abort handler when the faulting address falls
+ * within a noreserve region. Creates page table entries for one 2MiB block
+ * containing the fault address, zeros the memory, and clears the noreserve flag
+ * for the materialized sub-range.
  * Returns 0 on success (caller should TLBI and retry), -1 if the offset is not
  * in a noreserve region.
  */

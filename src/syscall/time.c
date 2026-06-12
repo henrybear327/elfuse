@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Clock, nanosleep, gettimeofday, and interval timer operations. All
- * functions are called from syscall_dispatch() in syscall/syscall.c.
+ * Clock, nanosleep, gettimeofday, and interval timer operations. All functions
+ * are called from syscall_dispatch() in syscall/syscall.c.
  */
 
 #include <errno.h>
@@ -34,20 +34,20 @@
  *
  *   clockid = ~pid << 3 | type [| CPUCLOCK_PERTHREAD_MASK]
  *
- * Where type is:  CPUCLOCK_PROF=0, CPUCLOCK_VIRT=1, CPUCLOCK_SCHED=2
+ * Where type is: CPUCLOCK_PROF=0, CPUCLOCK_VIRT=1, CPUCLOCK_SCHED=2
  * CPUCLOCK_PERTHREAD_MASK = 4 (bit 2): set for per-thread, clear for
  * per-process pid = 0 means "self" (current process/thread).
  *
  * Examples: -2 = per-thread SCHED (self), -6 = per-process SCHED (self)
- * Threaded language runtimes use these (via pthread_getcpuclockid()) to
- * measure per-thread CPU time without sampling the whole process.
+ * Threaded language runtimes use these (via pthread_getcpuclockid()) to measure
+ * per-thread CPU time without sampling the whole process.
  */
 #define LINUX_CPUCLOCK_PERTHREAD_MASK 4
 /* Linux encodes the dynamic-pid clock as ((~pid) << 3) | type. Decoding is
  * ~clockid >> 3, but >> on a signed negative value is implementation-defined.
- * The complement of a negative value (high bit set) is non-negative, so apply
- * ~ via unsigned arithmetic and only then cast to int for a well-defined
- * right shift.
+ * The complement of a negative value (high bit set) is non-negative, so apply ~
+ * via unsigned arithmetic and only then cast to int for a well-defined right
+ * shift.
  */
 #define LINUX_CPUCLOCK_PID(clk) ((int) (~(unsigned int) (clk)) >> 3)
 
@@ -146,10 +146,9 @@ static int64_t interruptible_sleep_ns(guest_t *g,
     return 0;
 }
 
-/* Translate Linux clock IDs to macOS.
- * Linux: REALTIME=0, MONOTONIC=1, PROCESS_CPUTIME=2, THREAD_CPUTIME=3,
- * MONOTONIC_RAW=4 macOS: REALTIME=0, MONOTONIC_RAW=4, MONOTONIC=6,
- * PROCESS_CPUTIME=12, THREAD_CPUTIME=16
+/* Translate Linux clock IDs to macOS. Linux: REALTIME=0, MONOTONIC=1,
+ * PROCESS_CPUTIME=2, THREAD_CPUTIME=3, MONOTONIC_RAW=4 macOS: REALTIME=0,
+ * MONOTONIC_RAW=4, MONOTONIC=6, PROCESS_CPUTIME=12, THREAD_CPUTIME=16
  *
  * Negative clock IDs encode Linux dynamic per-process/per-thread CPU clocks.
  * time emulation translates pid=0 (self) clocks to the macOS equivalents; for
@@ -178,20 +177,19 @@ static int translate_clockid(int linux_clockid)
          */
         return CLOCK_MONOTONIC;
     default:
-        /* Handle Linux dynamic CPU clock IDs (negative values).
-         * Decode: encoded id = ~(clockid >> 3), perthread = clockid & 4,
-         * type bits = clockid & 3 (PROF=0, VIRT=1, SCHED=2).
-         * Linux's convention:
+        /* Handle Linux dynamic CPU clock IDs (negative values). Decode: encoded
+         * id = ~(clockid >> 3), perthread = clockid & 4, type bits = clockid &
+         * 3 (PROF=0, VIRT=1, SCHED=2). Linux's convention:
          *   encoded id == 0    -> "self" (process or thread variant)
          *   encoded id == pid  -> that process
          *   per-thread variant: encoded id == 0 means current thread,
          *                       or the target TID for pthread_getcpuclockid.
          *
-         * The macOS host only exposes CLOCK_THREAD_CPUTIME_ID for the
-         * calling thread, so cross-thread or cross-process queries are
-         * unsupportable. Accept both process and per-thread clocks when
-         * they refer to self (encoded 0 or matching self pid/tid). Reject
-         * foreign ids and reserved type bits with -EINVAL.
+         * The macOS host only exposes CLOCK_THREAD_CPUTIME_ID for the calling
+         * thread, so cross-thread or cross-process queries are unsupportable.
+         * Accept both process and per-thread clocks when they refer to self
+         * (encoded 0 or matching self pid/tid). Reject foreign ids and reserved
+         * type bits with -EINVAL.
          */
         if (linux_clockid < 0) {
             int type_bits = linux_clockid & 3;
@@ -275,17 +273,16 @@ int64_t sys_clock_gettime(guest_t *g, int clockid, uint64_t tp_gva)
     if (mac_clockid < 0)
         return -LINUX_EINVAL;
 
-    /* When the trap came from the __kernel_clock_gettime vDSO
-     * svc_fallback, the trampoline parked the guest's CNTVCT_EL0 read in
-     * X9 before SVC, and ELR_EL1 holds SVC_PC + 4. Use X9 to seed (or
-     * refresh) the vvar anchor so subsequent calls hit the fast path.
-     * Reject any other trap: X9 would then be arbitrary guest state and
-     * seeding from it would poison the anchor.
+    /* When the trap came from the __kernel_clock_gettime vDSO svc_fallback, the
+     * trampoline parked the guest's CNTVCT_EL0 read in X9 before SVC, and
+     * ELR_EL1 holds SVC_PC + 4. Use X9 to seed (or refresh) the vvar anchor so
+     * subsequent calls hit the fast path. Reject any other trap: X9 would then
+     * be arbitrary guest state and seeding from it would poison the anchor.
      *
-     * Order matters: read X9 first, then sample host wall clocks
-     * back-to-back, then write the guest result and seed. Sampling host
-     * clocks before checking X9 would bake a permanent positive bias
-     * into the anchor from the HVF round-trip in the seeding gate.
+     * Order matters: read X9 first, then sample host wall clocks back-to-back,
+     * then write the guest result and seed. Sampling host clocks before
+     * checking X9 would bake a permanent positive bias into the anchor from the
+     * HVF round-trip in the seeding gate.
      */
     bool from_trampoline = (clockid == 0 /* CLOCK_REALTIME */ ||
                             clockid == 1 /* CLOCK_MONOTONIC */) &&
@@ -309,8 +306,8 @@ int64_t sys_clock_gettime(guest_t *g, int clockid, uint64_t tp_gva)
 
     /* Sample the OTHER clockid back-to-back so both anchor pairs reflect
      * roughly the same host moment. If the second clock_gettime fails
-     * (defensive; unreachable on macOS), skip seeding rather than fail
-     * the user's request.
+     * (defensive; unreachable on macOS), skip seeding rather than fail the
+     * user's request.
      */
     struct timespec ts_other;
     bool can_seed = false;
@@ -327,9 +324,8 @@ int64_t sys_clock_gettime(guest_t *g, int clockid, uint64_t tp_gva)
         const struct timespec *ts_mono = (clockid == 1) ? &ts : &ts_other;
         const struct timespec *ts_real = (clockid == 0) ? &ts : &ts_other;
 
-        /* Publish when the vvar is unseeded, has aged out, or has
-         * drifted relative to the freshly-sampled REALTIME (catches
-         * macOS NTP steps).
+        /* Publish when the vvar is unseeded, has aged out, or has drifted
+         * relative to the freshly-sampled REALTIME (catches macOS NTP steps).
          */
         if (!vdso_anchor_is_seeded(g) ||
             vdso_anchor_age_exceeded(g, guest_cntvct) ||
@@ -342,11 +338,11 @@ int64_t sys_clock_gettime(guest_t *g, int clockid, uint64_t tp_gva)
     return 0;
 }
 
-/* Interruptible nanosleep: break long sleeps into 100ms chunks so
- * exit_group and pending signals can be checked periodically. Without
- * this, a thread blocked in a multi-second nanosleep cannot be
- * interrupted by exit_group because hv_vcpus_exit only breaks hv_vcpu_run,
- * not host-side blocking syscalls.
+/* Interruptible nanosleep: break long sleeps into 100ms chunks so exit_group
+ * and pending signals can be checked periodically. Without this, a thread
+ * blocked in a multi-second nanosleep cannot be interrupted by exit_group
+ * because hv_vcpus_exit only breaks hv_vcpu_run, not host-side blocking
+ * syscalls.
  */
 int64_t sys_nanosleep(guest_t *g, uint64_t req_gva, uint64_t rem_gva)
 {
@@ -374,11 +370,11 @@ int64_t sys_clock_nanosleep(guest_t *g,
     if (flags & ~TIMER_ABSTIME)
         return -LINUX_EINVAL;
     /* Linux's hrtimer_nanosleep_clockid validates the timespec via
-     * timespec64_valid_strict() (kernel/time/hrtimer.c) before deciding
-     * whether the absolute deadline has expired. Negative tv_sec is
-     * rejected with EINVAL even when TIMER_ABSTIME is set, not silently
-     * treated as 'already expired'. Reject negative tv_sec unconditionally
-     * so both relative and absolute callers match the kernel contract.
+     * timespec64_valid_strict() (kernel/time/hrtimer.c) before deciding whether
+     * the absolute deadline has expired. Negative tv_sec is rejected with
+     * EINVAL even when TIMER_ABSTIME is set, not silently treated as 'already
+     * expired'. Reject negative tv_sec unconditionally so both relative and
+     * absolute callers match the kernel contract.
      */
     if (!linux_timespec_valid(&lreq))
         return -LINUX_EINVAL;
@@ -441,10 +437,10 @@ int64_t sys_gettimeofday(guest_t *g, uint64_t tv_gva, uint64_t tz_gva)
     if (tv_gva && guest_write_small(g, tv_gva, &ltv, sizeof(ltv)) < 0)
         return -LINUX_EFAULT;
 
-    /* tz is obsolete on Linux but the kernel still zeroes a non-null
-     * pointer (struct timezone has two int32 fields, 8 bytes total).
-     * Matching the vDSO fast path's `str xzr, [tz]` here keeps SVC and
-     * fast-path callers observationally identical.
+    /* tz is obsolete on Linux but the kernel still zeroes a non-null pointer
+     * (struct timezone has two int32 fields, 8 bytes total). Matching the vDSO
+     * fast path's STR XZR, [tz] here keeps SVC and fast-path callers
+     * observationally identical.
      */
     if (tz_gva) {
         const uint64_t tz_zero = 0;
@@ -464,8 +460,8 @@ int64_t sys_gettimeofday(guest_t *g, uint64_t tv_gva, uint64_t tz_gva)
 
 int64_t sys_setitimer(guest_t *g, int which, uint64_t new_gva, uint64_t old_gva)
 {
-    /* Linux reads new_gva before dispatching on which, so an invalid
-     * pointer takes precedence over an invalid which value (EFAULT > EINVAL).
+    /* Linux reads new_gva before dispatching on which, so an invalid pointer
+     * takes precedence over an invalid which value (EFAULT > EINVAL).
      */
     linux_itimerval_t lnew;
     bool has_new = false;
@@ -527,8 +523,8 @@ int64_t sys_setitimer(guest_t *g, int which, uint64_t new_gva, uint64_t old_gva)
 
 int64_t sys_getitimer(guest_t *g, int which, uint64_t val_gva)
 {
-    /* ITIMER_REAL/VIRTUAL/PROF are all emulated internally
-     * (see sys_setitimer comment).
+    /* ITIMER_REAL/VIRTUAL/PROF are all emulated internally (see sys_setitimer
+     * comment).
      */
     struct timeval val, itv;
     if (which == 0)

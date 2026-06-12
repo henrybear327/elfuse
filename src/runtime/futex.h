@@ -5,10 +5,10 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Hash table of wait queues keyed by guest virtual address. Supports
- * FUTEX_WAIT, FUTEX_WAKE, FUTEX_WAIT_BITSET, FUTEX_WAKE_BITSET,
- * FUTEX_REQUEUE, FUTEX_CMP_REQUEUE, FUTEX_WAKE_OP, and PI futexes
- * (FUTEX_LOCK_PI, FUTEX_UNLOCK_PI, FUTEX_TRYLOCK_PI).
- * Each waiter has its own condition variable for precise wakeup.
+ * FUTEX_WAIT, FUTEX_WAKE, FUTEX_WAIT_BITSET, FUTEX_WAKE_BITSET, FUTEX_REQUEUE,
+ * FUTEX_CMP_REQUEUE, FUTEX_WAKE_OP, and PI futexes (FUTEX_LOCK_PI,
+ * FUTEX_UNLOCK_PI, FUTEX_TRYLOCK_PI). Each waiter has its own condition
+ * variable for precise wakeup.
  */
 
 #pragma once
@@ -29,13 +29,11 @@ void futex_interrupt_clear(void);
 int futex_interrupt_pending(void);
 int futex_interrupt_consume(void);
 
-/* Main futex syscall entry point.
- * op:    futex operation (FUTEX_WAIT, FUTEX_WAKE, etc.)
- * uaddr: guest virtual address of the futex word
- * val:   expected value (WAIT) or max wakeups (WAKE)
- * timeout_gva: guest pointer to timespec (or 0 for no timeout)
- * uaddr2: second futex address (for REQUEUE/CMP_REQUEUE/WAKE_OP)
- * val3:  bitset (for WAIT_BITSET/WAKE_BITSET)
+/* Main futex syscall entry point. op: futex operation (FUTEX_WAIT, FUTEX_WAKE,
+ * etc.) uaddr: guest virtual address of the futex word val: expected value
+ * (WAIT) or max wakeups (WAKE) timeout_gva: guest pointer to timespec (or 0 for
+ * no timeout) uaddr2: second futex address (for REQUEUE/CMP_REQUEUE/WAKE_OP)
+ * val3: bitset (for WAIT_BITSET/WAKE_BITSET)
  * Returns 0 on success, negative Linux errno on failure.
  */
 int64_t sys_futex(guest_t *g,
@@ -46,14 +44,16 @@ int64_t sys_futex(guest_t *g,
                   uint64_t uaddr2,
                   uint32_t val3);
 
-/* Wake up to 1 waiter at uaddr. Used by thread exit for
- * CLONE_CHILD_CLEARTID cleanup. Returns number of waiters woken.
+/* Wake up to 1 waiter at uaddr. Used by thread exit for CLONE_CHILD_CLEARTID
+ * cleanup.
+ *
+ * Returns number of waiters woken.
  */
 int futex_wake_one(guest_t *g, uint64_t uaddr);
 
-/* futex_waitv (SYS 449): batch wait on multiple futex addresses.
- * clockid selects the timeout clock (Linux CLOCK_REALTIME=0 or
- * CLOCK_MONOTONIC=1); ignored when timeout_gva==0.
+/* futex_waitv (SYS 449): batch wait on multiple futex addresses. clockid
+ * selects the timeout clock (Linux CLOCK_REALTIME=0 or CLOCK_MONOTONIC=1);
+ * ignored when timeout_gva==0.
  * Returns the index of the woken futex, or negative errno.
  */
 int64_t sys_futex_waitv(guest_t *g,
@@ -63,8 +63,8 @@ int64_t sys_futex_waitv(guest_t *g,
                         uint64_t timeout_gva,
                         int clockid);
 
-/* Walk the robust futex list on thread exit and set FUTEX_OWNER_DIED
- * on each held lock. Wakes one waiter per lock so a new owner can
- * acquire it and see EOWNERDEAD.
+/* Walk the robust futex list on thread exit and set FUTEX_OWNER_DIED on each
+ * held lock. Wakes one waiter per lock so a new owner can acquire it and see
+ * EOWNERDEAD.
  */
 void robust_list_walk(guest_t *g, thread_entry_t *t);

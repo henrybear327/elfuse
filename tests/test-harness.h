@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provides TEST/PASS/FAIL macros used by all test-*.c files.
- * Each test file must declare int passes = 0, fails = 0; before using.
+ * Provides TEST/PASS/FAIL macros used by all test-*.c files. Each test file
+ * must declare int passes = 0, fails = 0; before using.
  */
 
 #pragma once
@@ -43,8 +43,8 @@
     } while (0)
 
 /* Pass if a raw-syscall-style expression returned the given negative Linux
- * errno value (e.g., -EFAULT == -14). Used by tests that bypass libc and
- * read the kernel return value directly.
+ * errno value (e.g., -EFAULT == -14). Used by tests that bypass libc and read
+ * the kernel return value directly.
  */
 #define EXPECT_RAW_ERRNO(expr, expected_neg, msg) \
     do {                                          \
@@ -55,8 +55,8 @@
             FAIL(msg);                            \
     } while (0)
 
-/* Pass if cond evaluates true; otherwise FAIL with msg. Replaces the
- * recurring "if (cond) PASS(); else FAIL(msg);" idiom.
+/* Pass if cond evaluates true; otherwise FAIL with msg. Replaces the recurring
+ * "if (cond) PASS(); else FAIL(msg);" idiom.
  */
 #define EXPECT_TRUE(cond, msg) \
     do {                       \

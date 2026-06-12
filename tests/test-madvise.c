@@ -373,8 +373,8 @@ static void test_free_anon(void)
     memset(p, 0x77, 4096);
     int rc = madvise(p, 4096, MADV_FREE);
 
-    /* Per spec the read may return either old data or zero, so we only
-     * check the syscall succeeds and a write/read round-trip works.
+    /* Per spec the read may return either old data or zero, so we only check
+     * the syscall succeeds and a write/read round-trip works.
      */
     if (rc != 0) {
         FAIL("madvise MADV_FREE rejected anon mapping");
@@ -620,8 +620,8 @@ static void test_dontneed_prot_none_zerofill(void)
 /* Test 17: MADV_DONTNEED on MAP_SHARED file mapping preserves dirty data.
  *
  * Linux cannot discard pages from a shared page-cache mapping; in elfuse's
- * MAP_SHARED-as-CoW model, an in-memory write must not be silently
- * overwritten by stale file contents during DONTNEED.
+ * MAP_SHARED-as-CoW model, an in-memory write must not be silently overwritten
+ * by stale file contents during DONTNEED.
  */
 
 static void test_dontneed_shared_file_preserved(void)
@@ -756,11 +756,10 @@ static void test_free_shared_anon(void)
 
 /* Test 20: address outside the guest address space returns ENOMEM.
  *
- * Per madvise(2), addresses outside the process address space yield
- * ENOMEM, not EINVAL. The high half of the 64-bit space is well past
- * any IPA window elfuse can be configured with (1 TiB ceiling for
- * 40-bit IPA, 64 GiB for 36-bit), so this address is unconditionally
- * out of range.
+ * Per madvise(2), addresses outside the process address space yield ENOMEM, not
+ * EINVAL. The high half of the 64-bit space is well past any IPA window elfuse
+ * can be configured with (1 TiB ceiling for 40-bit IPA, 64 GiB for 36-bit), so
+ * this address is unconditionally out of range.
  */
 
 static void test_oob_address_enomem(void)

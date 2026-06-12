@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Creates N worker threads that write to shared memory, then forks
- * from the main thread. Verifies the child's snapshot is consistent
- * (no torn writes from partially-quiesced workers).
+ * Creates N worker threads that write to shared memory, then forks from the
+ * main thread. Verifies the child's snapshot is consistent (no torn writes from
+ * partially-quiesced workers).
  *
  * Syscalls: clone(220), futex(98), clone/fork, exit(93), write(64)
  */
@@ -98,12 +98,11 @@ int main(void)
     }
 
     if (child == 0) {
-        /* Child: check snapshot consistency. Workers write 8-byte
-         * patterns (0xDEAD0000|id). On aarch64, aligned 8-byte stores
-         * are atomic, so each entry must be a valid pattern (not a
-         * torn mix of two patterns). Full-array consistency is NOT
-         * guaranteed because fork snapshots memory between instructions,
-         * and a worker may be mid-loop.
+        /* Child: check snapshot consistency. Workers write 8-byte patterns
+         * (0xDEAD0000|id). On aarch64, aligned 8-byte stores are atomic, so
+         * each entry must be a valid pattern (not a torn mix of two patterns).
+         * Full-array consistency is NOT guaranteed because fork snapshots
+         * memory between instructions, and a worker may be mid-loop.
          */
         bool consistent = true;
         for (int i = 0; i < PATTERN_SIZE; i++) {

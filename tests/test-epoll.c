@@ -144,8 +144,8 @@ int main(void)
         close(epfd);
     }
 
-    /* Test EPOLL_CTL_DEL on an unregistered fd.
-     * Repeat the failure path enough times to catch leaked host dup refs.
+    /* Test EPOLL_CTL_DEL on an unregistered fd. Repeat the failure path enough
+     * times to catch leaked host dup refs.
      */
     TEST("CTL_DEL ENOENT does not leak refs");
     {
@@ -250,9 +250,9 @@ int main(void)
         close(epfd);
     }
 
-    /* Test EPOLLONESHOT + EPOLL_CTL_MOD re-arm
-     * This is the critical test: after EPOLLONESHOT fires and is reported,
-     * EPOLL_CTL_MOD should succeed to re-arm the registration.
+    /* Test EPOLLONESHOT + EPOLL_CTL_MOD re-arm This is the critical test: after
+     * EPOLLONESHOT fires and is reported, EPOLL_CTL_MOD should succeed to
+     * re-arm the registration.
      */
     TEST("EPOLLONESHOT re-arm with MOD");
     {

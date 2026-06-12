@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Translates Linux aarch64 socket syscalls into macOS equivalents.
- * Key differences handled:
+ * Translates Linux aarch64 socket syscalls into macOS equivalents. Key
+ * differences handled:
  *   - Address families: Linux AF_INET6=10, macOS AF_INET6=30
  *   - sockaddr layout: macOS has sa_len byte, Linux does not
  *   - Socket type flags: Linux packs SOCK_NONBLOCK/SOCK_CLOEXEC into type
@@ -92,12 +92,12 @@ int64_t sys_socket(guest_t *g, int domain, int type, int protocol)
     int nonblock = extract_sock_nonblock(type);
     int cloexec = extract_sock_cloexec(type);
 
-    /* Rosetta opens AF_UNIX SOCK_SEQPACKET to talk to rosettad. macOS does
-     * not support SOCK_SEQPACKET on AF_UNIX, so while the translator process
-     * is active we create an unconnected SOCK_STREAM placeholder instead.
+    /* Rosetta opens AF_UNIX SOCK_SEQPACKET to talk to rosettad. macOS does not
+     * support SOCK_SEQPACKET on AF_UNIX, so while the translator process is
+     * active we create an unconnected SOCK_STREAM placeholder instead.
      * sys_connect() upgrades only the specific rosettad path to the private
-     * socketpair/handler transport; any other connect on this placeholder
-     * fails so unrelated Unix IPC is not silently downgraded to STREAM.
+     * socketpair/handler transport; any other connect on this placeholder fails
+     * so unrelated Unix IPC is not silently downgraded to STREAM.
      */
     if (rosetta_socket_shim_enabled(g) && mac_domain == AF_UNIX &&
         real_type == LINUX_SOCK_SEQPACKET) {
@@ -452,8 +452,8 @@ int64_t sys_connect(guest_t *g, int fd, uint64_t addr_gva, uint32_t addrlen)
     }
 
     /* glibc probes UDP connect(addr, port 0) during getaddrinfo() source
-     * address selection. Linux accepts this; macOS rejects it. Use discard
-     * port 9 for the host-only probe so getsockname() can still discover the
+     * address selection. Linux accepts this; macOS rejects it. Use discard port
+     * 9 for the host-only probe so getsockname() can still discover the
      * selected local address.
      */
     int so_type = 0;
@@ -691,8 +691,8 @@ int64_t sys_sendto(guest_t *g,
         len = avail;
 
     int mac_flags = translate_msg_flags(linux_flags);
-    /* MSG_NOSIGNAL (0x4000): suppress SIGPIPE on EPIPE.
-     * macOS has no MSG_NOSIGNAL; elfuse handles it by not queuing SIGPIPE.
+    /* MSG_NOSIGNAL (0x4000): suppress SIGPIPE on EPIPE. macOS has no
+     * MSG_NOSIGNAL; elfuse handles it by not queuing SIGPIPE.
      */
     int suppress_sigpipe = (linux_flags & 0x4000);
 
@@ -824,8 +824,8 @@ int64_t sys_setsockopt(guest_t *g,
     int small_int_opt = socket_opt_uses_small_int(level, optname);
 
     /* SO_PASSCRED: emulated entirely in elfuse. Cache the flag value so
-     * getsockopt returns it and recvmsg knows to inject SCM_CREDENTIALS.
-     * macOS has no equivalent. Do not forward.
+     * getsockopt returns it and recvmsg knows to inject SCM_CREDENTIALS. macOS
+     * has no equivalent. Do not forward.
      */
     if (level == LINUX_SOL_SOCKET && optname == LINUX_SO_PASSCRED) {
         if (!net_socket_fd_is_valid(fd))
@@ -843,12 +843,11 @@ int64_t sys_setsockopt(guest_t *g,
 
     if (level == LINUX_IPPROTO_IP && optname == LINUX_IP_MTU_DISCOVER) {
         /* P2P networking tools (libp2p, syncthing, WireGuard userland,
-         * Tailscale's bundled tailscaled) set IP_MTU_DISCOVER early in
-         * connect and abort on -ENOPROTOOPT. macOS has no direct
-         * equivalent; accept the option, cache the Linux PMTUD mode for
-         * getsockopt round-trip, and where the host can honour it, push
-         * the closest IP_DONTFRAG setting onto the underlying socket.
-         * Linux PMTUD modes:
+         * Tailscale's bundled tailscaled) set IP_MTU_DISCOVER early in connect
+         * and abort on -ENOPROTOOPT. macOS has no direct equivalent; accept the
+         * option, cache the Linux PMTUD mode for getsockopt round-trip, and
+         * where the host can honour it, push the closest IP_DONTFRAG setting
+         * onto the underlying socket. Linux PMTUD modes:
          *   0 DONT  / 1 WANT  -> allow fragmentation (DONTFRAG off)
          *   2 DO   / 3 PROBE  / 4 INTERFACE -> set DF (DONTFRAG on)
          *   5 OMIT -> behave like DONT (best-effort)
@@ -872,8 +871,8 @@ int64_t sys_setsockopt(guest_t *g,
         return 0;
     }
     if (level == LINUX_IPPROTO_IP && optname == LINUX_IP_RECVERR) {
-        /* No macOS equivalent for the Linux extended-error queue. Accept
-         * and discard; the queue stays empty, so subsequent recvmsg with
+        /* No macOS equivalent for the Linux extended-error queue. Accept and
+         * discard; the queue stays empty, so subsequent recvmsg with
          * MSG_ERRQUEUE returns -EAGAIN as Linux would for a quiescent
          * connection.
          */
@@ -939,8 +938,8 @@ int64_t sys_setsockopt(guest_t *g,
     } else if (level == LINUX_IPPROTO_IP) {
         mac_level = IPPROTO_IP;
         mac_optname = translate_ip_sockopt_to_mac(optname);
-        /* IP_MTU_DISCOVER and IP_RECVERR are handled by the early return
-         * above (before host_fd_ref_open), so they never reach here.
+        /* IP_MTU_DISCOVER and IP_RECVERR are handled by the early return above
+         * (before host_fd_ref_open), so they never reach here.
          */
         if (mac_optname < 0) {
             host_fd_ref_close(&host_ref);
@@ -981,8 +980,8 @@ setsockopt_translated:
         /* Linux accepts shorter optlen for many int-valued options and
          * zero-extends the value. macOS rejects optlen < sizeof(int) with
          * EINVAL (notably for IP_TOS / IP_TTL / IP_PKTINFO / IP_RECVTTL /
-         * IP_RECVTOS). The value has already been zero-extended into an int,
-         * so always call the host with sizeof(int).
+         * IP_RECVTOS). The value has already been zero-extended into an int, so
+         * always call the host with sizeof(int).
          */
         if (setsockopt(host_ref.fd, mac_level, mac_optname, &value,
                        sizeof(value)) < 0) {
@@ -1019,9 +1018,9 @@ setsockopt_translated:
     return 0;
 }
 
-/* Mirrors Linux ip_sockglue copyval: when an IP-level getsockopt has a
- * caller buffer shorter than int and the int-sized value fits in a byte,
- * report and write a single byte. Otherwise leaves actual_len untouched.
+/* Mirrors Linux ip_sockglue copyval: when an IP-level getsockopt has a caller
+ * buffer shorter than int and the int-sized value fits in a byte, report and
+ * write a single byte. Otherwise leaves actual_len untouched.
  */
 static inline uint32_t ip_copyval_clamp(int level,
                                         uint32_t guest_optlen,
@@ -1046,10 +1045,10 @@ int64_t sys_getsockopt(guest_t *g,
         0)
         return -LINUX_EFAULT;
 
-    /* SO_PEERCRED: synthesize struct ucred from guest identity.
-     * macOS has LOCAL_PEERCRED but returns a different struct; we fabricate
-     * the Linux ucred with the guest's own PID/UID/GID, which is correct
-     * for AF_UNIX sockets within the same elfuse instance.
+    /* SO_PEERCRED: synthesize struct ucred from guest identity. macOS has
+     * LOCAL_PEERCRED but returns a different struct; fabricate the Linux ucred
+     * with the guest's own PID/UID/GID, which is correct for AF_UNIX sockets
+     * within the same elfuse instance.
      */
     if (level == LINUX_SOL_SOCKET && optname == LINUX_SO_PEERCRED) {
         if (!net_socket_fd_is_valid(fd))
@@ -1151,8 +1150,8 @@ int64_t sys_getsockopt(guest_t *g,
     } else if (level == LINUX_IPPROTO_IP) {
         mac_level = IPPROTO_IP;
         mac_optname = translate_ip_sockopt_to_mac(optname);
-        /* IP_MTU_DISCOVER and IP_RECVERR are handled by the early return
-         * above (before host_fd_ref_open), so they never reach here.
+        /* IP_MTU_DISCOVER and IP_RECVERR are handled by the early return above
+         * (before host_fd_ref_open), so they never reach here.
          */
         if (mac_optname < 0) {
             host_fd_ref_close(&host_ref);
@@ -1227,10 +1226,10 @@ getsockopt_translated:
         return linux_errno();
     }
 
-    /* SO_TYPE: macOS returns the raw socket type. On Linux, getsockopt
-     * SO_TYPE returns the base type without SOCK_NONBLOCK/SOCK_CLOEXEC
-     * flags, and the numeric values happen to match (SOCK_STREAM=1,
-     * SOCK_DGRAM=2, SOCK_RAW=3). Strip any flag bits for safety.
+    /* SO_TYPE: macOS returns the raw socket type. On Linux, getsockopt SO_TYPE
+     * returns the base type without SOCK_NONBLOCK/SOCK_CLOEXEC flags, and the
+     * numeric values happen to match (SOCK_STREAM=1, SOCK_DGRAM=2, SOCK_RAW=3).
+     * Strip any flag bits for safety.
      */
     if (level == LINUX_SOL_SOCKET && optname == LINUX_SO_TYPE &&
         mac_optlen >= (socklen_t) sizeof(int)) {
@@ -1248,10 +1247,10 @@ getsockopt_translated:
         }
     }
 
-    /* Write option value, truncating to guest buffer size if needed.
-     * Write back actual length (not truncated) per Linux semantics: Linux
-     * getsockopt returns the real option size so the caller can detect
-     * truncation and retry with a larger buffer.
+    /* Write option value, truncating to guest buffer size if needed. Write back
+     * actual length (not truncated) per Linux semantics: Linux getsockopt
+     * returns the real option size so the caller can detect truncation and
+     * retry with a larger buffer.
      */
     uint32_t actual_len = (uint32_t) mac_optlen, write_len = actual_len;
     if (write_len > guest_optlen)

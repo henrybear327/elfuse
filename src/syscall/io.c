@@ -4,11 +4,11 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Read/write, ioctl, splice, sendfile, and copy_file_range operations.
- * All functions are called from syscall_dispatch() in syscall/syscall.c.
+ * Read/write, ioctl, splice, sendfile, and copy_file_range operations. All
+ * functions are called from syscall_dispatch() in syscall/syscall.c.
  *
- * Poll/select/epoll handlers are in syscall/poll.c.
- * Special FD types (eventfd, signalfd, timerfd) are in syscall/fd.c.
+ * Poll/select/epoll handlers are in syscall/poll.c. Special FD types (eventfd,
+ * signalfd, timerfd) are in syscall/fd.c.
  */
 
 #include <stdio.h>
@@ -53,8 +53,8 @@ typedef struct {
     uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel;
 } linux_winsize_t;
 
-/* Linux struct termios used by TCGETS/TCSETS on aarch64.  Speed fields live
- * in Linux termios2, not in this ioctl ABI.
+/* Linux struct termios used by TCGETS/TCSETS on aarch64. Speed fields live in
+ * Linux termios2, not in this ioctl ABI.
  */
 typedef struct {
     uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
@@ -63,10 +63,10 @@ typedef struct {
 } linux_termios_t;
 
 /* Per-fd lock embedded in the cache so a urandom read on fd A does not
- * serialize behind a concurrent urandom read on fd B. The previous design
- * used a single global mutex covering the whole cache array, which made
- * the per-fd cache pointless under any sibling-vCPU urandom traffic.
- * The lock array is initialized at startup by io_init().
+ * serialize behind a concurrent urandom read on fd B. The previous design used
+ * a single global mutex covering the whole cache array, which made the per-fd
+ * cache pointless under any sibling-vCPU urandom traffic. The lock array is
+ * initialized at startup by io_init().
  */
 typedef struct {
     pthread_mutex_t lock;
@@ -86,8 +86,8 @@ void io_init(void)
 _Static_assert(sizeof(linux_termios_t) == 36,
                "aarch64 Linux TCGETS struct termios must be 36 bytes");
 
-/* Linux struct termios2 used by TCGETS2/TCSETS2 on aarch64.
- * Same layout as termios but adds c_ispeed and c_ospeed at the end.
+/* Linux struct termios2 used by TCGETS2/TCSETS2 on aarch64. Same layout as
+ * termios but adds c_ispeed and c_ospeed at the end.
  */
 typedef struct {
     uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
@@ -99,8 +99,8 @@ typedef struct {
 _Static_assert(sizeof(linux_termios2_t) == 44,
                "aarch64 Linux TCGETS2 struct termios2 must be 44 bytes");
 
-/* Linux <-> macOS c_cc index mapping: linux_mac_cc[linux_idx] = mac_idx.
- * Shared by TCGETS/TCSETS and their termios2 variants.
+/* Linux <-> macOS c_cc index mapping: linux_mac_cc[linux_idx] = mac_idx. Shared
+ * by TCGETS/TCSETS and their termios2 variants.
  *
  * Linux: VINTR=0 VQUIT=1 VERASE=2 VKILL=3 VEOF=4 VTIME=5
  *        VMIN=6 VSWTC=7 VSTART=8 VSTOP=9 VSUSP=10 VEOL=11
@@ -117,8 +117,8 @@ static void termios_copy_cc_to_linux(uint8_t linux_cc[19], const cc_t mac_cc[])
 {
     for (int i = 0; i < 19; i++) {
         int mac_idx = linux_mac_cc[i];
-        /* cppcheck-suppress negativeIndex
-         * RANGE_CHECK guards mac_idx >= 0 before the array access.
+        /* cppcheck-suppress negativeIndex RANGE_CHECK guards mac_idx >= 0
+         * before the array access.
          */
         linux_cc[i] = RANGE_CHECK(mac_idx, 0, NCCS) ? mac_cc[mac_idx] : 0;
     }
@@ -151,8 +151,8 @@ void urandom_fd_reset_cache(int guest_fd)
     if (!RANGE_CHECK(guest_fd, 0, FD_TABLE_SIZE))
         return;
 
-    /* Preserve the embedded lock; reset only the entropy fields. memset of
-     * the whole struct would clobber the mutex state.
+    /* Preserve the embedded lock; reset only the entropy fields. memset of the
+     * whole struct would clobber the mutex state.
      */
     urandom_cache_t *c = &urandom_cache[guest_fd];
     pthread_mutex_lock(&c->lock);
@@ -265,12 +265,11 @@ static int64_t urandom_read(guest_t *g,
     struct iovec iov = {.iov_base = dst, .iov_len = (size_t) count};
     int64_t rc = urandom_fill_iov(guest_fd, &iov, 1);
 
-    /* This slow path runs when the shim's identity-class fast path
-     * could not serve the read: either the request was larger than
-     * the shim's inline limit, or the ring was empty. Refill the
-     * shim's entropy ring before returning so a subsequent
-     * read(/dev/urandom) from the same vCPU sees a populated ring
-     * and stays on the fast path.
+    /* This slow path runs when the shim's identity-class fast path could not
+     * serve the read: either the request was larger than the shim's inline
+     * limit, or the ring was empty. Refill the shim's entropy ring before
+     * returning so a subsequent read(/dev/urandom) from the same vCPU sees a
+     * populated ring and stays on the fast path.
      */
     shim_globals_refill_urandom_ring(g);
     return rc;
@@ -281,10 +280,10 @@ static bool rosetta_ioctl_target_fd(guest_t *g, int host_fd)
     if (!g->is_rosetta)
         return false;
 
-    /* Rosetta opens /proc/self/exe (which under rosetta resolves to the
-     * rosetta translator, not elfuse) and issues the VZ probe ioctls on
-     * that descriptor. Match against ROSETTA_PATH so the gate triggers
-     * regardless of where elfuse itself lives on disk.
+    /* Rosetta opens /proc/self/exe (which under rosetta resolves to the rosetta
+     * translator, not elfuse) and issues the VZ probe ioctls on that
+     * descriptor. Match against ROSETTA_PATH so the gate triggers regardless of
+     * where elfuse itself lives on disk.
      */
     char resolved[PATH_MAX];
     if (fcntl(host_fd, F_GETPATH, resolved) < 0)
@@ -294,15 +293,15 @@ static bool rosetta_ioctl_target_fd(guest_t *g, int host_fd)
 
     /* Defense in depth: require the syscall to originate from inside the
      * rosetta translator image. The /proc/self/exe redirection makes the
-     * launcher fd reachable to any code running under a rosetta-enabled
-     * VM, so without this check a guest-launched helper that opened
-     * /proc/self/exe could exercise the synthetic VZ probe path. Today
-     * the responses are public constants, but the gate guards against
-     * future synthetic responses that leak host state. ELR_EL1 carries
-     * the EL0 return PC captured at SVC entry on aarch64.
+     * launcher fd reachable to any code running under a rosetta-enabled VM, so
+     * without this check a guest-launched helper that opened /proc/self/exe
+     * could exercise the synthetic VZ probe path. Today the responses are
+     * public constants, but the gate guards against future synthetic responses
+     * that leak host state. ELR_EL1 carries the EL0 return PC captured at SVC
+     * entry on aarch64.
      *
-     * Skip if the rosetta image bounds are not yet known (pre-finalize);
-     * the F_GETPATH match above is the only gate in that window, and
+     * Skip if the rosetta image bounds are not yet known (pre-finalize); the
+     * F_GETPATH match above is the only gate in that window, and
      * rosetta_finalize publishes the bounds before issuing any ioctl.
      */
     if (g->rosetta_va_base && g->rosetta_size) {
@@ -349,9 +348,9 @@ static int64_t rosetta_vz_ioctl(guest_t *g, uint64_t request, uint64_t arg)
         memcpy(&caps[ROSETTA_CAPS_SOCKET_PATH], fake_sock_path,
                sizeof(fake_sock_path));
         /* Snapshot the caps binary path under the rosetta path lock so a
-         * concurrent execve cannot tear the string between length probe
-         * and copy. Inline buffer matches the cap exactly; the snapshot
-         * helper bounds the write itself.
+         * concurrent execve cannot tear the string between length probe and
+         * copy. Inline buffer matches the cap exactly; the snapshot helper
+         * bounds the write itself.
          */
         char bin[ROSETTA_CAPS_BINARY_PATH_LEN];
         size_t bin_n = rosettad_snapshot_caps_binary_path(bin, sizeof(bin));
@@ -370,10 +369,10 @@ static int64_t rosetta_vz_ioctl(guest_t *g, uint64_t request, uint64_t arg)
 
 /* termios flag translation helpers. */
 
-/* Linux aarch64 c_iflag bits (from asm-generic/termbits-common.h).
- * Low 9 bits (IGNBRK..ICRNL) match macOS exactly.
- * Bits from 0x200 onward differ: Linux IUCLC=0x200 has no macOS equivalent;
- * Linux IXON=0x400/IXOFF=0x1000 vs macOS IXON=0x200/IXOFF=0x400.
+/* Linux aarch64 c_iflag bits (from asm-generic/termbits-common.h). Low 9 bits
+ * (IGNBRK..ICRNL) match macOS exactly. Bits from 0x200 onward differ: Linux
+ * IUCLC=0x200 has no macOS equivalent; Linux IXON=0x400/IXOFF=0x1000 vs macOS
+ * IXON=0x200/IXOFF=0x400.
  */
 #define LINUX_IFLAG_LOW_MASK 0x1ff /* bits 0-8: same on Linux and macOS */
 #define LINUX_IXON 0x0400
@@ -417,13 +416,13 @@ static uint32_t mac_iflag_to_linux(tcflag_t mf)
     return lf;
 }
 
-/* Linux aarch64 c_oflag bits (asm-generic/termbits-common.h + termbits.h).
- * Only OPOST (0x01) has the same value on both platforms.
- * macOS 0x02 = ONLCR; Linux 0x02 = OLCUC (output lowercase->uppercase, rare).
- * macOS 0x04 = OXTABS; Linux 0x04 = ONLCR. All other bits shift by one.
+/* Linux aarch64 c_oflag bits (asm-generic/termbits-common.h + termbits.h). Only
+ * OPOST (0x01) has the same value on both platforms. macOS 0x02 = ONLCR; Linux
+ * 0x02 = OLCUC (output lowercase->uppercase, rare). macOS 0x04 = OXTABS; Linux
+ * 0x04 = ONLCR. All other bits shift by one.
  */
-/* OLCUC (Linux 0x002, output lowercase->uppercase) has no macOS equivalent
- * and is silently dropped. macOS uses 0x002 for ONLCR.
+/* OLCUC (Linux 0x002, output lowercase->uppercase) has no macOS equivalent and
+ * is silently dropped. macOS uses 0x002 for ONLCR.
  */
 #define LINUX_OPOST 0x001
 #define LINUX_ONLCR 0x004  /* macOS ONLCR=0x002 */
@@ -478,12 +477,12 @@ static uint32_t mac_oflag_to_linux(tcflag_t mf)
     return lf;
 }
 
-/* Linux aarch64 c_cflag bits (asm-generic/termbits.h).
- * All standard flags differ from macOS: macOS shifts everything left by 4
- * bits (e.g., Linux CS8=0x30, macOS CS8=0x300; Linux CSTOPB=0x40, macOS=0x400).
- * The CBAUD field (Linux 0x0000100f) encodes baud rate symbolically; macOS
- * uses raw numeric speeds via cfgetispeed/cfsetispeed, so termios translation
- * drops CBAUD from c_cflag and always uses the speed accessors.
+/* Linux aarch64 c_cflag bits (asm-generic/termbits.h). All standard flags
+ * differ from macOS: macOS shifts everything left by 4 bits (e.g., Linux
+ * CS8=0x30, macOS CS8=0x300; Linux CSTOPB=0x40, macOS=0x400). The CBAUD field
+ * (Linux 0x0000100f) encodes baud rate symbolically; macOS uses raw numeric
+ * speeds via cfgetispeed/cfsetispeed, so termios translation drops CBAUD from
+ * c_cflag and always uses the speed accessors.
  */
 #define LINUX_CSIZE 0x0030
 #define LINUX_CS5 0x0000
@@ -504,9 +503,9 @@ static uint32_t mac_oflag_to_linux(tcflag_t mf)
 #define LINUX_BOTHER 0x1000
 
 /* Decode a Linux CBAUD field value to a numeric baud rate.
- * Returns the numeric rate, or 0 for B0 / unknown.
- * Standard rates B0-B38400 are in the low nibble (0-15);
- * extended rates B57600-B4000000 use CBAUDEX (0x1000) + low nibble.
+ * Returns the numeric rate, or 0 for B0 / unknown. Standard rates B0-B38400 are
+ * in the low nibble (0-15); extended rates B57600-B4000000 use CBAUDEX (0x1000)
+ * + low nibble.
  */
 static speed_t linux_cbaud_to_speed(uint32_t cbaud)
 {
@@ -603,12 +602,12 @@ static uint32_t mac_cflag_to_linux(tcflag_t mf)
     return lf;
 }
 
-/* Linux aarch64 c_lflag bits (asm-generic/termbits.h).
- * Virtually every flag has a different value from macOS.
- * Only ECHO (0x0008) is the same on both platforms.
+/* Linux aarch64 c_lflag bits (asm-generic/termbits.h). Virtually every flag has
+ * a different value from macOS. Only ECHO (0x0008) is the same on both
+ * platforms.
  */
-/* XCASE (Linux 0x004, rarely used, no macOS equivalent) is dropped; macOS
- * 0x004 has different semantics and is not translated here.
+/* XCASE (Linux 0x004, rarely used, no macOS equivalent) is dropped; macOS 0x004
+ * has different semantics and is not translated here.
  */
 #define LINUX_ISIG 0x00001
 #define LINUX_ICANON 0x00002
@@ -703,10 +702,11 @@ static uint32_t mac_lflag_to_linux(tcflag_t mf)
 
 /* read/write and positional variants. */
 
-/* Open a host fd reference for regular I/O, checking type and seals
- * under fd_lock for thread safety.  Returns -LINUX_EBADF for path-only
- * or closed fds, -LINUX_EPERM for write-sealed fds (when check_seal
- * is set), or 0 on success.
+/* Open a host fd reference for regular I/O, checking type and seals under
+ * fd_lock for thread safety.
+ *
+ * Returns -LINUX_EBADF for path-only or closed fds, -LINUX_EPERM for
+ * write-sealed fds (when check_seal is set), or 0 on success.
  */
 static int64_t host_fd_ref_open_checked(int guest_fd,
                                         host_fd_ref_t *ref,
@@ -858,9 +858,9 @@ int64_t sys_write(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
         return io_return_zero(&host_ref);
 
     /* Resolve buffer and cap count to available contiguous guest bytes.
-     * guest_ptr_avail returns the host pointer and remaining bytes in
-     * the current region. This prevents host write() from reading past
-     * the guest buffer boundary.
+     * guest_ptr_avail returns the host pointer and remaining bytes in the
+     * current region. This prevents host write() from reading past the guest
+     * buffer boundary.
      */
     uint64_t avail = 0;
     void *buf = guest_ptr_bound(g, buf_gva, &avail, MEM_PERM_R, count);
@@ -893,9 +893,9 @@ int64_t sys_write(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
 
 int64_t sys_read(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
 {
-    /* Read the type once under fd_lock so a concurrent close/reopen cannot
-     * make different dispatch checks disagree. Each handler still
-     * re-validates internally and returns EBADF if its slot changed.
+    /* Read the type once under fd_lock so a concurrent close/reopen cannot make
+     * different dispatch checks disagree. Each handler still re-validates
+     * internally and returns EBADF if its slot changed.
      */
     int type = fd_get_type(fd);
     switch (type) {
@@ -1033,10 +1033,10 @@ int64_t sys_pwrite64(guest_t *g,
     return io_write_result(ret);
 }
 
-/* Helper: build host iovec array from guest iovec array.
- * Uses guest_read for the iovec array (may cross 2MiB block boundary)
- * and guest_ptr_avail for each buffer (caps to contiguous bytes).
- * required_perms: MEM_PERM_W for readv (host writes to guest buffers),
+/* Helper: build host iovec array from guest iovec array. Uses guest_read for
+ * the iovec array (may cross 2MiB block boundary) and guest_ptr_avail for each
+ * buffer (caps to contiguous bytes). required_perms: MEM_PERM_W for readv (host
+ * writes to guest buffers),
  *                 MEM_PERM_R for writev (host reads from guest buffers).
  * Returns 0 on success, -LINUX_EFAULT on bad guest pointer.
  */
@@ -1073,12 +1073,12 @@ static int64_t build_host_iov(guest_t *g,
                 free(guest_iov);
             return -LINUX_EFAULT;
         }
-        /* Cap to contiguous permitted bytes. When the guest iov entry
-         * spans a non-contiguous boundary (different mapping or
-         * permission), zero every subsequent host iov length so the
-         * host readv/writev returns a POSIX-compliant short I/O rather
-         * than silently packing the truncated tail of buffer i into
-         * buffer i+1 -- which corrupts the guest's data layout.
+        /* Cap to contiguous permitted bytes. When the guest iov entry spans a
+         * non-contiguous boundary (different mapping or permission), zero every
+         * subsequent host iov length so the host readv/writev returns a
+         * POSIX-compliant short I/O rather than silently packing the truncated
+         * tail of buffer i into buffer i+1 -- which corrupts the guest's data
+         * layout.
          */
         uint64_t len = guest_iov[i].iov_len;
         host_iov[i].iov_base = base;
@@ -1172,10 +1172,10 @@ int64_t sys_readv(guest_t *g, int fd, uint64_t iov_gva, int iovcnt)
     }
 
     /* Special FD types need their custom read handlers because glibc may use
-     * readv() instead of read() for the same logical operation. Delegate
-     * scalar special fds to the first iov entry's buffer. Use the first iov's
-     * length (not the sum of all iovs) because the data goes into
-     * giov[0].iov_base which is only giov[0].iov_len bytes long.
+     * readv() instead of read() for the same logical operation. Delegate scalar
+     * special fds to the first iov entry's buffer. Use the first iov's length
+     * (not the sum of all iovs) because the data goes into giov[0].iov_base
+     * which is only giov[0].iov_len bytes long.
      */
     int type = fd_get_type(fd);
     if (type == FD_URANDOM) {
@@ -1191,10 +1191,10 @@ int64_t sys_readv(guest_t *g, int fd, uint64_t iov_gva, int iovcnt)
             return err;
         int64_t ret = urandom_fill_iov(fd, host_iov.iov, iovcnt);
         host_iov_free(&host_iov);
-        /* Mirror sys_read's slow-path refill so a readv consumer that
-         * drains the shim ring leaves it ready for the next call,
-         * instead of forcing every subsequent EL1 fast-path attempt
-         * back through HVC until some other path triggers a refill.
+        /* Mirror sys_read's slow-path refill so a readv consumer that drains
+         * the shim ring leaves it ready for the next call, instead of forcing
+         * every subsequent EL1 fast-path attempt back through HVC until some
+         * other path triggers a refill.
          */
         shim_globals_refill_urandom_ring(g);
         return ret;
@@ -1203,8 +1203,8 @@ int64_t sys_readv(guest_t *g, int fd, uint64_t iov_gva, int iovcnt)
         type == FD_INOTIFY) {
         if (iovcnt <= 0)
             return -LINUX_EINVAL;
-        /* Use guest_read for the iov array since guest_ptr alone is unsafe
-         * if the array spans a 2MiB block boundary.
+        /* Use guest_read for the iov array since guest_ptr alone is unsafe if
+         * the array spans a 2MiB block boundary.
          */
         linux_iovec_t giov;
         if (guest_read_small(g, iov_gva, &giov, sizeof(giov)) < 0)
@@ -1253,9 +1253,9 @@ int64_t sys_writev(guest_t *g, int fd, uint64_t iov_gva, int iovcnt)
     }
 
     /* Special FD types: glibc may use writev() for eventfd wakeup writes.
-     * Delegate using the first iov entry.  Use giov.iov_len (not the
-     * sum of all iovs) because the data is at giov.iov_base which is only
-     * giov.iov_len bytes.  eventfd expects exactly 8 bytes.
+     * Delegate using the first iov entry. Use giov.iov_len (not the sum of all
+     * iovs) because the data is at giov.iov_base which is only giov.iov_len
+     * bytes. eventfd expects exactly 8 bytes.
      */
     if (fd_get_type(fd) == FD_EVENTFD) {
         if (iovcnt <= 0)
@@ -1438,8 +1438,8 @@ int64_t sys_preadv2(guest_t *g,
         return -LINUX_EOPNOTSUPP;
     if (flags & RWF_APPEND)
         return -LINUX_EINVAL; /* RWF_APPEND is write-only */
-    /* RWF_HIPRI, RWF_NOWAIT: best-effort hints, safe to ignore.
-     * RWF_DSYNC, RWF_SYNC: no effect on reads.
+    /* RWF_HIPRI, RWF_NOWAIT: best-effort hints, safe to ignore. RWF_DSYNC,
+     * RWF_SYNC: no effect on reads.
      */
     if (offset == -1)
         return sys_readv(g, fd, iov_gva, iovcnt);
@@ -1487,7 +1487,8 @@ int64_t sys_ioctl(guest_t *g, int fd, uint64_t request, uint64_t arg)
      * O_PATH descriptors. Validate the slot and mutate the flag in a single
      * fd_lock section so there is no validate-then-mutate window in which a
      * concurrent close/reuse could flip CLOEXEC on a different file that took
-     * the slot. The arg is ignored. */
+     * the slot. The arg is ignored.
+     */
     if (request == LINUX_FIOCLEX || request == LINUX_FIONCLEX) {
         if (!RANGE_CHECK(fd, 0, FD_TABLE_SIZE))
             return -LINUX_EBADF;
@@ -1601,7 +1602,8 @@ int64_t sys_ioctl(guest_t *g, int fd, uint64_t request, uint64_t arg)
 
     case LINUX_TCGETS: {
         /* Get terminal attributes. c_cc index mapping is in file-scope
-         * linux_mac_cc[]. */
+         * linux_mac_cc[].
+         */
         struct termios t;
         if (tcgetattr(host_fd, &t) < 0) {
             host_fd_ref_close(&host_ref);
@@ -1649,9 +1651,9 @@ int64_t sys_ioctl(guest_t *g, int fd, uint64_t request, uint64_t arg)
     }
 
     case LINUX_TCGETS2: {
-        /* termios2 variant: same as TCGETS but with c_ispeed/c_ospeed.
-         * Set BOTHER in c_cflag so the guest uses the numeric speed fields
-         * rather than decoding CBAUD (which mac_cflag_to_linux drops).
+        /* termios2 variant: same as TCGETS but with c_ispeed/c_ospeed. Set
+         * BOTHER in c_cflag so the guest uses the numeric speed fields rather
+         * than decoding CBAUD (which mac_cflag_to_linux drops).
          */
         struct termios t;
         if (tcgetattr(host_fd, &t) < 0) {
@@ -1677,8 +1679,9 @@ int64_t sys_ioctl(guest_t *g, int fd, uint64_t request, uint64_t arg)
     case LINUX_TCSETS2:
     case LINUX_TCSETSW2:
     case LINUX_TCSETSF2: {
-        /* termios2 set: decode CBAUD for standard rates, use c_ispeed/
-         * c_ospeed when BOTHER is set. */
+        /* termios2 set: decode CBAUD for standard rates, use c_ispeed/ c_ospeed
+         * when BOTHER is set.
+         */
         linux_termios2_t lt2;
         if (guest_read_small(g, arg, &lt2, sizeof(lt2)) < 0) {
             host_fd_ref_close(&host_ref);
@@ -1695,7 +1698,8 @@ int64_t sys_ioctl(guest_t *g, int fd, uint64_t request, uint64_t arg)
         t.c_lflag = linux_lflag_to_mac(lt2.c_lflag);
         termios_copy_cc_to_mac(t.c_cc, lt2.c_cc);
         /* Resolve baud rate: BOTHER means use numeric c_ispeed/c_ospeed;
-         * otherwise decode the standard CBAUD index to a numeric rate. */
+         * otherwise decode the standard CBAUD index to a numeric rate.
+         */
         uint32_t cbaud = lt2.c_cflag & LINUX_CBAUD;
         speed_t ispeed, ospeed;
         if (cbaud == LINUX_BOTHER) {
@@ -1745,12 +1749,12 @@ int64_t sys_ioctl(guest_t *g, int fd, uint64_t request, uint64_t arg)
     }
 
     case LINUX_TIOCGPTN: {
-        /* Get the slave pty number associated with a /dev/ptmx master fd.
-         * Pass the guest fd: proc_pty_master_adopt snapshots the canonical
-         * (host_fd, generation) under fd_lock, performs the slave open on a
-         * private dup, then re-validates the slot before publishing the
-         * keepalive. Passing the per-syscall host_fd_ref dup or a raw host
-         * fd would race with sibling close+reuse.
+        /* Get the slave pty number associated with a /dev/ptmx master fd. Pass
+         * the guest fd: proc_pty_master_adopt snapshots the canonical (host_fd,
+         * generation) under fd_lock, performs the slave open on a private dup,
+         * then re-validates the slot before publishing the keepalive. Passing
+         * the per-syscall host_fd_ref dup or a raw host fd would race with
+         * sibling close+reuse.
          */
         uint32_t val = proc_pty_master_adopt(fd);
         if (val == UINT32_MAX) {
@@ -1765,12 +1769,12 @@ int64_t sys_ioctl(guest_t *g, int fd, uint64_t request, uint64_t arg)
         return 0;
     }
     case LINUX_TIOCSPTLCK: {
-        /* Lock/unlock the slave side of a pty. glibc unlockpt() always passes
-         * 0 (unlock); util-linux's setlock(1) passes 1 to lock. macOS exposes
+        /* Lock/unlock the slave side of a pty. glibc unlockpt() always passes 0
+         * (unlock); util-linux's setlock(1) passes 1 to lock. macOS exposes
          * unlockpt(3) but no re-lock primitive, so the lock branch is accepted
-         * as a best-effort no-op for real ptmx masters rather than surfacing
-         * as -EINVAL: an application probing the result would otherwise
-         * misread the failure as "this kernel has no devpts".
+         * as a best-effort no-op for real ptmx masters rather than surfacing as
+         * -EINVAL: an application probing the result would otherwise misread
+         * the failure as "this kernel has no devpts".
          */
         int32_t lock = 0;
         if (guest_read_small(g, arg, &lock, sizeof(lock)) < 0) {
@@ -1797,8 +1801,8 @@ int64_t sys_ioctl(guest_t *g, int fd, uint64_t request, uint64_t arg)
          * flags. Restrict to the bits Linux's pty driver actually honors
          * (accmode + O_NOCTTY + O_NONBLOCK + O_CLOEXEC); any other bit, in
          * particular O_CREAT / O_TRUNC / O_EXCL / O_PATH, would be silently
-         * ignored on Linux and is rejected with EINVAL here so misuse does
-         * not leak nonsense flags into the guest fd table.
+         * ignored on Linux and is rejected with EINVAL here so misuse does not
+         * leak nonsense flags into the guest fd table.
          */
         int linux_flags = (int) arg;
         const int allowed = LINUX_O_ACCMODE | LINUX_O_NOCTTY |
@@ -1878,22 +1882,21 @@ int64_t sys_fallocate(int fd, int mode, int64_t offset, int64_t len)
         return -LINUX_EINVAL;
     }
 
-    /* FALLOC_FL_PUNCH_HOLE always requires FALLOC_FL_KEEP_SIZE on Linux;
-     * map both to macOS F_PUNCHHOLE on the host fd, with a pwrite-zeros
-     * fallback for misalignment.
+    /* FALLOC_FL_PUNCH_HOLE always requires FALLOC_FL_KEEP_SIZE on Linux; map
+     * both to macOS F_PUNCHHOLE on the host fd, with a pwrite-zeros fallback
+     * for misalignment.
      *
-     * The Linux semantic is "reads in [offset, offset+len) return zero;
-     * file size unchanged". macOS F_PUNCHHOLE enforces filesystem block
-     * alignment on both ends and rejects sub-block requests with EINVAL --
-     * that one-byte probe (offset=0 len=1) foot's wl_shm pool issues
-     * surfaces as "fallocate(FALLOC_FL_PUNCH_HOLE) not supported (Invalid
-     * argument)" otherwise, and foot disables punch-hole for the whole
-     * session.
+     * The Linux semantic is "reads in [offset, offset+len) return zero; file
+     * size unchanged". macOS F_PUNCHHOLE enforces filesystem block alignment on
+     * both ends and rejects sub-block requests with EINVAL -- that one-byte
+     * probe (offset=0 len=1) foot's wl_shm pool issues surfaces as
+     * "fallocate(FALLOC_FL_PUNCH_HOLE) not supported (Invalid argument)"
+     * otherwise, and foot disables punch-hole for the whole session.
      *
-     * Writing zeros over the region produces the same observable result:
-     * reads return zero, file size unchanged. The disk-space deallocation
-     * optimisation is lost on the pwrite path, but the probe succeeds, so
-     * foot keeps punch-hole enabled and the later, properly aligned calls
+     * Writing zeros over the region produces the same observable result: reads
+     * return zero, file size unchanged. The disk-space deallocation
+     * optimisation is lost on the pwrite path, but the probe succeeds, so foot
+     * keeps punch-hole enabled and the later, properly aligned calls
      * (page-sized buffers) still take the F_PUNCHHOLE fast path.
      */
     const int kPunchHole =
@@ -1909,9 +1912,9 @@ int64_t sys_fallocate(int fd, int mode, int64_t offset, int64_t len)
             host_fd_ref_close(&host_ref);
             return 0;
         }
-        /* EINVAL: misaligned, sub-block, or non-regular file. pwrite zeros
-         * only through the current EOF so KEEP_SIZE remains guest-visible.
-         * Any other host errno propagates verbatim.
+        /* EINVAL: misaligned, sub-block, or non-regular file. pwrite zeros only
+         * through the current EOF so KEEP_SIZE remains guest-visible. Any other
+         * host errno propagates verbatim.
          */
         if (errno != EINVAL) {
             host_fd_ref_close(&host_ref);
@@ -1952,9 +1955,9 @@ int64_t sys_fallocate(int fd, int mode, int64_t offset, int64_t len)
         return 0;
     }
 
-    /* mode 0 = basic allocation -> ftruncate fallback. Anything else
-     * (collapse range, zero range, insert range, unshare range) stays
-     * unsupported and surfaces as -EOPNOTSUPP for the guest to handle.
+    /* mode 0 = basic allocation -> ftruncate fallback. Anything else (collapse
+     * range, zero range, insert range, unshare range) stays unsupported and
+     * surfaces as -EOPNOTSUPP for the guest to handle.
      */
     if (mode != 0) {
         host_fd_ref_close(&host_ref);
@@ -2061,9 +2064,9 @@ int64_t sys_sendfile(guest_t *g,
             break; /* Short write */
     }
 
-    /* Write back updated offset (even on partial transfer).
-     * Preserve partial success: if bytes were transferred but offset
-     * writeback fails, return the count rather than -EFAULT.
+    /* Write back updated offset (even on partial transfer). Preserve partial
+     * success: if bytes were transferred but offset writeback fails, return the
+     * count rather than -EFAULT.
      */
     if (offset_gva != 0) {
         if (guest_write_small(g, offset_gva, &offset, sizeof(offset)) < 0)
@@ -2167,8 +2170,8 @@ int64_t sys_copy_file_range(guest_t *g,
             break;
     }
 
-    /* Write back updated offsets (even on partial transfer).
-     * Preserve partial success on writeback failure.
+    /* Write back updated offsets (even on partial transfer). Preserve partial
+     * success on writeback failure.
      */
     if (off_in_gva != 0) {
         if (guest_write_small(g, off_in_gva, &off_in, sizeof(off_in)) < 0)
@@ -2273,9 +2276,9 @@ int64_t sys_splice(guest_t *g,
     }
 
 done:
-    /* Write back updated offsets. Preserve partial transfer success:
-     * if bytes were already moved, return that count even if the
-     * offset writeback fails (consistent with sendfile/copy_file_range).
+    /* Write back updated offsets. Preserve partial transfer success: if bytes
+     * were already moved, return that count even if the offset writeback fails
+     * (consistent with sendfile/copy_file_range).
      */
     if (off_in_gva && off_in >= 0 &&
         guest_write_small(g, off_in_gva, &off_in, sizeof(off_in)) < 0) {
@@ -2292,8 +2295,8 @@ done:
         return ret;
     }
 
-    /* Return bytes transferred, or errno only if read/write failed.
-     * Restore saved_errno since free/guest_write may have clobbered it.
+    /* Return bytes transferred, or errno only if read/write failed. Restore
+     * saved_errno since free/guest_write may have clobbered it.
      */
     if (total > 0) {
         host_fd_ref_close(&out_ref);
@@ -2366,9 +2369,9 @@ int64_t sys_vmsplice(guest_t *g,
     return (int64_t) total;
 }
 
-/* tee: copy data between two pipes without consuming it.
- * Full emulation would need pipe peeking semantics that macOS does not expose;
- * report EINVAL rather than consuming data incorrectly.
+/* tee: copy data between two pipes without consuming it. Full emulation would
+ * need pipe peeking semantics that macOS does not expose; report EINVAL rather
+ * than consuming data incorrectly.
  */
 int64_t sys_tee(int fd_in, int fd_out, size_t len, unsigned int flags)
 {

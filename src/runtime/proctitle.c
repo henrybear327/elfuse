@@ -63,9 +63,9 @@ void runtime_set_process_title(int argc, char **argv, const char *elf_path)
 
     /* Write the argv block with explicit byte stores through a volatile
      * destination. The libc memcpy/memset on Apple Silicon are free to use
-     * cache-line-aligned stp/DC ZVA stores; using single-byte STRB removes
-     * any chance of touching the byte past avail, which on a Linux-style
-     * initial stack is the first character of envp[0].
+     * cache-line-aligned stp/DC ZVA stores; using single-byte STRB removes any
+     * chance of touching the byte past avail, which on a Linux-style initial
+     * stack is the first character of envp[0].
      */
     size_t copy = title_len < avail ? title_len : avail - 1;
     volatile char *dst = (volatile char *) argv[0];

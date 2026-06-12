@@ -28,9 +28,9 @@
 
 /* Tri-state lifecycle. OFF is the default; RECORD is set by the env-var
  * resolver once it sees "syscalls" or "all"; FROZEN is set when the first
- * execve commits so steady-state traffic does not pollute startup data.
- * Stored as atomic because syscall_hist_enabled is on every dispatch path
- * and syscall_hist_freeze runs on a single vCPU while others may still be
+ * execve commits so steady-state traffic does not pollute startup data. Stored
+ * as atomic because syscall_hist_enabled is on every dispatch path and
+ * syscall_hist_freeze runs on a single vCPU while others may still be
  * recording.
  */
 enum {
@@ -52,30 +52,30 @@ static pthread_once_t hist_init_once = PTHREAD_ONCE_INIT;
  */
 static const char *_Atomic hist_freeze_reason = NULL;
 
-/* Captured at the first record so the dump can report elapsed wall time
- * even when no execve fires. Set atomically; readers only consult after
- * mode transitions to FROZEN or the process is winding down.
+/* Captured at the first record so the dump can report elapsed wall time even
+ * when no execve fires. Set atomically; readers only consult after mode
+ * transitions to FROZEN or the process is winding down.
  */
 static _Atomic uint64_t hist_first_ns = 0;
 
-/* Count of recorders currently inside the update window. Bumped at entry
- * to syscall_hist_record before the mode probe and decremented after the
- * slot updates retire. syscall_hist_dump waits for this to drain to zero
- * after flipping mode to OFF, so a sibling vCPU that already passed the
- * mode probe cannot land its atomic_fetch_add on count / total_ns / max_ns
- * after the dump has read those slots. Without this barrier the dump and
- * a mid-flight recorder race and the dump's totals can silently lose
- * updates or read torn intermediate values.
+/* Count of recorders currently inside the update window. Bumped at entry to
+ * syscall_hist_record before the mode probe and decremented after the slot
+ * updates retire. syscall_hist_dump waits for this to drain to zero after
+ * flipping mode to OFF, so a sibling vCPU that already passed the mode probe
+ * cannot land its atomic_fetch_add on count / total_ns / max_ns after the dump
+ * has read those slots. Without this barrier the dump and a mid-flight recorder
+ * race and the dump's totals can silently lose updates or read torn
+ * intermediate values.
  */
 static _Atomic int hist_active_recorders = 0;
 
 /* Per-syscall counters. Each slot is touched by every vCPU thread, but the
- * atomic-fetch-add pattern keeps updates lock-free and the relaxed memory
- * order is fine because the dump consumes them only after all vCPUs have
- * stopped recording. No false sharing concern at HIST_TABLE_SIZE=512: the
- * working set during dynamic-linker bring-up is dominated by a handful of
- * syscall numbers (openat / mmap / mprotect / fstat / read), so contention
- * already sits on the same cache lines whether we pad or not.
+ * atomic-fetch-add pattern keeps updates lock-free and the relaxed memory order
+ * is fine because the dump consumes them only after all vCPUs have stopped
+ * recording. No false sharing concern at HIST_TABLE_SIZE=512: the working set
+ * during dynamic-linker bring-up is dominated by a handful of syscall numbers
+ * (openat / mmap / mprotect / fstat / read), so contention already sits on the
+ * same cache lines whether we pad or not.
  */
 typedef struct {
     _Atomic uint64_t count;
@@ -85,10 +85,10 @@ typedef struct {
 
 static hist_slot_t hist_table[HIST_TABLE_SIZE];
 
-/* Name table generated from dispatch.tbl: reuse the SYSCALL_TABLE_ENTRIES
- * macro so a new dispatch entry automatically gains a name without touching
- * this file. Entries without a name (unreachable indexes) stay NULL and the
- * dump prints the raw number.
+/* Name table generated from dispatch.tbl: reuse the SYSCALL_TABLE_ENTRIES macro
+ * so a new dispatch entry automatically gains a name without touching this
+ * file. Entries without a name (unreachable indexes) stay NULL and the dump
+ * prints the raw number.
  */
 static const char *const hist_names[HIST_TABLE_SIZE] = {
 #define _(sys_name, sc_handler, extra) [sys_name] = #sys_name,
@@ -98,8 +98,8 @@ static const char *const hist_names[HIST_TABLE_SIZE] = {
 
 /* Parse ELFUSE_STARTUP_TRACE. Accepts comma-separated tokens. "syscalls" or
  * "all" turns the histogram on. The legacy "1" value (steps trace) and the
- * "steps" token leave the histogram off so existing scripts keep working.
- * Token matching is whole-word against a fixed allow-list to avoid matching
+ * "steps" token leave the histogram off so existing scripts keep working. Token
+ * matching is whole-word against a fixed allow-list to avoid matching
  * "syscalls_disabled" or similar.
  */
 static bool env_contains_token(const char *env, const char *tok)
@@ -151,10 +151,10 @@ uint64_t syscall_hist_now_ns(void)
 
 void syscall_hist_record(int nr, uint64_t ns)
 {
-    /* Enter the recording window before the mode probe. The matching
-     * decrement runs on every exit path. syscall_hist_dump waits for the
-     * counter to drain to zero after flipping mode to OFF; that wait is
-     * what guarantees the dump's reads see no further updates.
+    /* Enter the recording window before the mode probe. The matching decrement
+     * runs on every exit path. syscall_hist_dump waits for the counter to drain
+     * to zero after flipping mode to OFF; that wait is what guarantees the
+     * dump's reads see no further updates.
      */
     atomic_fetch_add_explicit(&hist_active_recorders, 1, memory_order_acquire);
     if (atomic_load_explicit(&hist_mode, memory_order_acquire) != HIST_RECORD)
@@ -162,11 +162,10 @@ void syscall_hist_record(int nr, uint64_t ns)
     if (nr < 0 || nr >= HIST_TABLE_SIZE)
         goto leave;
 
-    /* Cheap-load probe before the clock_gettime: hist_first_ns is set
-     * exactly once at the first record, so subsequent records skip the
-     * syscall entirely. Without this gate, every record paid for a
-     * CLOCK_MONOTONIC read whose result was thrown away by the failing
-     * CAS.
+    /* Cheap-load probe before the clock_gettime: hist_first_ns is set exactly
+     * once at the first record, so subsequent records skip the syscall
+     * entirely. Without this gate, every record paid for a CLOCK_MONOTONIC read
+     * whose result was thrown away by the failing CAS.
      */
     if (atomic_load_explicit(&hist_first_ns, memory_order_relaxed) == 0) {
         uint64_t expected = 0;
@@ -179,10 +178,9 @@ void syscall_hist_record(int nr, uint64_t ns)
     atomic_fetch_add_explicit(&slot->count, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&slot->total_ns, ns, memory_order_relaxed);
 
-    /* CAS-loop max keeps the slot lock-free under contention from sibling
-     * vCPUs racing on the same syscall number. Reads use relaxed order
-     * because the dump only consumes them after the active-recorder count
-     * drains.
+    /* CAS-loop max keeps the slot lock-free under contention from sibling vCPUs
+     * racing on the same syscall number. Reads use relaxed order because the
+     * dump only consumes them after the active-recorder count drains.
      */
     uint64_t prev = atomic_load_explicit(&slot->max_ns, memory_order_relaxed);
     while (ns > prev) {
@@ -197,12 +195,12 @@ leave:
 
 void syscall_hist_freeze(const char *reason)
 {
-    /* Publish the reason BEFORE the state transition so a concurrent dump
-     * that wins the FROZEN -> OFF exchange cannot observe HIST_FROZEN with
-     * a NULL reason and print the wrong dump header. The store on
-     * hist_freeze_reason uses release ordering; the freeze CAS below pairs
-     * with the dump path's acquire load on hist_mode, so any thread that
-     * sees the CAS result also sees the reason that preceded it.
+    /* Publish the reason BEFORE the state transition so a concurrent dump that
+     * wins the FROZEN -> OFF exchange cannot observe HIST_FROZEN with a NULL
+     * reason and print the wrong dump header. The store on hist_freeze_reason
+     * uses release ordering; the freeze CAS below pairs with the dump path's
+     * acquire load on hist_mode, so any thread that sees the CAS result also
+     * sees the reason that preceded it.
      */
     int probe = atomic_load_explicit(&hist_mode, memory_order_acquire);
     if (probe != HIST_RECORD)
@@ -224,8 +222,8 @@ void syscall_hist_disable(void)
     atomic_store_explicit(&hist_mode, HIST_OFF, memory_order_release);
 }
 
-/* Sort key for the dump. Keys carry the slot index so the qsort comparator
- * can resolve names without consulting hist_table again.
+/* Sort key for the dump. Keys carry the slot index so the qsort comparator can
+ * resolve names without consulting hist_table again.
  */
 typedef struct {
     int nr;
@@ -255,8 +253,8 @@ void syscall_hist_dump(void)
     if (mode == HIST_OFF)
         return;
 
-    /* One-shot: flip to OFF so a second call (cleanup from forked child
-     * after the parent already dumped, etc) is a clean no-op.
+    /* One-shot: flip to OFF so a second call (cleanup from forked child after
+     * the parent already dumped, etc) is a clean no-op.
      */
     if (mode == HIST_RECORD) {
         int expected = HIST_RECORD;
@@ -269,20 +267,19 @@ void syscall_hist_dump(void)
     if (prev == HIST_OFF)
         return;
 
-    /* Wait for any in-flight recorders to retire. A sibling vCPU that
-     * already incremented hist_active_recorders and observed the prior
-     * RECORD mode must finish its atomic_fetch_add on the slot before we
-     * read it; otherwise the dump can lose an update or read torn
-     * intermediate values. The spin is bounded by the slowest recorder
-     * (a few hundred ns) and only runs during the one-shot dump.
+    /* Wait for any in-flight recorders to retire. A sibling vCPU that already
+     * incremented hist_active_recorders and observed the prior RECORD mode must
+     * finish its atomic_fetch_add on the slot before we read it; otherwise the
+     * dump can lose an update or read torn intermediate values. The spin is
+     * bounded by the slowest recorder (a few hundred ns) and only runs during
+     * the one-shot dump.
      */
     while (atomic_load_explicit(&hist_active_recorders, memory_order_acquire) >
            0) {
-        /* sched_yield is not portable to relaxed memory models the same
-         * way pause is on x86; on aarch64 macOS the loop iteration cost
-         * is dominated by the atomic load anyway. No need for an explicit
-         * yield -- the spin terminates as soon as the in-flight recorders
-         * retire.
+        /* sched_yield is not portable to relaxed memory models the same way
+         * pause is on x86; on aarch64 macOS the loop iteration cost is
+         * dominated by the atomic load anyway. No need for an explicit yield --
+         * the spin terminates as soon as the in-flight recorders retire.
          */
     }
 
@@ -336,11 +333,11 @@ void syscall_hist_dump(void)
     fprintf(stderr, "total: %llu syscalls, %.3f ms\n",
             (unsigned long long) total_count, (double) total_ns / 1000000.0);
 
-    /* Wall-clock span from the first record to dump time. Lets the
-     * reader compare syscall total against guest wall time and see
-     * what fraction of execution was spent inside syscalls. Only
-     * meaningful when at least one record landed; first_ns is set
-     * exactly once by the first successful record CAS.
+    /* Wall-clock span from the first record to dump time. Lets the reader
+     * compare syscall total against guest wall time and see what fraction of
+     * execution was spent inside syscalls. Only meaningful when at least one
+     * record landed; first_ns is set exactly once by the first successful
+     * record CAS.
      */
     uint64_t first_ns =
         atomic_load_explicit(&hist_first_ns, memory_order_relaxed);

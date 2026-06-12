@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Emulates Linux eventfd (pipe+counter), signalfd (synthetic signal reads),
- * and timerfd (kqueue EVFILT_TIMER). Each provides special read/write/close
+ * Emulates Linux eventfd (pipe+counter), signalfd (synthetic signal reads), and
+ * timerfd (kqueue EVFILT_TIMER). Each provides special read/write/close
  * semantics dispatched from sys_read/sys_write/sys_close.
  */
 
@@ -71,8 +71,8 @@ static int sfd_alloc_slot(const void *state, size_t count, size_t stride)
 
 /* timerfd emulation via kqueue EVFILT_TIMER
  *
- * Each timerfd_create() creates a kqueue + timer registration.
- * Reads from the timerfd return an 8-byte counter of expirations.
+ * Each timerfd_create() creates a kqueue + timer registration. Reads from the
+ * timerfd return an 8-byte counter of expirations.
  */
 
 /* Linux itimerspec for timerfd_settime/gettime */
@@ -127,8 +127,8 @@ static int timerfd_alloc(void)
 /* Called with sfd_lock held. Drain any kevent expirations sitting on the
  * timer's kqueue and fold them into the slot's accumulator. Used by
  * timerfd_read before consuming the counter and by timerfd_fdinfo_snapshot
- * before reporting it; without this drain, fdinfo would lag the actual
- * fire count by however many ticks were pending in the kqueue.
+ * before reporting it; without this drain, fdinfo would lag the actual fire
+ * count by however many ticks were pending in the kqueue.
  */
 static void timerfd_drain_pending_locked(int slot)
 {
@@ -144,8 +144,10 @@ static void timerfd_drain_pending_locked(int slot)
     }
 }
 
-/* Called with sfd_lock held. Returns nanoseconds until the next expiration,
- * or 0 when the timer is disarmed or a one-shot timer has already expired.
+/* Called with sfd_lock held.
+ *
+ * Returns nanoseconds until the next expiration, or 0 when the timer is
+ * disarmed or a one-shot timer has already expired.
  */
 static int64_t timerfd_remaining_ns_locked(int slot, int64_t now_ns)
 {
@@ -183,10 +185,10 @@ int64_t sys_timerfd_create(int clockid, int flags)
     if (kq < 0)
         return linux_errno();
 
-    /* macOS kqueue fds reject fcntl(F_SETFL, O_NONBLOCK) with ENOTTY, so
-     * track the non-blocking mode in fd_table[gfd].linux_flags below and
-     * let timerfd_read consult that field directly. F_SETFD CLOEXEC still
-     * works on a kqueue fd.
+    /* macOS kqueue fds reject fcntl(F_SETFL, O_NONBLOCK) with ENOTTY, so track
+     * the non-blocking mode in fd_table[gfd].linux_flags below and let
+     * timerfd_read consult that field directly. F_SETFD CLOEXEC still works on
+     * a kqueue fd.
      */
     if ((flags & LINUX_TFD_CLOEXEC) && fd_set_cloexec(kq) < 0) {
         close(kq);
@@ -214,9 +216,9 @@ int64_t sys_timerfd_create(int clockid, int flags)
     timerfd_state[slot].clockid = clockid;
     pthread_mutex_unlock(&sfd_lock);
 
-    /* Linux opens the timerfd inode O_RDWR (anon_inode_getfd in
-     * fs/timerfd.c). Stamp O_RDWR into linux_flags so the F_GETFL branch
-     * below can surface the access mode without re-deriving it.
+    /* Linux opens the timerfd inode O_RDWR (anon_inode_getfd in fs/timerfd.c).
+     * Stamp O_RDWR into linux_flags so the F_GETFL branch below can surface the
+     * access mode without re-deriving it.
      */
     fd_publish_linux_flags(
         gfd, LINUX_O_RDWR |
@@ -300,9 +302,8 @@ int64_t sys_timerfd_settime(guest_t *g,
         its.it_value_nsec = relative_ns % NS_PER_SEC;
     }
 
-    /* Clamp large seconds values to prevent signed integer overflow.
-     * INT64_MAX / 1e6 is about 9.2e12 seconds; INT64_MAX / 1e9 is about 9.2e9
-     * seconds.
+    /* Clamp large seconds values to prevent signed integer overflow. INT64_MAX
+     * / 1e6 is about 9.2e12 seconds; INT64_MAX / 1e9 is about 9.2e9 seconds.
      */
     int64_t val_sec = its.it_value_sec, int_sec = its.it_interval_sec;
     if (val_sec > INT64_MAX / US_PER_SEC)
@@ -335,7 +336,7 @@ int64_t sys_timerfd_settime(guest_t *g,
         timerfd_state[slot].armed = false;
         timerfd_state[slot].expirations = 0;
     } else {
-        /* Arm timer.  Always use EV_ONESHOT: for repeating timers where initial
+        /* Arm timer. Always use EV_ONESHOT: for repeating timers where initial
          * value != interval, kqueue would repeat at the wrong period (initial
          * instead of interval). timerfd_read re-arms with the interval after
          * the first read.
@@ -441,17 +442,18 @@ int64_t timerfd_read(int guest_fd, guest_t *g, uint64_t buf_gva, uint64_t count)
         }
 
         /* If the timer was never armed, there's no kevent registered --
-         * kevent(NULL timeout) would block forever. Return EAGAIN.
+         * kevent(NULL timeout) would block forever.
+         *
+         * Return EAGAIN.
          */
         if (!timerfd_state[slot].armed) {
             pthread_mutex_unlock(&sfd_lock);
             return -LINUX_EAGAIN;
         }
 
-        /* Blocking: release lock, wait for the timer, re-lock.
-         * Another thread may close the fd while the timerfd wait is active --
-         * kevent() returns EBADF in that case, and the code re-validates the
-         * slot.
+        /* Blocking: release lock, wait for the timer, re-lock. Another thread
+         * may close the fd while the timerfd wait is active -- kevent() returns
+         * EBADF in that case, and the code re-validates the slot.
          */
         struct kevent kev;
         pthread_mutex_unlock(&sfd_lock);
@@ -480,7 +482,7 @@ int64_t timerfd_read(int guest_fd, guest_t *g, uint64_t buf_gva, uint64_t count)
     int64_t intv = timerfd_state[slot].interval_ns;
     int rearm_kq = timerfd_state[slot].kq_fd;
 
-    /* Re-arm repeating timers with the interval period.  The initial fire used
+    /* Re-arm repeating timers with the interval period. The initial fire used
      * EV_ONESHOT (see timerfd_settime), so the code re-arms here to get correct
      * interval timing even when initial != interval.
      */
@@ -545,9 +547,8 @@ static void timerfd_close(int guest_fd)
  * multiple guest_fds can map to the same slot. The slot owns its own read end
  * for readiness/drain/blocking operations so it does not depend on any one
  * guest fd remaining open. The slot is freed when refcount drops to zero. The
- * slot's guest_fd field is retained for sfd_alloc_slot's
- * "free if guest_fd == -1" convention and tracks the most recently allocated
- * primary owner.
+ * slot's guest_fd field is retained for sfd_alloc_slot's "free if guest_fd ==
+ * -1" convention and tracks the most recently allocated primary owner.
  */
 #define EVENTFD_MAX 32
 static struct {
@@ -606,8 +607,8 @@ int64_t sys_eventfd2(unsigned int initval, int flags)
     if (pipe(pipefd) < 0)
         return linux_errno();
 
-    /* Both ends must be non-blocking to avoid blocking on pipe I/O. CLOEXEC
-     * is opt-in via EFD_CLOEXEC.
+    /* Both ends must be non-blocking to avoid blocking on pipe I/O. CLOEXEC is
+     * opt-in via EFD_CLOEXEC.
      */
     bool want_cloexec = (flags & LINUX_EFD_CLOEXEC) != 0;
     if (fd_set_nonblock(pipefd[0]) < 0 || fd_set_nonblock(pipefd[1]) < 0 ||
@@ -686,8 +687,8 @@ static void eventfd_close(int guest_fd)
     pthread_mutex_unlock(&sfd_lock);
 }
 
-/* Bind an additional guest_fd to the same slot as src_fd, sharing the
- * counter and pipe state. Two races to defeat:
+/* Bind an additional guest_fd to the same slot as src_fd, sharing the counter
+ * and pipe state. Two races to defeat:
  *
  *   - Source identity. duplicate_guest_fd() snapshots src_fd under
  *     fd_lock, releases it, then calls us. Between those points src_fd
@@ -713,9 +714,9 @@ int eventfd_dup_fd(int src_fd,
                    bool fixed_slot,
                    int linux_flags)
 {
-    /* Pin the source under fd_lock + sfd_lock and dup the slot-owned
-     * readiness fd. The slot fd is independent of any guest alias, so closing
-     * the source later cannot invalidate eventfd_state[slot].pipe_rd.
+    /* Pin the source under fd_lock + sfd_lock and dup the slot-owned readiness
+     * fd. The slot fd is independent of any guest alias, so closing the source
+     * later cannot invalidate eventfd_state[slot].pipe_rd.
      */
     pthread_mutex_lock(&fd_lock);
     pthread_mutex_lock(&sfd_lock);
@@ -739,8 +740,8 @@ int eventfd_dup_fd(int src_fd,
         return -1;
 
     /* Publish the destination fd with eventfd_close as cleanup. The
-     * eventfd_owner mapping is still -1, so a racing close here observes
-     * owner == -1 and does nothing; we detect that below.
+     * eventfd_owner mapping is still -1, so a racing close here observes owner
+     * == -1 and does nothing; we detect that below.
      */
     int new_guest_fd = fixed_slot
                            ? fd_alloc_at_relaxed(fixed_guest_fd, FD_EVENTFD,
@@ -757,11 +758,11 @@ int eventfd_dup_fd(int src_fd,
         return -1;
     }
 
-    /* Commit the bind under both locks in the documented order
-     * (fd_lock then sfd_lock). If a close already ran, fd_table[new].type
-     * is FD_CLOSED and we just bail with -EBADF; the host_fd is already
-     * gone via sys_close. Otherwise verify the source slot is still
-     * alive and unchanged, then install owner for the reserved ref.
+    /* Commit the bind under both locks in the documented order (fd_lock then
+     * sfd_lock). If a close already ran, fd_table[new].type is FD_CLOSED and we
+     * just bail with -EBADF; the host_fd is already gone via sys_close.
+     * Otherwise verify the source slot is still alive and unchanged, then
+     * install owner for the reserved ref.
      */
     pthread_mutex_lock(&fd_lock);
     pthread_mutex_lock(&sfd_lock);
@@ -771,9 +772,9 @@ int eventfd_dup_fd(int src_fd,
         eventfd_state[slot].pipe_rd != original_pipe_rd) {
         pthread_mutex_unlock(&sfd_lock);
         pthread_mutex_unlock(&fd_lock);
-        /* If the destination is still open but the source went away,
-         * tear it down. (If the destination already closed itself, the
-         * snapshot below sees FD_CLOSED and is a no-op.)
+        /* If the destination is still open but the source went away, tear it
+         * down. (If the destination already closed itself, the snapshot below
+         * sees FD_CLOSED and is a no-op.)
          */
         fd_entry_t snap;
         if (fd_snapshot_and_close(new_guest_fd, &snap))
@@ -791,8 +792,8 @@ int eventfd_dup_fd(int src_fd,
     return new_guest_fd;
 }
 
-/* Read from eventfd: return 8-byte counter value, then reset to 0.
- * In EFD_SEMAPHORE mode, return 1 and decrement counter by 1.
+/* Read from eventfd: return 8-byte counter value, then reset to 0. In
+ * EFD_SEMAPHORE mode, return 1 and decrement counter by 1.
  */
 int64_t eventfd_read(int guest_fd, guest_t *g, uint64_t buf_gva, uint64_t count)
 {
@@ -812,11 +813,11 @@ int64_t eventfd_read(int guest_fd, guest_t *g, uint64_t buf_gva, uint64_t count)
             return -LINUX_EAGAIN;
         }
 
-        /* Blocking mode: release lock, block on pipe, re-lock.
-         * The pipe is O_NONBLOCK, so temporarily make it blocking so read()
-         * actually waits for the writer. Matches signalfd_read. Another thread
-         * may close the fd while the eventfd wait is active; read() returns
-         * EBADF in that case, and the code re-validates the slot.
+        /* Blocking mode: release lock, block on pipe, re-lock. The pipe is
+         * O_NONBLOCK, so temporarily make it blocking so read() actually waits
+         * for the writer. Matches signalfd_read. Another thread may close the
+         * fd while the eventfd wait is active; read() returns EBADF in that
+         * case, and the code re-validates the slot.
          */
         int rd_fd = eventfd_state[slot].pipe_rd;
         pthread_mutex_unlock(&sfd_lock);
@@ -875,8 +876,8 @@ int64_t eventfd_read(int guest_fd, guest_t *g, uint64_t buf_gva, uint64_t count)
     return 8;
 }
 
-/* Write to eventfd: add value to counter. Value must be uint64_t.
- * Maximum counter value is UINT64_MAX - 1.
+/* Write to eventfd: add value to counter. Value must be uint64_t. Maximum
+ * counter value is UINT64_MAX - 1.
  */
 int64_t eventfd_write(int guest_fd,
                       guest_t *g,
@@ -913,9 +914,9 @@ int64_t eventfd_write(int guest_fd,
     bool was_zero = (eventfd_state[slot].counter == 0);
     eventfd_state[slot].counter += val;
 
-    /* Signal readability via pipe if counter transitioned from 0.
-     * The pipe is non-blocking; retry on EINTR and warn on other errors since
-     * a missed wakeup here can deadlock ppoll/epoll waiters.
+    /* Signal readability via pipe if counter transitioned from 0. The pipe is
+     * non-blocking; retry on EINTR and warn on other errors since a missed
+     * wakeup here can deadlock ppoll/epoll waiters.
      */
     if (was_zero && eventfd_state[slot].counter > 0) {
         uint8_t byte = 1;
@@ -1001,8 +1002,8 @@ static int signalfd_slot_alloc(void)
                           sizeof(signalfd_state[0]));
 }
 
-/* Clean up signalfd state when guest closes the fd. Must hold sfd_lock
- * to prevent racing with concurrent signalfd_notify.
+/* Clean up signalfd state when guest closes the fd. Must hold sfd_lock to
+ * prevent racing with concurrent signalfd_notify.
  */
 static void signalfd_close(int guest_fd)
 {
@@ -1092,9 +1093,9 @@ int64_t sys_signalfd4(guest_t *g,
 
 /* Read from signalfd: consume pending signals matching the signalfd's mask.
  *
- * Each signal produces one signalfd_siginfo (128 bytes). RT signals (32-64)
- * are queued: each sigqueue/rt_tgsigqueueinfo enqueues a distinct instance with
- * its own si_int/si_ptr payload, and signalfd_read returns them in FIFO order
+ * Each signal produces one signalfd_siginfo (128 bytes). RT signals (32-64) are
+ * queued: each sigqueue/rt_tgsigqueueinfo enqueues a distinct instance with its
+ * own si_int/si_ptr payload, and signalfd_read returns them in FIFO order
  * without coalescing (Linux behavior).
  *
  * Per-thread signal mask is intentionally not consulted: signalfd is the
@@ -1102,9 +1103,9 @@ int64_t sys_signalfd4(guest_t *g,
  * delivery via sigprocmask(). The signalfd's own mask (set at create time or
  * via signalfd(fd, &mask, ...)) is the only filter applied.
  *
- * ssi_int/ssi_ptr are populated from queued metadata when present.
- * Standard signals (1-31) still coalesce to one pending instance, but Linux
- * preserves one siginfo payload for that instance.
+ * ssi_int/ssi_ptr are populated from queued metadata when present. Standard
+ * signals (1-31) still coalesce to one pending instance, but Linux preserves
+ * one siginfo payload for that instance.
  *
  * Returns the number of bytes read (multiple of sizeof(signalfd_siginfo)), or
  * -EAGAIN if nothing pending and the fd is non-blocking.
@@ -1116,8 +1117,8 @@ int64_t signalfd_read(int guest_fd,
 {
 retry:
     /* Capture slot state under sfd_lock, then release BEFORE calling
-     * signal_get_state() which acquires sig_lock(4). Holding sfd_lock(5a)
-     * while taking sig_lock(4) would violate lock ordering.
+     * signal_get_state() which acquires sig_lock(4). Holding sfd_lock(5a) while
+     * taking sig_lock(4) would violate lock ordering.
      */
     pthread_mutex_lock(&sfd_lock);
     int slot = signalfd_find(guest_fd);
@@ -1280,9 +1281,9 @@ void signalfd_notify(int signum)
 }
 
 /* /proc/self/fdinfo type-specific snapshots. Each takes sfd_lock to prevent
- * tearing across concurrent read/write/settime; lock order is fd_lock(3)
- * -> sfd_lock(5a), and these accessors take only sfd_lock so the procemu
- * caller is free to drop fd_lock between fd_snapshot and the lookup here.
+ * tearing across concurrent read/write/settime; lock order is fd_lock(3) ->
+ * sfd_lock(5a), and these accessors take only sfd_lock so the procemu caller is
+ * free to drop fd_lock between fd_snapshot and the lookup here.
  */
 
 bool eventfd_fdinfo_snapshot(int guest_fd, uint64_t *count_out)
@@ -1323,9 +1324,9 @@ bool timerfd_fdinfo_snapshot(int guest_fd,
         pthread_mutex_unlock(&sfd_lock);
         return false;
     }
-    /* Fold any pending kqueue fires into expirations before exporting,
-     * matching what timerfd_read does. Without this, fdinfo lags by
-     * however many ticks were sitting on the kqueue.
+    /* Fold any pending kqueue fires into expirations before exporting, matching
+     * what timerfd_read does. Without this, fdinfo lags by however many ticks
+     * were sitting on the kqueue.
      */
     timerfd_drain_pending_locked(slot);
     *clockid_out = timerfd_state[slot].clockid;

@@ -3,19 +3,18 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Slice A of the identity fast-path optimization routes getpid (and the
- * other five identity syscalls) through the EL1 shim without HVC #5.
- * That skips the post-HVC signal_check_timer epilogue in vcpu_run_loop,
- * which is what normally notices a fired guest ITIMER_REAL and queues
- * SIGALRM. Without Slice B's attention flag, a vCPU stuck in a tight
- * getpid loop would never re-enter EL1 and SIGALRM would arrive late
- * (worst case: not until the per-iteration vCPU alarm timeout fires,
- * potentially hundreds of milliseconds).
+ * Slice A of the identity fast-path optimization routes getpid (and the other
+ * five identity syscalls) through the EL1 shim without HVC #5. That skips the
+ * post-HVC signal_check_timer epilogue in vcpu_run_loop, which is what normally
+ * notices a fired guest ITIMER_REAL and queues SIGALRM. Without Slice B's
+ * attention flag, a vCPU stuck in a tight getpid loop would never re-enter EL1
+ * and SIGALRM would arrive late (worst case: not until the per-iteration vCPU
+ * alarm timeout fires, potentially hundreds of milliseconds).
  *
- * This test arms an ITIMER_REAL for 100 ms, then spins for ~1 second
- * OR until SIGALRM fires. It covers both getpid via the raw SVC and a
- * seeded CLOCK_REALTIME vDSO loop, because both fast paths otherwise
- * bypass the HVC epilogue that runs signal_check_timer().
+ * This test arms an ITIMER_REAL for 100 ms, then spins for ~1 second OR until
+ * SIGALRM fires. It covers both getpid via the raw SVC and a seeded
+ * CLOCK_REALTIME vDSO loop, because both fast paths otherwise bypass the HVC
+ * epilogue that runs signal_check_timer().
  */
 
 #include <errno.h>
@@ -73,10 +72,10 @@ static int run_alarm_spin(const char *name, int use_realtime_vdso)
         return 1;
     }
 
-    /* With attention raised on setitimer arm, fast paths fall back to
-     * HVC and signal_check_timer eventually notices the 100 ms expiry.
-     * Bound the spin to 1 s so a broken attention path manifests as
-     * test failure rather than a hang.
+    /* With attention raised on setitimer arm, fast paths fall back to HVC and
+     * signal_check_timer eventually notices the 100 ms expiry. Bound the spin
+     * to 1 s so a broken attention path manifests as test failure rather than a
+     * hang.
      */
     long iterations = 0;
     while (!alarm_fired) {
@@ -103,8 +102,8 @@ static int run_alarm_spin(const char *name, int use_realtime_vdso)
     }
 
     long delivered_ns = ns_diff((struct timespec *) &alarm_ts, &t_arm);
-    /* The 100 ms timer should deliver within ~150 ms in practice;
-     * grant 300 ms to absorb host scheduling jitter under load.
+    /* The 100 ms timer should deliver within ~150 ms in practice; grant 300 ms
+     * to absorb host scheduling jitter under load.
      */
     if (delivered_ns > 300 * 1000 * 1000L) {
         fprintf(stderr, "FAIL %s: SIGALRM delivered after %ld ns (>300 ms)\n",

@@ -201,9 +201,9 @@ static void test_close_range_basic(void)
     }
 
     /* Probe before clearing pipes[] so the EXPECT_ERRNO actually tests
-     * close_range's effect, not close(-1). On success every fd in the
-     * range is closed, so leave pipes[] zeroed afterward to keep the
-     * cleanup loop from double-closing.
+     * close_range's effect, not close(-1). On success every fd in the range is
+     * closed, so leave pipes[] zeroed afterward to keep the cleanup loop from
+     * double-closing.
      */
     int probe_fd = pipes[1][0];
     memset(pipes, -1, sizeof(pipes));
@@ -448,8 +448,8 @@ static void test_waitid(void)
         PASS();
         return;
     }
-    /* waitid failed or returned the wrong siginfo; reap with waitpid so
-     * the child does not linger as a zombie and skew later tests.
+    /* waitid failed or returned the wrong siginfo; reap with waitpid so the
+     * child does not linger as a zombie and skew later tests.
      */
     int status;
     waitpid(pid, &status, 0);
@@ -575,9 +575,9 @@ static void test_accept4(void)
     }
 
     /* Gate the blocking accept4() on a poll(): if the child fails before
-     * connect(), no incoming connection will ever arrive and the parent
-     * would wedge the test until the driver timeout. The poll bounds the
-     * wait so we can detect that case and fail fast.
+     * connect(), no incoming connection will ever arrive and the parent would
+     * wedge the test until the driver timeout. The poll bounds the wait so we
+     * can detect that case and fail fast.
      */
     struct pollfd pfd = {.fd = listen_fd, .events = POLLIN};
     int pr = poll(&pfd, 1, 2000);

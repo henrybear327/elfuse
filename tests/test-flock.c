@@ -78,7 +78,8 @@ int main(void)
     /* F_GETLK on a region this process already write-locks must report back a
      * Linux l_type. Linux reports F_UNLCK for locks held by the *same* owner,
      * so the only thing we can assert portably is that the type round-trips to
-     * a valid Linux constant and the call succeeds. */
+     * a valid Linux constant and the call succeeds.
+     */
     TEST("F_GETLK round-trips l_type");
     struct flock gfl = {
         .l_type = F_WRLCK,

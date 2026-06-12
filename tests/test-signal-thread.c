@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests signal delivery via tgkill, multiple sequential signals,
- * and per-thread signal mask operations via rt_sigprocmask.
+ * Tests signal delivery via tgkill, multiple sequential signals, and per-thread
+ * signal mask operations via rt_sigprocmask.
  *
  * Syscalls exercised: tgkill(131), kill(129), rt_sigaction(134),
  *                     rt_sigprocmask(135), getpid(172), gettid(178)

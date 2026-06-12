@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests the kqueue-based inotify emulation in elfuse. Exercises
- * inotify_init1, inotify_add_watch, inotify_rm_watch, and
- * reading events for file modifications.
+ * Tests the kqueue-based inotify emulation in elfuse. Exercises inotify_init1,
+ * inotify_add_watch, inotify_rm_watch, and reading events for file
+ * modifications.
  *
  * Syscalls exercised: inotify_init1(26), inotify_add_watch(27),
  *                     inotify_rm_watch(28), read(63), write(64),
@@ -108,8 +108,8 @@ static void test_modify_event(void)
     int ready = poll(&pfd, 1, 1000);
 
     if (ready <= 0) {
-        /* inotify via kqueue may not fire within this short timeout; treat
-         * a valid fd and successful add_watch as infrastructure coverage.
+        /* inotify via kqueue may not fire within this short timeout; treat a
+         * valid fd and successful add_watch as infrastructure coverage.
          */
         PASS();
     } else {

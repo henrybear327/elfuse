@@ -25,8 +25,9 @@
 #include "test-harness.h"
 #include "test-util.h"
 
-/* Parse a "0\n" or "0-N\n" cpumask range file into the highest set CPU
- * index. Returns -1 on malformed input.
+/* Parse a "0\n" or "0-N\n" cpumask range file into the highest set CPU index.
+ *
+ * Returns -1 on malformed input.
  */
 static int parse_cpurange(const char *s, ssize_t len)
 {
@@ -54,8 +55,8 @@ static int parse_cpurange(const char *s, ssize_t len)
     return low;
 }
 
-/* Read a cpumask range file (online/possible/present) and return the
- * highest CPU index it advertises. -1 on read or parse failure.
+/* Read a cpumask range file (online/possible/present) and return the highest
+ * CPU index it advertises. -1 on read or parse failure.
  */
 static int read_cpurange(const char *path)
 {
@@ -143,9 +144,9 @@ int main(void)
             FAIL("opendir failed");
     }
 
-    /* The stub is read-only: O_WRONLY / O_RDWR / O_CREAT / O_TRUNC must
-     * fail with EACCES so a guest cannot mutate the synthetic tree (and
-     * cannot pivot a creation into the host scratch dir).
+    /* The stub is read-only: O_WRONLY / O_RDWR / O_CREAT / O_TRUNC must fail
+     * with EACCES so a guest cannot mutate the synthetic tree (and cannot pivot
+     * a creation into the host scratch dir).
      */
     TEST("EACCES on O_WRONLY of online");
     {
@@ -206,8 +207,8 @@ int main(void)
     }
 
     /* '..' in the suffix must not let the open/stat fall through onto an
-     * arbitrary host path. The stub keeps the tree closed against
-     * traversal regardless of where the scratch dir happens to live.
+     * arbitrary host path. The stub keeps the tree closed against traversal
+     * regardless of where the scratch dir happens to live.
      */
     TEST("EACCES on dotdot traversal in open");
     {

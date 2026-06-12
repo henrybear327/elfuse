@@ -40,24 +40,24 @@
 /* fcntl POSIX advisory locks are per-process. Within a single elfuse instance,
  * multiple vCPU threads all "hold" the same fcntl lock simultaneously. This
  * mutex serializes index updates across vCPU threads; the fcntl lock on the
- * dedicated lock sentinel still serializes against forked elfuse processes
- * that share the same sysroot.
+ * dedicated lock sentinel still serializes against forked elfuse processes that
+ * share the same sysroot.
  */
 static pthread_mutex_t sidecar_global_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Per-directory cache: did this directory lack a sidecar index file
- * for the current directory metadata version? Keyed by (st_dev, st_ino) so a
- * renamed or moved directory does not leak a stale answer. Sidecar's
- * case-fold walker visits every parent directory of every translated path;
- * during dynamic-linker bring-up that walker fires per guest openat and
- * dominates startup (histogram showed openat at 61% of getent's 7.5 ms warm
- * path). The cache lets the common "no index here" answer return after a
- * 5 us fstat instead of a ~30 us openat per directory traversed.
+/* Per-directory cache: did this directory lack a sidecar index file for the
+ * current directory metadata version? Keyed by (st_dev, st_ino) so a renamed or
+ * moved directory does not leak a stale answer. Sidecar's case-fold walker
+ * visits every parent directory of every translated path; during dynamic-linker
+ * bring-up that walker fires per guest openat and dominates startup (histogram
+ * showed openat at 61% of getent's 7.5 ms warm path). The cache lets the common
+ * "no index here" answer return after a 5 us fstat instead of a ~30 us openat
+ * per directory traversed.
  *
- * 64 slots, single-level open-addressing (last writer wins on collision).
- * The directory ctime/mtime pair is part of the cache key: publishing an
- * index from another elfuse process changes the directory entry set, so a
- * stale ABSENT entry becomes UNKNOWN on the next lookup.
+ * 64 slots, single-level open-addressing (last writer wins on collision). The
+ * directory ctime/mtime pair is part of the cache key: publishing an index from
+ * another elfuse process changes the directory entry set, so a stale ABSENT
+ * entry becomes UNKNOWN on the next lookup.
  */
 enum {
     SIDECAR_IDX_UNKNOWN = 0,
@@ -76,9 +76,9 @@ static pthread_mutex_t sidecar_idx_cache_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static size_t sidecar_idx_cache_slot(dev_t dev, ino_t ino)
 {
-    /* Mix dev into ino so two filesystems with overlapping inode numbers
-     * do not pin the same slot. The golden-ratio multiplier scatters small
-     * inode numbers across the table without needing a real hash.
+    /* Mix dev into ino so two filesystems with overlapping inode numbers do not
+     * pin the same slot. The golden-ratio multiplier scatters small inode
+     * numbers across the table without needing a real hash.
      */
     uint64_t key = (uint64_t) ino ^ ((uint64_t) dev * 0x9E3779B97F4A7C15ULL);
     return (size_t) (key % SIDECAR_IDX_CACHE_SLOTS);
@@ -118,10 +118,10 @@ static void sidecar_idx_cache_set_stat(const struct stat *st, int state)
     pthread_mutex_unlock(&sidecar_idx_cache_lock);
 }
 
-/* Roll the cache entry back to UNKNOWN. Used by the index publish path
- * before the renameat so a concurrent reader entering the post-rename
- * window cannot consume a stale ABSENT and skip the openat. UNKNOWN forces
- * the reader to consult the filesystem.
+/* Roll the cache entry back to UNKNOWN. Used by the index publish path before
+ * the renameat so a concurrent reader entering the post-rename window cannot
+ * consume a stale ABSENT and skip the openat. UNKNOWN forces the reader to
+ * consult the filesystem.
  */
 static void sidecar_idx_cache_invalidate(int dirfd)
 {
@@ -131,15 +131,14 @@ static void sidecar_idx_cache_invalidate(int dirfd)
     sidecar_idx_cache_set_stat(&st, SIDECAR_IDX_UNKNOWN);
 }
 
-/* Cached sysroot dirfd. sidecar_open_base opens the sysroot directory on
- * every translated absolute path; for dynamic-linker bring-up that fires
- * once per openat / fstat / access / readlink. Caching the host fd and
- * handing the walker a dup turns that ~30 us open into a ~5 us dup. The
- * cache invalidates lazily by comparing the path string -- proc_set_sysroot
- * is rare (once at startup, once on fork-child IPC restore), so the
- * snapshot+strcmp on every call is still a net win over the open it
- * replaces. Concurrent vCPU lookups serialize on the lock for the cache check
- * and dup.
+/* Cached sysroot dirfd. sidecar_open_base opens the sysroot directory on every
+ * translated absolute path; for dynamic-linker bring-up that fires once per
+ * openat / fstat / access / readlink. Caching the host fd and handing the
+ * walker a dup turns that ~30 us open into a ~5 us dup. The cache invalidates
+ * lazily by comparing the path string -- proc_set_sysroot is rare (once at
+ * startup, once on fork-child IPC restore), so the snapshot+strcmp on every
+ * call is still a net win over the open it replaces. Concurrent vCPU lookups
+ * serialize on the lock for the cache check and dup.
  */
 static int sidecar_sysroot_cached_fd = -1;
 static char sidecar_sysroot_cached_path[LINUX_PATH_MAX] = {0};
@@ -152,23 +151,21 @@ static int sidecar_open_sysroot_cached(const char *path)
     pthread_mutex_lock(&sidecar_sysroot_cached_lock);
     int cached = sidecar_sysroot_cached_fd;
     if (cached >= 0 && !strcmp(path, sidecar_sysroot_cached_path)) {
-        /* Path text alone is not a sufficient cache key: a host-side
-         * rename or replace can rebind the same path to a different
-         * inode while the cached fd still resolves to the original.
-         * Stat the path on every hit and accept the cache only when
-         * (dev, ino) still match the inode captured at fill time. The
-         * stat is one host syscall per call, much cheaper than the
-         * open it replaces.
+        /* Path text alone is not a sufficient cache key: a host-side rename or
+         * replace can rebind the same path to a different inode while the
+         * cached fd still resolves to the original. Stat the path on every hit
+         * and accept the cache only when (dev, ino) still match the inode
+         * captured at fill time. The stat is one host syscall per call, much
+         * cheaper than the open it replaces.
          *
-         * Race window: a host-side mutation between this stat and the
-         * dup below can leave the cache returning the pre-mutation fd
-         * even though a fresh open(path) at that instant would resolve
-         * the post-mutation binding. The window is microseconds. It
-         * only matters under adversarial host-side sysroot mutation;
-         * normal sysroot configuration is canonicalized once at
-         * proc_set_sysroot time and never changes. Closing it
-         * adversarially would require dropping the cache, which gives
-         * back the ~25 us per-call win; not worth it absent a real
+         * Race window: a host-side mutation between this stat and the dup below
+         * can leave the cache returning the pre-mutation fd even though a fresh
+         * open(path) at that instant would resolve the post-mutation binding.
+         * The window is microseconds. It only matters under adversarial
+         * host-side sysroot mutation; normal sysroot configuration is
+         * canonicalized once at proc_set_sysroot time and never changes.
+         * Closing it adversarially would require dropping the cache, which
+         * gives back the ~25 us per-call win; not worth it absent a real
          * reproducer.
          */
         struct stat current;
@@ -191,9 +188,9 @@ static int sidecar_open_sysroot_cached(const char *path)
         pthread_mutex_unlock(&sidecar_sysroot_cached_lock);
         return -1;
     }
-    /* Capture the inode of the freshly-opened dir so subsequent cache
-     * hits can validate against it. Using fstat on the open fd gives
-     * the same (dev, ino) as a path stat would, with no second walk.
+    /* Capture the inode of the freshly-opened dir so subsequent cache hits can
+     * validate against it. Using fstat on the open fd gives the same (dev, ino)
+     * as a path stat would, with no second walk.
      */
     struct stat fresh_st;
     if (fstat(fresh, &fresh_st) < 0) {
@@ -201,10 +198,10 @@ static int sidecar_open_sysroot_cached(const char *path)
         pthread_mutex_unlock(&sidecar_sysroot_cached_lock);
         return -1;
     }
-    /* CLOEXEC dup: a concurrent posix_spawn from another vCPU thread
-     * must not inherit the sysroot dirfd into the fork-child. F_DUPFD_CLOEXEC
-     * sets the flag atomically with the dup, closing the inheritance window
-     * that plain dup() leaves open.
+    /* CLOEXEC dup: a concurrent posix_spawn from another vCPU thread must not
+     * inherit the sysroot dirfd into the fork-child. F_DUPFD_CLOEXEC sets the
+     * flag atomically with the dup, closing the inheritance window that plain
+     * dup() leaves open.
      */
     int cache_fd = fcntl(fresh, F_DUPFD_CLOEXEC, 0);
     if (cache_fd >= 0) {
@@ -245,9 +242,11 @@ static void sidecar_index_free(sidecar_index_t *index)
     index->count = 0;
 }
 
-/* Deep-copy src into dst so the caller can mutate dst freely and still
- * recover src for rollback. Returns 0 on success, -1 with errno on alloc
- * failure (dst is left empty in that case).
+/* Deep-copy src into dst so the caller can mutate dst freely and still recover
+ * src for rollback.
+ *
+ * Returns 0 on success, -1 with errno on alloc failure (dst is left empty in
+ * that case).
  */
 static int sidecar_index_clone(const sidecar_index_t *src, sidecar_index_t *dst)
 {
@@ -585,15 +584,15 @@ int sidecar_translate_lookup_at(guest_fd_t dirfd,
         }
         scan = normalized;
 
-        /* Kernel virtual filesystems live in procemu, not on the sysroot
-         * disk tree. Walking them here would openat() against a directory
-         * that never exists in the sysroot and short-circuit the procemu
-         * intercept downstream of path_translate_at(). Punt to that layer
-         * instead. Check the normalized form so "/./proc/..." and
-         * "//proc/..." also skip; match only on a full top-level component
-         * so siblings like "/procfoo" still go through sidecar. Note that
-         * path_openat2_normalize_in_root() strips the leading '/' from
-         * absolute inputs, so the prefixes here are unrooted.
+        /* Kernel virtual filesystems live in procemu, not on the sysroot disk
+         * tree. Walking them here would openat() against a directory that never
+         * exists in the sysroot and short-circuit the procemu intercept
+         * downstream of path_translate_at(). Punt to that layer instead. Check
+         * the normalized form so "/./proc/..." and "//proc/..." also skip;
+         * match only on a full top-level component so siblings like "/procfoo"
+         * still go through sidecar. Note that path_openat2_normalize_in_root()
+         * strips the leading '/' from absolute inputs, so the prefixes here are
+         * unrooted.
          */
         size_t plen = 0;
         if (!strncmp(normalized, "proc", 4))
@@ -777,8 +776,8 @@ static ssize_t sidecar_find_guest_index(const sidecar_index_t *index,
     return -1;
 }
 
-/* fcntl-only lock acquisition. Caller must hold sidecar_global_lock so that
- * the lock_two_indices nested path does not need a recursive mutex.
+/* fcntl-only lock acquisition. Caller must hold sidecar_global_lock so that the
+ * lock_two_indices nested path does not need a recursive mutex.
  */
 static int sidecar_lock_index_fcntl(int dirfd, int *lock_fd)
 {
@@ -880,11 +879,11 @@ static int sidecar_load_locked_index(int parent_dirfd,
         return -1;
     }
 
-    /* readv() avoids tripping clang's unix.BlockInCriticalSection
-     * checker. The checker flags read() while a pthread mutex is held
-     * (the global sidecar lock here), but regular-file reads do not
-     * actually block in any user-observable sense. readv with a single
-     * iovec slice is functionally identical to read.
+    /* readv() avoids tripping clang's unix.BlockInCriticalSection checker. The
+     * checker flags read() while a pthread mutex is held (the global sidecar
+     * lock here), but regular-file reads do not actually block in any
+     * user-observable sense. readv with a single iovec slice is functionally
+     * identical to read.
      */
     size_t off = 0;
     while (off < size) {
@@ -967,8 +966,10 @@ static int sidecar_load_locked_index(int parent_dirfd,
     return 0;
 }
 
-/* Write all bytes or fail. Returns 0 on success, -1 with errno set on error.
- * Handles short writes by retrying until everything is committed.
+/* Write all bytes or fail.
+ *
+ * Returns 0 on success, -1 with errno set on error. Handles short writes by
+ * retrying until everything is committed.
  */
 static int sidecar_write_all(int fd, const char *buf, size_t len)
 {
@@ -989,9 +990,9 @@ static int sidecar_write_all(int fd, const char *buf, size_t len)
     return 0;
 }
 
-/* Serialize the index into a malloc'd buffer. *out_len receives the byte
- * count. Returns 0 on success, -1 with errno on error; *out is NULL on
- * failure.
+/* Serialize the index into a malloc'd buffer. *out_len receives the byte count.
+ *
+ * Returns 0 on success, -1 with errno on error; *out is NULL on failure.
  */
 static int sidecar_serialize_index(const sidecar_index_t *index,
                                    char **out,
@@ -1000,8 +1001,8 @@ static int sidecar_serialize_index(const sidecar_index_t *index,
     *out = NULL;
     *out_len = 0;
 
-    /* Estimate capacity: each row is enc(name) + '\t' + token + '\n'.
-     * enc is at most 2 * NAME_MAX (hex encoding) plus a null. Round up.
+    /* Estimate capacity: each row is enc(name) + '\t' + token + '\n'. enc is at
+     * most 2 * NAME_MAX (hex encoding) plus a null. Round up.
      */
     size_t cap = 256;
     char *buf = (char *) malloc(cap);
@@ -1049,9 +1050,8 @@ static int sidecar_serialize_index(const sidecar_index_t *index,
 }
 
 /* Write the index atomically: serialize into memory, write to a tmp file
- * adjacent to the real index, then renameat() over the real index. The
- * caller already holds a separate lock sentinel for cross-process
- * serialization.
+ * adjacent to the real index, then renameat() over the real index. The caller
+ * already holds a separate lock sentinel for cross-process serialization.
  */
 static int sidecar_write_locked_index(int parent_dirfd,
                                       int lock_fd,
@@ -1088,12 +1088,12 @@ static int sidecar_write_locked_index(int parent_dirfd,
         errno = saved_errno;
         return -1;
     }
-    /* Invalidate the cache to UNKNOWN BEFORE the rename so a concurrent
-     * walker that loses the race to read the new file does not return a
-     * stale ABSENT verdict from this slot. A reader entering the window
-     * between rename and post-rename mark would otherwise skip the openat
-     * and miss the freshly-published index. UNKNOWN forces the reader to
-     * do the openat and observe the new file directly.
+    /* Invalidate the cache to UNKNOWN BEFORE the rename so a concurrent walker
+     * that loses the race to read the new file does not return a stale ABSENT
+     * verdict from this slot. A reader entering the window between rename and
+     * post-rename mark would otherwise skip the openat and miss the
+     * freshly-published index. UNKNOWN forces the reader to do the openat and
+     * observe the new file directly.
      */
     sidecar_idx_cache_invalidate(parent_dirfd);
     if (renameat(parent_dirfd, SIDECAR_INDEX_TMP_NAME, parent_dirfd,
@@ -1506,17 +1506,17 @@ int64_t sidecar_unlinkat(guest_fd_t dirfd, const char *path, int flags)
 
     int64_t rc = 0;
     if (have_host_name) {
-        /* Write the index update first so that an interrupted unlinkat
-         * does not leave the on-disk token without a mapping. If the
-         * unlinkat fails, restore the mapping and rewrite the index;
-         * the second write going wrong is logged but cannot be helped.
+        /* Write the index update first so that an interrupted unlinkat does not
+         * leave the on-disk token without a mapping. If the unlinkat fails,
+         * restore the mapping and rewrite the index; the second write going
+         * wrong is logged but cannot be helped.
          */
         sidecar_row_t saved_row = index.rows[remove_idx];
         char *saved_name = strdup(saved_row.guest_name);
         if (!saved_name) {
             rc = linux_errno();
-            /* No mutation happened yet, so reporting the allocation
-             * failure keeps the index and host state unchanged.
+            /* No mutation happened yet, so reporting the allocation failure
+             * keeps the index and host state unchanged.
              */
         } else {
             sidecar_remove_guest_locked(&index, remove_idx);
@@ -1886,10 +1886,10 @@ int64_t sidecar_renameat(guest_fd_t olddirfd,
         return linux_errno();
     }
 
-    /* Snapshot the loaded indices so that a host renameat failure later
-     * can roll the on-disk index back. Without this, an index update
-     * followed by a failed host renameat leaves the mapping pointing at
-     * a moved or missing token.
+    /* Snapshot the loaded indices so that a host renameat failure later can
+     * roll the on-disk index back. Without this, an index update followed by a
+     * failed host renameat leaves the mapping pointing at a moved or missing
+     * token.
      */
     sidecar_index_t saved_old = {0};
     sidecar_index_t saved_new = {0};
@@ -2016,10 +2016,10 @@ int64_t sidecar_renameat(guest_fd_t olddirfd,
         goto cleanup;
     }
 
-    /* Commit the index changes to disk before any host filesystem
-     * mutation so a failed write does not leave an orphan host file. The
-     * host renameat is the actual commit point; on host failure, revert
-     * the on-disk index by writing the saved snapshot back.
+    /* Commit the index changes to disk before any host filesystem mutation so a
+     * failed write does not leave an orphan host file. The host renameat is the
+     * actual commit point; on host failure, revert the on-disk index by writing
+     * the saved snapshot back.
      */
     if (same_dir) {
         rc = sidecar_write_locked_index(old_parent.dirfd, first_lock_fd,
@@ -2047,10 +2047,10 @@ int64_t sidecar_renameat(guest_fd_t olddirfd,
         if (renameat(old_parent.dirfd, old_state.host_name, new_parent.dirfd,
                      target_host) < 0) {
             result = linux_errno();
-            /* Roll the index back to the pre-modification state so the
-             * mapping stays consistent with the unchanged host tree. A
-             * failed rollback write is the best-effort case; the guest
-             * sees the original renameat errno regardless.
+            /* Roll the index back to the pre-modification state so the mapping
+             * stays consistent with the unchanged host tree. A failed rollback
+             * write is the best-effort case; the guest sees the original
+             * renameat errno regardless.
              */
             if (same_dir) {
                 (void) sidecar_write_locked_index(old_parent.dirfd,

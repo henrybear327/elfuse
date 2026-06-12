@@ -6,8 +6,8 @@
  *
  * Translates Linux socket syscalls into macOS equivalents, handling the
  * differences in address family constants, sockaddr layout (sa_len byte),
- * socket option constants, and flag encoding (SOCK_NONBLOCK/SOCK_CLOEXEC
- * packed into the type argument).
+ * socket option constants, and flag encoding (SOCK_NONBLOCK/SOCK_CLOEXEC packed
+ * into the type argument).
  */
 
 #pragma once
@@ -173,8 +173,10 @@ int64_t sys_recvmmsg(guest_t *g,
 /* Initialize netlink subsystem. Called from syscall_init(). */
 void netlink_init(void);
 
-/* Create a synthetic netlink socket fd. Returns guest fd, or negative errno.
- * Only NETLINK_ROUTE is supported; others return -EAFNOSUPPORT.
+/* Create a synthetic netlink socket fd.
+ *
+ * Returns guest fd, or negative errno. Only NETLINK_ROUTE is supported; others
+ * return -EAFNOSUPPORT.
  */
 int64_t netlink_socket(int protocol, int type);
 

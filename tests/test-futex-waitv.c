@@ -67,8 +67,8 @@ static long raw_futex_waitv(struct waitv_elem *waiters,
 
 /* Helper: wake @addr after @sleep_ms milliseconds. Used to unblock the main
  * thread's futex_waitv. The thread is joined by the test before the test
- * returns, so the wake completes before any state on the test's stack goes
- * out of scope.
+ * returns, so the wake completes before any state on the test's stack goes out
+ * of scope.
  */
 struct waker_args {
     uint32_t *addr;
@@ -300,8 +300,8 @@ static void test_einval_unaligned(void)
     TEST("EINVAL unaligned uaddr");
 
     /* Build a uaddr that is 1 byte off the natural 4-byte boundary. The
-     * underlying storage is still inside a writable mapping, so this
-     * exercises the alignment check rather than a fault path.
+     * underlying storage is still inside a writable mapping, so this exercises
+     * the alignment check rather than a fault path.
      */
     static uint8_t buf[16] __attribute__((aligned(4)));
     struct waitv_elem w = {
@@ -336,8 +336,8 @@ static void test_efault_timeout(void)
         .flags = FUTEX2_SIZE_U32 | FUTEX2_PRIVATE,
     };
 
-    /* Carve a PROT_NONE page so the timeout pointer is non-NULL but reads
-     * fault at copy time.
+    /* Carve a PROT_NONE page so the timeout pointer is non-NULL but reads fault
+     * at copy time.
      */
     void *p = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
@@ -354,8 +354,8 @@ static void test_efault_uaddr(void)
 {
     TEST("EFAULT PROT_NONE uaddr at enqueue");
 
-    /* Map a PROT_NONE page and aim a waiter at it. Linux returns EFAULT
-     * when the kernel tries to read *uaddr to compare against val.
+    /* Map a PROT_NONE page and aim a waiter at it. Linux returns EFAULT when
+     * the kernel tries to read *uaddr to compare against val.
      */
     void *p = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {

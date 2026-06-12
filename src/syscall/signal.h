@@ -71,7 +71,7 @@
 
 /* Linux sigaction (kernel-style, aarch64). */
 /* The kernel's struct sigaction for aarch64 (from
- * include/uapi/asm-generic/signal.h): sa_handler or sa_sigaction  (8 bytes)
+ * include/uapi/asm-generic/signal.h): sa_handler or sa_sigaction (8 bytes)
  *   sa_flags                    (8 bytes on LP64)
  *   sa_restorer                 (8 bytes)
  *   sa_mask                     (8 bytes, single uint64_t for 64 signals)
@@ -190,9 +190,9 @@ typedef struct {
      */
     bool std_info_valid[LINUX_SIGRTMIN - 1];
     signal_rt_info_t std_info[LINUX_SIGRTMIN - 1];
-    /* RT signal queue: count of pending instances per signal.
-     * Standard signals (1-31) use the pending bitmask plus std_info[].
-     * RT signals (32-64) are queued: each instance is tracked separately.
+    /* RT signal queue: count of pending instances per signal. Standard signals
+     * (1-31) use the pending bitmask plus std_info[]. RT signals (32-64) are
+     * queued: each instance is tracked separately.
      */
     int rt_queue[RT_SIGNAL_COUNT];
     uint8_t rt_head[RT_SIGNAL_COUNT];
@@ -204,9 +204,9 @@ typedef struct {
 /* Initialize signal state: all SIG_DFL, nothing pending/blocked. */
 void signal_init(void);
 
-/* Reset signal state for exec (POSIX requirement).
- * Handlers set to SIG_DFL (except SIG_IGN stays SIG_IGN).
- * Pending signals and signal mask are preserved.
+/* Reset signal state for exec (POSIX requirement). Handlers set to SIG_DFL
+ * (except SIG_IGN stays SIG_IGN). Pending signals and signal mask are
+ * preserved.
  */
 void signal_reset_for_exec(void);
 
@@ -221,8 +221,8 @@ void signal_queue_rt(int signum,
                      int32_t si_int,
                      uint64_t si_ptr);
 
-/* Queue a signal with explicit siginfo metadata. Standard signals preserve
- * one payload while coalesced; RT signals enqueue every instance.
+/* Queue a signal with explicit siginfo metadata. Standard signals preserve one
+ * payload while coalesced; RT signals enqueue every instance.
  */
 void signal_queue_info(int signum,
                        int32_t si_code,
@@ -232,11 +232,11 @@ void signal_queue_info(int signum,
                        uint64_t si_ptr);
 
 /* Set fault info for the next signal delivery. When set, signal_deliver()
- * populates si_code, si_addr, fault_address, and ESR context from these
- * values instead of using the default SI_USER/si_pid fields. Consumed
- * (cleared) after one delivery. Used for synchronous faults: BRK->SIGTRAP,
- * SIGSEGV, etc. The esr parameter is the raw ESR_EL1 value; if non-zero,
- * an esr_context block is appended to __reserved after FPSIMD.
+ * populates si_code, si_addr, fault_address, and ESR context from these values
+ * instead of using the default SI_USER/si_pid fields. Consumed (cleared) after
+ * one delivery. Used for synchronous faults: BRK->SIGTRAP, SIGSEGV, etc. The
+ * esr parameter is the raw ESR_EL1 value; if non-zero, an esr_context block is
+ * appended to __reserved after FPSIMD.
  */
 void signal_set_fault_info(int si_code, uint64_t addr, uint64_t esr);
 
@@ -246,10 +246,10 @@ bool signal_pending_interruption(bool *restart_out);
 
 /* True if anything that would normally be drained by signal_check_timer is
  * currently live: an unblocked pending signal, OR any of the three guest
- * itimers is armed. The shim's identity fast path consults this (indirectly
- * via shim_globals attention flag) to decide whether to skip the HVC #5
- * round-trip. Whenever this returns true, the shim must take the slow path so
- * the epilogue's signal_check_timer + queue drain runs.
+ * itimers is armed. The shim's identity fast path consults this (indirectly via
+ * shim_globals attention flag) to decide whether to skip the HVC #5 round-trip.
+ * Whenever this returns true, the shim must take the slow path so the
+ * epilogue's signal_check_timer + queue drain runs.
  */
 bool signal_attention_needed(void);
 
@@ -257,8 +257,8 @@ bool signal_attention_needed(void);
  * signal_queue / setitimer / proc_set_exit_group. Called from bootstrap and
  * fork-child after guest_init. Asserts that the value is NULL or matches the
  * already-registered g; elfuse runs one VM per process and the singleton
- * catches lifecycle bugs (multiple concurrent VMs in one process would
- * violate this invariant).
+ * catches lifecycle bugs (multiple concurrent VMs in one process would violate
+ * this invariant).
  *
  * Passing NULL clears the registration (used by signal_init for a defensive
  * reset; the attention setters become no-ops in that state, matching the
@@ -266,16 +266,18 @@ bool signal_attention_needed(void);
  */
 void signal_set_shim_globals_guest(guest_t *g);
 
-/* Deliver the highest-priority pending unblocked signal to the guest.
- * Builds an rt_sigframe on the guest stack and redirects vCPU to handler.
+/* Deliver the highest-priority pending unblocked signal to the guest. Builds an
+ * rt_sigframe on the guest stack and redirects vCPU to handler.
  * Returns: 1 if signal was delivered, 0 if nothing pending,
  *         -1 if process should terminate (default TERM/CORE disposition).
  * On terminate, *exit_code is set to 128 + signum.
  */
 int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code);
 
-/* Handle rt_sigreturn (SYS 139): restore registers from rt_sigframe on
- * the guest stack. Returns SYSCALL_EXEC_HAPPENED to skip X0 writeback.
+/* Handle rt_sigreturn (SYS 139): restore registers from rt_sigframe on the
+ * guest stack.
+ *
+ * Returns SYSCALL_EXEC_HAPPENED to skip X0 writeback.
  */
 int signal_rt_sigreturn(hv_vcpu_t vcpu, guest_t *g);
 
@@ -310,27 +312,27 @@ int64_t signal_sigaltstack(guest_t *g, uint64_t ss_gva, uint64_t old_ss_gva);
 const signal_state_t *signal_get_state(void);
 void signal_set_state(const signal_state_t *state);
 
-/* Snapshot or consume pending signals for signalfd.
- * signal_peek_signalfd() snapshots up to max matching entries without consuming
- * them. signal_take_signalfd_exact() then consumes those exact entries,
- * preserving any matching signals that arrived later.
+/* Snapshot or consume pending signals for signalfd. signal_peek_signalfd()
+ * snapshots up to max matching entries without consuming them.
+ * signal_take_signalfd_exact() then consumes those exact entries, preserving
+ * any matching signals that arrived later.
  */
 size_t signal_peek_signalfd(uint64_t mask, signal_rt_info_t *out, size_t max);
 size_t signal_take_signalfd_exact(const signal_rt_info_t *expected, size_t max);
 
 /* Save and restore blocked mask for pselect6/ppoll signal mask atomicity.
- * signal_save_blocked returns the current blocked mask.
- * signal_set_blocked applies a new mask (respecting SIGKILL/SIGSTOP).
- * signal_restore_blocked restores a previously saved mask.
+ * signal_save_blocked returns the current blocked mask. signal_set_blocked
+ * applies a new mask (respecting SIGKILL/SIGSTOP). signal_restore_blocked
+ * restores a previously saved mask.
  */
 uint64_t signal_save_blocked(void);
 void signal_set_blocked(uint64_t mask);
 void signal_restore_blocked(uint64_t saved);
 
-/* Guest ITIMER_REAL emulation.
- * These emulate the guest's setitimer(ITIMER_REAL) internally rather than
- * forwarding to the host, because macOS shares alarm() and setitimer() as
- * the same underlying timer, and elfuse needs alarm() for its vCPU timeout.
+/* Guest ITIMER_REAL emulation. These emulate the guest's setitimer(ITIMER_REAL)
+ * internally rather than forwarding to the host, because macOS shares alarm()
+ * and setitimer() as the same underlying timer, and elfuse needs alarm() for
+ * its vCPU timeout.
  */
 
 /* Set the guest's ITIMER_REAL timer. value/interval are relative durations.
@@ -354,7 +356,7 @@ void signal_get_itimer_virt(int which,
                             struct timeval *value,
                             struct timeval *interval);
 
-/* Check if any guest itimer has expired; queue signals as needed.
- * Called from the vCPU loop after each syscall.
+/* Check if any guest itimer has expired; queue signals as needed. Called from
+ * the vCPU loop after each syscall.
  */
 void signal_check_timer(void);

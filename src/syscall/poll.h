@@ -36,10 +36,10 @@ int64_t sys_epoll_pwait(guest_t *g,
                         int timeout_ms,
                         uint64_t sigmask_gva);
 
-/* Global wakeup pipe for interrupting blocking poll/select/epoll.
- * When exit_group or futex_interrupt is requested, write to
- * wakeup_pipe_wr to unblock any thread stuck in a host-side
- * poll/select/kevent with infinite timeout.
+/* Global wakeup pipe for interrupting blocking poll/select/epoll. When
+ * exit_group or futex_interrupt is requested, write to wakeup_pipe_wr to
+ * unblock any thread stuck in a host-side poll/select/kevent with infinite
+ * timeout.
  */
 void wakeup_pipe_init(void);
 void wakeup_pipe_signal(void);

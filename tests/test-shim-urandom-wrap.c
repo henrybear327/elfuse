@@ -5,10 +5,9 @@
  *
  * The EL1 getrandom fast path copies out of a 4096-byte ring. When a read
  * starts at ring[4095], the copy splits into a one-byte tail segment plus a
- * wrapped second segment. A missing post-increment on the first segment's
- * byte store used to make the second segment overwrite byte 0 of the caller
- * buffer and leave the final requested byte untouched while still returning
- * success.
+ * wrapped second segment. A missing post-increment on the first segment's byte
+ * store used to make the second segment overwrite byte 0 of the caller buffer
+ * and leave the final requested byte untouched while still returning success.
  */
 
 #include <errno.h>

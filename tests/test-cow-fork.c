@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Verifies that parent and child processes have independent memory
- * after fork (copy-on-write semantics). Parent writes should not
- * appear in child, and vice versa.
+ * Verifies that parent and child processes have independent memory after fork
+ * (copy-on-write semantics). Parent writes should not appear in child, and vice
+ * versa.
  *
  * Syscalls exercised: clone/fork, waitpid, pipe, read, write, mmap, brk
  */
@@ -235,8 +235,8 @@ static void test_large_cow(void)
 
 /* Test 5: brk isolation */
 
-/* Use brk syscall directly because musl's sbrk() rejects non-zero increments
- * by design (returns -ENOMEM), so the test must use the raw syscall.
+/* Use brk syscall directly because musl's sbrk() rejects non-zero increments by
+ * design (returns -ENOMEM), so the test must use the raw syscall.
  */
 static inline void *raw_brk(void *addr)
 {

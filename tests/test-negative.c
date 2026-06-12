@@ -4,10 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Exercises error paths: invalid FDs, bad syscall numbers, bad mmap
- * arguments, EFAULT (bad pointers), errno translation, EINVAL (bad flags),
- * and boundary conditions. All should return proper Linux error codes
- * without crashing.
+ * Exercises error paths: invalid FDs, bad syscall numbers, bad mmap arguments,
+ * EFAULT (bad pointers), errno translation, EINVAL (bad flags), and boundary
+ * conditions. All should return proper Linux error codes without crashing.
  */
 
 #include <stdint.h>
@@ -258,8 +257,8 @@ static void test_write_only_read(void)
 
 static void test_efault(void)
 {
-    /* Use an unmapped high address as a bad pointer.
-     * Raw syscalls return -errno directly. Linux EFAULT = 14.
+    /* Use an unmapped high address as a bad pointer. Raw syscalls return -errno
+     * directly. Linux EFAULT = 14.
      */
     void *bad_ptr = (void *) 0xDEAD000000000000ULL;
     const char *expected_efault = "expected -EFAULT (-14)";
@@ -290,8 +289,8 @@ static void test_efault(void)
 
 static void test_errno_values(void)
 {
-    /* Verify that elfuse translates macOS errno -> Linux errno correctly.
-     * These are the most commonly divergent values.
+    /* Verify that elfuse translates macOS errno -> Linux errno correctly. These
+     * are the most commonly divergent values.
      */
 
     TEST("EAGAIN is 11");
@@ -444,9 +443,9 @@ static void test_einval(void)
     TEST("clock_nanosleep(absolute past)");
     {
         /* TIMER_ABSTIME with a deadline already in the past must return 0
-         * immediately (no sleep). Use tv_sec=0 to stay in the kernel's
-         * "valid timespec" space -- Linux rejects negative tv_sec with
-         * -EINVAL even before the deadline-in-past check.
+         * immediately (no sleep). Use tv_sec=0 to stay in the kernel's "valid
+         * timespec" space -- Linux rejects negative tv_sec with -EINVAL even
+         * before the deadline-in-past check.
          */
         struct timespec ts = {.tv_sec = 0, .tv_nsec = 0};
         long r = raw_syscall4(__NR_clock_nanosleep, CLOCK_MONOTONIC,
@@ -456,10 +455,10 @@ static void test_einval(void)
 
     TEST("*at bad flags -> EINVAL");
     {
-        /* Path must exist: kernel validates flags before path resolution
-         * for the *at syscalls below, but a non-existent path can mask the
-         * flag error if the implementation reorders these (or if the flag
-         * arg is silently ignored, like sys_faccessat which only takes
+        /* Path must exist: kernel validates flags before path resolution for
+         * the *at syscalls below, but a non-existent path can mask the flag
+         * error if the implementation reorders these (or if the flag arg is
+         * silently ignored, like sys_faccessat which only takes
          * dirfd/path/mode). Using "/tmp" sidesteps both pitfalls.
          */
         const char *path = "/tmp";

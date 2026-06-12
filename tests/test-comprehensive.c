@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests: stdio, file I/O, dir listing, env vars, time, math, memory,
- * string ops, and system info, all in one program.
+ * Tests: stdio, file I/O, dir listing, env vars, time, math, memory, string
+ * ops, and system info, all in one program.
  */
 
 #include <stdio.h>

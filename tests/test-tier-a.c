@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests: SysV message queues, memory policy stubs, mlockall stubs,
- * prctl new options, /proc/self/task, PAC feature probe.
+ * Tests: SysV message queues, memory policy stubs, mlockall stubs, prctl new
+ * options, /proc/self/task, PAC feature probe.
  */
 
 #include <errno.h>
@@ -164,8 +164,8 @@ static void test_msgctl_rmid(void)
 
 /* Memory policy stubs. */
 
-/* get_mempolicy(2) and set_mempolicy(2) are Linux-specific.
- * Use raw syscall since glibc may not wrap them.
+/* get_mempolicy(2) and set_mempolicy(2) are Linux-specific. Use raw syscall
+ * since glibc may not wrap them.
  */
 #ifndef __NR_get_mempolicy
 #define __NR_get_mempolicy 236
@@ -451,12 +451,12 @@ static void test_pac_hwcap(void)
 
 /* AT_SECURE auxv probe. Bionic aborts when AT_SECURE is missing from the
  * auxiliary vector. elfuse never elevates privileges, so the value is 0.
- * getauxval() also returns 0 when an entry is not present, so distinguish
- * the two by walking /proc/self/auxv and looking for the AT_SECURE key.
+ * getauxval() also returns 0 when an entry is not present, so distinguish the
+ * two by walking /proc/self/auxv and looking for the AT_SECURE key.
  *
- * Read /proc/self/auxv with a loop: procfs is not required to return the
- * whole file in one read, and EINTR must be retried. AT_NULL must appear
- * in the accumulated buffer or the test cannot conclude.
+ * Read /proc/self/auxv with a loop: procfs is not required to return the whole
+ * file in one read, and EINTR must be retried. AT_NULL must appear in the
+ * accumulated buffer or the test cannot conclude.
  */
 static void test_at_secure_present(void)
 {

@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Minimal bench that measures the three labels the guardrail script
- * checks against the TODO ceilings:
+ * Minimal bench that measures the three labels the guardrail script checks
+ * against the TODO ceilings:
  *
  *   getpid          (raw SVC; shim identity fast path)
  *   clock_gettime   (vDSO trampoline; see -DGUARD_USE_LIBC_CG below)
@@ -35,8 +35,7 @@
  *
  *   name<padding> XX.X ns/op  last=N
  *
- * so the guardrail's awk extractor reads identical labels across both
- * variants.
+ * so the guardrail's awk extractor reads identical labels across both variants.
  */
 
 #include <elf.h>
@@ -78,8 +77,8 @@ static uint32_t sysv_hash(const char *name)
     return h;
 }
 
-/* Walk the vDSO ELF at AT_SYSINFO_EHDR and return the absolute address
- * of __kernel_clock_gettime, or NULL if anything is missing.
+/* Walk the vDSO ELF at AT_SYSINFO_EHDR and return the absolute address of
+ * __kernel_clock_gettime, or NULL if anything is missing.
  */
 static clock_gettime_fn resolve_vdso_clock_gettime(void)
 {
@@ -192,8 +191,8 @@ static void run_case(clock_gettime_fn cg,
 
 int main(int argc, char **argv)
 {
-    /* Line-buffered stdout so each completed case is visible
-     * immediately when stdout is piped or captured.
+    /* Line-buffered stdout so each completed case is visible immediately when
+     * stdout is piped or captured.
      */
     setvbuf(stdout, NULL, _IOLBF, 0);
 

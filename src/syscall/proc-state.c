@@ -32,9 +32,9 @@ static bool shim_blob_owned = false;
 /* Current ELF and launcher paths. */
 static char elf_path[LINUX_PATH_MAX] = {0};
 static char elfuse_path[LINUX_PATH_MAX] = {0};
-/* Serializes proc_set_elf_path against readers that consume the string.
- * Without this, an execve on one vCPU can tear the buffer underneath a
- * sibling vCPU resolving /proc/self/exe.
+/* Serializes proc_set_elf_path against readers that consume the string. Without
+ * this, an execve on one vCPU can tear the buffer underneath a sibling vCPU
+ * resolving /proc/self/exe.
  */
 static pthread_mutex_t elf_path_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -47,8 +47,8 @@ static uint8_t auxv_buf[1024] = {0};
 static size_t auxv_len = 0;
 static char sysroot_path[LINUX_PATH_MAX] = {0};
 
-/* Serializes proc_set_sysroot against path-helper snapshots. Without this,
- * a sibling vCPU running chroot during another vCPU's path resolution can tear
+/* Serializes proc_set_sysroot against path-helper snapshots. Without this, a
+ * sibling vCPU running chroot during another vCPU's path resolution can tear
  * the snprintf input buffer underneath that thread.
  */
 static pthread_mutex_t sysroot_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -264,10 +264,10 @@ void proc_set_elf_path(const char *path)
     pthread_mutex_unlock(&elf_path_lock);
 }
 
-/* Returns the elf_path buffer pointer. Boolean-test callers tolerate the
- * racy read since the first byte transitions atomically. Callers that
- * consume the string content must use proc_elf_path_snapshot() to avoid
- * a torn read against a concurrent proc_set_elf_path().
+/* Returns the elf_path buffer pointer. Boolean-test callers tolerate the racy
+ * read since the first byte transitions atomically. Callers that consume the
+ * string content must use proc_elf_path_snapshot() to avoid a torn read against
+ * a concurrent proc_set_elf_path().
  */
 const char *proc_get_elf_path(void)
 {
@@ -463,10 +463,10 @@ static bool sysroot_path_is_contained(const char *resolved_path,
     } else {
         const char *base = strrchr(resolved_path, '/');
         /* "." and ".." basenames navigate the directory tree and cannot
-         * themselves be symlinks, so realpath the full path: appending
-         * the literal basename onto realpath(parent) would let
-         * "${sysroot}/x/.." pass the prefix check while the kernel
-         * resolves the syscall target above sysroot.
+         * themselves be symlinks, so realpath the full path: appending the
+         * literal basename onto realpath(parent) would let "${sysroot}/x/.."
+         * pass the prefix check while the kernel resolves the syscall target
+         * above sysroot.
          */
         if (base && (!strcmp(base + 1, "..") || !strcmp(base + 1, "."))) {
             if (!realpath(resolved_path, real_path))
@@ -477,12 +477,11 @@ static bool sysroot_path_is_contained(const char *resolved_path,
 
             str_copy_trunc(parent, resolved_path, sizeof(parent));
             slash = strrchr(parent, '/');
-            /* resolved_path is always ${sysroot}${guest_path} where sysroot
-             * is non-empty (caller short-circuits otherwise) and guest_path
-             * starts with '/'. The result therefore contains at least two
-             * '/' bytes, so the basename slash is never at parent[0].
-             * Reject anything that violates the invariant rather than
-             * carrying dead code for it.
+            /* resolved_path is always ${sysroot}${guest_path} where sysroot is
+             * non-empty (caller short-circuits otherwise) and guest_path starts
+             * with '/'. The result therefore contains at least two '/' bytes,
+             * so the basename slash is never at parent[0]. Reject anything that
+             * violates the invariant rather than carrying dead code for it.
              */
             if (!slash || slash == parent)
                 return false;
@@ -610,8 +609,8 @@ const char *proc_resolve_sysroot_create_path(const char *path,
 
     /* access() failed for a reason other than "parent missing" (e.g. EACCES,
      * ELOOP, ENAMETOOLONG, EIO). Treating those as "parent absent" would let
-     * the redirect logic auto-create or silently fall back to the host
-     * literal, which can bypass sysroot resolution. Surface the real error.
+     * the redirect logic auto-create or silently fall back to the host literal,
+     * which can bypass sysroot resolution. Surface the real error.
      */
     if (errno != ENOENT && errno != ENOTDIR)
         return NULL;

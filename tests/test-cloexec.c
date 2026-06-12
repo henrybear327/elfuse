@@ -233,8 +233,8 @@ static void test_cloexec_inherited_in_fork(void)
 {
     TEST("CLOEXEC FDs inherited in fork");
 
-    /* POSIX: CLOEXEC only takes effect at exec, NOT at fork.
-     * Fork children inherit all FDs regardless of CLOEXEC.
+    /* POSIX: CLOEXEC only takes effect at exec, NOT at fork. Fork children
+     * inherit all FDs regardless of CLOEXEC.
      */
     int pipefd[2];
     if (pipe2(pipefd, O_CLOEXEC) != 0) {
@@ -261,8 +261,8 @@ static void test_cloexec_inherited_in_fork(void)
     }
 
     if (pid == 0) {
-        /* Child: try writing to the CLOEXEC pipe. Should succeed
-         * because POSIX says CLOEXEC only takes effect at exec
+        /* Child: try writing to the CLOEXEC pipe. Should succeed because POSIX
+         * says CLOEXEC only takes effect at exec
          */
         close(result[0]);
         char c;

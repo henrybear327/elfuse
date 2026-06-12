@@ -1,5 +1,4 @@
-/* Linux inotify emulation via kqueue EVFILT_VNODE for
- * elfuse
+/* Linux inotify emulation via kqueue EVFILT_VNODE for elfuse
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -44,8 +43,8 @@ static void inotify_close(int guest_fd);
 
 /* Linux inotify constants (from linux/inotify.h). Only the bits emulation
  * actually emits or recognizes are listed; the remaining inotify events
- * (IN_ACCESS, IN_OPEN, IN_CLOSE_NOWRITE, IN_MOVED_FROM, IN_MOVED_TO) cannot
- * be derived from EVFILT_VNODE notifications, so emulation never sets them.
+ * (IN_ACCESS, IN_OPEN, IN_CLOSE_NOWRITE, IN_MOVED_FROM, IN_MOVED_TO) cannot be
+ * derived from EVFILT_VNODE notifications, so emulation never sets them.
  */
 #define IN_MODIFY 0x00000002
 #define IN_ATTRIB 0x00000004
@@ -99,9 +98,9 @@ typedef struct {
 
 static inotify_instance_t inotify_state[INOTIFY_MAX];
 
-/* Mutex protecting inotify_state[] for concurrent access.
- * Two guest threads may create/close/add-watch on different inotify
- * instances simultaneously.  Lock order: 7 (after pid_lock).
+/* Mutex protecting inotify_state[] for concurrent access. Two guest threads may
+ * create/close/add-watch on different inotify instances simultaneously. Lock
+ * order: 7 (after pid_lock).
  */
 static pthread_mutex_t inotify_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -169,8 +168,8 @@ static int watch_slot_alloc(inotify_instance_t *inst)
 
 /* Event translation. */
 
-/* Convert Linux IN_* mask to kqueue NOTE_* flags for EVFILT_VNODE.
- * Not all IN_* events have kqueue equivalents.
+/* Convert Linux IN_* mask to kqueue NOTE_* flags for EVFILT_VNODE. Not all IN_*
+ * events have kqueue equivalents.
  */
 static uint32_t in_mask_to_notes(uint32_t mask)
 {
@@ -192,8 +191,8 @@ static uint32_t in_mask_to_notes(uint32_t mask)
     return notes;
 }
 
-/* Convert kqueue NOTE_* fflags to Linux IN_* mask.
- * The watch's subscribed mask filters which events are actually reported.
+/* Convert kqueue NOTE_* fflags to Linux IN_* mask. The watch's subscribed mask
+ * filters which events are actually reported.
  */
 static uint32_t notes_to_in_mask(uint32_t fflags,
                                  uint32_t subscribed,
@@ -203,9 +202,8 @@ static uint32_t notes_to_in_mask(uint32_t fflags,
 
     if (fflags & NOTE_WRITE) {
         if (is_dir) {
-            /* Directory write = something was created/deleted inside.
-             * Report as IN_CREATE|IN_DELETE since inotify emulation cannot
-             * distinguish.
+            /* Directory write = something was created/deleted inside. Report as
+             * IN_CREATE|IN_DELETE since inotify emulation cannot distinguish.
              */
             if (subscribed & IN_CREATE)
                 mask |= IN_CREATE;
@@ -236,8 +234,10 @@ static uint32_t notes_to_in_mask(uint32_t fflags,
     return mask & subscribed;
 }
 
-/* Queue a single inotify event into the instance's buffer.
- * name may be NULL (no filename). Returns 0 on success, -1 if full.
+/* Queue a single inotify event into the instance's buffer. name may be NULL (no
+ * filename).
+ *
+ * Returns 0 on success, -1 if full.
  */
 static int queue_event(inotify_instance_t *inst,
                        int wd,
@@ -282,11 +282,10 @@ static void pipe_signal(inotify_instance_t *inst)
     write(inst->pipe_wr, &byte, 1);
 }
 
-/* Drain the self-pipe to reset readability. The pipe is O_NONBLOCK so
- * the loop terminates on EAGAIN. readv is used in place of read to
- * bypass clang's unix.BlockInCriticalSection checker, which flags
- * read() while a pthread mutex is held even though a non-blocking pipe
- * drain cannot stall.
+/* Drain the self-pipe to reset readability. The pipe is O_NONBLOCK so the loop
+ * terminates on EAGAIN. readv is used in place of read to bypass clang's
+ * unix.BlockInCriticalSection checker, which flags read() while a pthread mutex
+ * is held even though a non-blocking pipe drain cannot stall.
  */
 static void pipe_drain(inotify_instance_t *inst)
 {
@@ -298,9 +297,10 @@ static void pipe_drain(inotify_instance_t *inst)
 
 /* Collect events from kqueue. */
 
-/* Poll the kqueue for pending vnode events and translate them into
- * inotify events in the instance buffer. Returns the number of
- * events collected.
+/* Poll the kqueue for pending vnode events and translate them into inotify
+ * events in the instance buffer.
+ *
+ * Returns the number of events collected.
  */
 static int collect_events(inotify_instance_t *inst)
 {
@@ -412,16 +412,16 @@ int64_t sys_inotify_add_watch(guest_t *g,
                               uint64_t path_gva,
                               uint32_t mask)
 {
-    /* Read path from guest memory (no lock needed since guest_read_str
-     * only touches per-guest state, not inotify_state).
+    /* Read path from guest memory (no lock needed since guest_read_str only
+     * touches per-guest state, not inotify_state).
      */
     char path[LINUX_PATH_MAX];
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
 
-    /* Open the path for event monitoring. O_EVTONLY is macOS-specific:
-     * opens for event notification only, does not prevent unmount or
-     * require read access to the file contents.
+    /* Open the path for event monitoring. O_EVTONLY is macOS-specific: opens
+     * for event notification only, does not prevent unmount or require read
+     * access to the file contents.
      */
     int host_fd = open(path, O_EVTONLY);
     if (host_fd < 0)
@@ -449,10 +449,11 @@ int64_t sys_inotify_add_watch(guest_t *g,
 
     inotify_instance_t *inst = &inotify_state[slot];
 
-    /* Linux inotify re-add semantics: if the same file (by dev/ino) is
-     * already watched, update the existing watch's mask instead of
-     * creating a new one.  IN_MASK_ADD ORs new bits; without it, the
-     * mask is replaced entirely.  Returns the existing wd.
+    /* Linux inotify re-add semantics: if the same file (by dev/ino) is already
+     * watched, update the existing watch's mask instead of creating a new one.
+     * IN_MASK_ADD ORs new bits; without it, the mask is replaced entirely.
+     *
+     * Returns the existing wd.
      */
     int existing = watch_find_by_devino(inst, st.st_dev, st.st_ino);
     if (existing >= 0) {
@@ -469,8 +470,8 @@ int64_t sys_inotify_add_watch(guest_t *g,
         /* Close the duplicate fd; inotify emulation keeps the original */
         close(host_fd);
 
-        /* Update kevent filter with the new mask (use snapshot --
-         * w->mask may be modified by another thread after unlock)
+        /* Update kevent filter with the new mask (use snapshot -- w->mask may
+         * be modified by another thread after unlock)
          */
         uint32_t notes = in_mask_to_notes(snapshot_mask);
         struct kevent kev;
@@ -506,10 +507,10 @@ int64_t sys_inotify_add_watch(guest_t *g,
     int kq_fd = inst->kq_fd;
     pthread_mutex_unlock(&inotify_lock);
 
-    /* Register kevent with EVFILT_VNODE. EV_CLEAR makes it re-arm
-     * automatically after each kevent() retrieval, matching inotify's
-     * continuous monitoring behavior.
-     * kevent() is thread-safe; run outside the lock to avoid blocking.
+    /* Register kevent with EVFILT_VNODE. EV_CLEAR makes it re-arm automatically
+     * after each kevent() retrieval, matching inotify's continuous monitoring
+     * behavior. kevent() is thread-safe; run outside the lock to avoid
+     * blocking.
      */
     uint32_t notes = in_mask_to_notes(event_mask);
     struct kevent kev;
@@ -587,11 +588,10 @@ int64_t inotify_read(int guest_fd, guest_t *g, uint64_t buf_gva, uint64_t count)
                 return -LINUX_EAGAIN;
             }
 
-            /* Blocking read: release lock, wait on the kqueue for events.
-             * The self-pipe makes poll/select/epoll work, but for direct
-             * read() calls inotify emulation polls the kqueue with a moderate
-             * timeout and retry to avoid hanging indefinitely (allows signal
-             * delivery).
+            /* Blocking read: release lock, wait on the kqueue for events. The
+             * self-pipe makes poll/select/epoll work, but for direct read()
+             * calls inotify emulation polls the kqueue with a moderate timeout
+             * and retry to avoid hanging indefinitely (allows signal delivery).
              */
             int kq_fd = inst->kq_fd;
             pthread_mutex_unlock(&inotify_lock);
@@ -639,8 +639,8 @@ int64_t inotify_read(int guest_fd, guest_t *g, uint64_t buf_gva, uint64_t count)
         return -LINUX_EAGAIN;
     }
 
-    /* Copy buffered events to a local buffer under lock, then write to
-     * guest after releasing the lock (guest_write does not need lock).
+    /* Copy buffered events to a local buffer under lock, then write to guest
+     * after releasing the lock (guest_write does not need lock).
      */
     size_t copied = 0, pos = 0;
 
@@ -698,8 +698,8 @@ static void inotify_close(int guest_fd)
 
     inotify_instance_t *inst = &inotify_state[slot];
 
-    /* Snapshot state that needs cleanup, then mark slot free.
-     * This prevents other threads from finding this instance.
+    /* Snapshot state that needs cleanup, then mark slot free. This prevents
+     * other threads from finding this instance.
      */
     int kq_fd = inst->kq_fd, pipe_wr = inst->pipe_wr;
 
@@ -726,8 +726,8 @@ static void inotify_close(int guest_fd)
         close(watch_fds[i]);
     }
 
-    /* Close kqueue and pipe write end.
-     * pipe_rd is closed by sys_close() as the host_fd.
+    /* Close kqueue and pipe write end. pipe_rd is closed by sys_close() as the
+     * host_fd.
      */
     close(kq_fd);
     close(pipe_wr);

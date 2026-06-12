@@ -3,13 +3,13 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Covers Linux syscalls whose semantics elfuse must emulate exactly:
- * fchmodat2 (SYS 452) including AT_SYMLINK_NOFOLLOW, getcpu (SYS 168),
- * openat2 (SYS 437) with each RESOLVE_* flag variant (BENEATH,
- * IN_ROOT, NO_SYMLINKS, NO_MAGICLINKS, NO_XDEV), O_PATH descriptor enforcement
- * for read/write/fstat, madvise corner cases (MADV_COLD acceptance and
- * MADV_DONTNEED across an unmapped hole), and the low-address mmap
- * hint preservation that ET_EXEC layout depends on.
+ * Covers Linux syscalls whose semantics elfuse must emulate exactly: fchmodat2
+ * (SYS 452) including AT_SYMLINK_NOFOLLOW, getcpu (SYS 168), openat2 (SYS 437)
+ * with each RESOLVE_* flag variant (BENEATH, IN_ROOT, NO_SYMLINKS,
+ * NO_MAGICLINKS, NO_XDEV), O_PATH descriptor enforcement for read/write/fstat,
+ * madvise corner cases (MADV_COLD acceptance and MADV_DONTNEED across an
+ * unmapped hole), and the low-address mmap hint preservation that ET_EXEC
+ * layout depends on.
  */
 
 #include <errno.h>
@@ -33,13 +33,12 @@
 
 int passes = 0, fails = 0;
 
-/* Some Linux fidelity tests probe semantics that depend on filesystem
- * support (e.g. changing a symlink's own mode via AT_SYMLINK_NOFOLLOW
- * fails with EOPNOTSUPP on most Linux filesystems). Counting those as
- * skips keeps the summary honest: the syscall path was reached and
- * answered correctly, but the kernel declined the specific request.
- * Hard-failing on EOPNOTSUPP would turn the regression into a false
- * negative on perfectly conforming kernels.
+/* Some Linux fidelity tests probe semantics that depend on filesystem support
+ * (e.g. changing a symlink's own mode via AT_SYMLINK_NOFOLLOW fails with
+ * EOPNOTSUPP on most Linux filesystems). Counting those as skips keeps the
+ * summary honest: the syscall path was reached and answered correctly, but the
+ * kernel declined the specific request. Hard-failing on EOPNOTSUPP would turn
+ * the regression into a false negative on perfectly conforming kernels.
  */
 static int syscall_skips = 0;
 #define SYSCALL_SKIP(reason)          \
@@ -121,9 +120,9 @@ static void test_fchmodat2_symlink_nofollow(void)
      * Most Linux filesystems (including tmpfs, ext4, btrfs without the
      * symlink-mode opt-in) reject this with EOPNOTSUPP because the on-disk
      * inode for a symlink has no separately writable mode bit. Treat that
-     * answer as an honest skip: the kernel reached fchmodat2_write and
-     * declined the specific request. Any other negative return is a real
-     * failure that the test should surface.
+     * answer as an honest skip: the kernel reached fchmodat2_write and declined
+     * the specific request. Any other negative return is a real failure that
+     * the test should surface.
      */
     long rc =
         syscall(SYS_fchmodat2, AT_FDCWD, linkpath, 0700, AT_SYMLINK_NOFOLLOW);
@@ -623,8 +622,8 @@ static void test_openat2_resolve_no_xdev_allows_same_mount(void)
         PASS();
         return;
     }
-    /* Acceptable if /etc/passwd doesn't exist on the host running the test,
-     * as long as the error is not EXDEV.
+    /* Acceptable if /etc/passwd doesn't exist on the host running the test, as
+     * long as the error is not EXDEV.
      */
     EXPECT_TRUE(errno != EXDEV, "should not return EXDEV for same-class path");
 }
@@ -809,11 +808,11 @@ static void test_openat2_resolve_no_xdev_rejects_relative_tmp(void)
 
 static void test_openat2_resolve_no_xdev_rejects_transient_proc(void)
 {
-    /* A naive endpoint-only check would accept /proc/self/../../tmp/foo
-     * because the lexical normalization collapses /proc/self/../.. to /
-     * and the final classifier sees only /tmp/foo. Linux walks the path
-     * component by component and catches the transient crossing into
-     * /proc. The component walker must do the same.
+    /* A naive endpoint-only check would accept /proc/self/../../tmp/foo because
+     * the lexical normalization collapses /proc/self/../.. to / and the final
+     * classifier sees only /tmp/foo. Linux walks the path component by
+     * component and catches the transient crossing into /proc. The component
+     * walker must do the same.
      */
     TEST("openat2 RESOLVE_NO_XDEV catches transient /proc visit");
     struct open_how how = {
@@ -889,11 +888,10 @@ static void test_openat2_resolve_no_xdev_rejects_symlink_to_proc(void)
 
 static void test_openat2_resolve_no_xdev_in_root_clamps_dotdot(void)
 {
-    /* IN_ROOT clamps ".." at the dirfd. The combined NO_XDEV precheck must
-     * use the same floor, otherwise a path like /../../tmp from a /proc/1
-     * dirfd lexically pops above /proc and the walker would falsely report
-     * EXDEV even though the actual resolution clamps and stays inside the
-     * proc class.
+    /* IN_ROOT clamps ".." at the dirfd. The combined NO_XDEV precheck must use
+     * the same floor, otherwise a path like /../../tmp from a /proc/1 dirfd
+     * lexically pops above /proc and the walker would falsely report EXDEV even
+     * though the actual resolution clamps and stays inside the proc class.
      */
     TEST("openat2 RESOLVE_IN_ROOT | NO_XDEV clamps .. at dirfd");
     int dirfd = open("/proc/self", O_RDONLY | O_DIRECTORY);
@@ -918,10 +916,10 @@ static void test_openat2_resolve_no_xdev_in_root_clamps_dotdot(void)
 static void test_openat2_resolve_no_xdev_rejects_proc_fd_magiclink(void)
 {
     /* /proc/self/fd/N is a magic link whose target lives in whatever mount
-     * holds the underlying fd. Following it out of procfs is a mount
-     * crossing under Linux NO_XDEV. Without this guard the post-open
-     * check sees proc_path stamped as /proc/self/fd/N and falsely
-     * agrees with the PROC start class.
+     * holds the underlying fd. Following it out of procfs is a mount crossing
+     * under Linux NO_XDEV. Without this guard the post-open check sees
+     * proc_path stamped as /proc/self/fd/N and falsely agrees with the PROC
+     * start class.
      */
     TEST("openat2 RESOLVE_NO_XDEV rejects /proc/self/fd magic link");
     int helper = open("/tmp", O_RDONLY | O_DIRECTORY);

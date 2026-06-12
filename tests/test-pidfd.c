@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests: pidfd_open, pidfd_send_signal, clone3 with CLONE_PIDFD,
- * and poll on pidfd for exit notification.
+ * Tests: pidfd_open, pidfd_send_signal, clone3 with CLONE_PIDFD, and poll on
+ * pidfd for exit notification.
  */
 
 #include <stdint.h>

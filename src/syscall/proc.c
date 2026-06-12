@@ -4,10 +4,10 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Owns all static process state: guest PID/PPID, shim blob reference,
- * ELF path, command line, and the process table for tracking fork
- * children. Provides accessor functions for modules that need this
- * state (forkipc.c, syscall/exec.c, procemu.c).
+ * Owns all static process state: guest PID/PPID, shim blob reference, ELF path,
+ * command line, and the process table for tracking fork children. Provides
+ * accessor functions for modules that need this state (forkipc.c,
+ * syscall/exec.c, procemu.c).
  *
  * Also contains wait4, waitid, and the vCPU run loop.
  */
@@ -55,17 +55,17 @@ static _Atomic uint64_t wxcount_to_rx = 0; /* RW->RX (exec fault) */
 static _Atomic uint64_t wxcount_to_rw = 0; /* RX->RW (write fault) */
 static _Atomic uint64_t sysreg_write_count =
     0; /* EC=0x18 Dir=0 (DC CVAU, IC IVAU, etc.) */
-/* x86_64-via-Rosetta is on by default: the architecture is auto-detected
- * from the ELF header (EM_X86_64), and rosetta is the only viable path for
- * those binaries on Apple Silicon. The --no-rosetta CLI flag (or
- * ELFUSE_NO_ROSETTA=1) disables it; without rosetta installed, the rosetta
- * loader fails its access() check and surfaces an install hint regardless.
+/* x86_64-via-Rosetta is on by default: the architecture is auto-detected from
+ * the ELF header (EM_X86_64), and rosetta is the only viable path for those
+ * binaries on Apple Silicon. The --no-rosetta CLI flag (or ELFUSE_NO_ROSETTA=1)
+ * disables it; without rosetta installed, the rosetta loader fails its access()
+ * check and surfaces an install hint regardless.
  */
 static _Atomic bool rosetta_enabled = true;
-/* Runtime indicator: distinct from rosetta_enabled (user opt-in). Set when
- * the active guest_t is actually running under rosetta, so callers without
- * direct guest_t access (proc_intercept_readlink, log paths) can branch on
- * runtime state without threading g through every signature.
+/* Runtime indicator: distinct from rosetta_enabled (user opt-in). Set when the
+ * active guest_t is actually running under rosetta, so callers without direct
+ * guest_t access (proc_intercept_readlink, log paths) can branch on runtime
+ * state without threading g through every signature.
  */
 static _Atomic bool rosetta_active = false;
 
@@ -76,9 +76,9 @@ static pthread_mutex_t pid_lock = PTHREAD_MUTEX_INITIALIZER; /* Lock order: 6 */
 static pthread_cond_t pid_cond =
     PTHREAD_COND_INITIALIZER; /* Signaled on child exit */
 
-/* Global flag for exit_group: signals all threads to terminate.
- * Atomic to avoid undefined behavior under C11 memory model when
- * multiple threads read/write concurrently.
+/* Global flag for exit_group: signals all threads to terminate. Atomic to avoid
+ * undefined behavior under C11 memory model when multiple threads read/write
+ * concurrently.
  */
 static _Atomic int exit_group_requested = 0;
 
@@ -248,9 +248,11 @@ int64_t proc_alloc_pid(void)
     return pid;
 }
 
-/* Try to reap exited children from the process table. Calls waitpid
- * with WNOHANG on each active entry; entries whose host process has
- * exited are freed. Returns the number of slots reclaimed.
+/* Try to reap exited children from the process table. Calls waitpid with
+ * WNOHANG on each active entry; entries whose host process has exited are
+ * freed.
+ *
+ * Returns the number of slots reclaimed.
  */
 static int proc_reap_finished(void)
 {
@@ -369,10 +371,10 @@ int proc_get_child_pids(pid_t *out, int max_pids)
     }
     pthread_mutex_unlock(&pid_lock);
 
-    /* Recursively collect descendants via proc_listchildpids.
-     * Orphaned grandchildren (PPID=1) are not found this way, so also
-     * check all host processes with the current elfuse binary name.  This is
-     * O(n_procs) but /proc/net reads are infrequent.
+    /* Recursively collect descendants via proc_listchildpids. Orphaned
+     * grandchildren (PPID=1) are not found this way, so also check all host
+     * processes with the current elfuse binary name. This is O(n_procs) but
+     * /proc/net reads are infrequent.
      */
     pid_t all_pids[4096];
     int n = proc_listpids(PROC_ALL_PIDS, 0, all_pids, sizeof(all_pids));
@@ -418,10 +420,9 @@ int64_t sys_ptrace(guest_t *g,
 {
     switch (request) {
     case LINUX_PTRACE_SEIZE: {
-        /* Attach to target thread without stopping it. The tracee
-         * can later be stopped via PTRACE_INTERRUPT or BRK-induced
-         * ptrace-stop. Unlike PTRACE_ATTACH, SEIZE does not send
-         * SIGSTOP.
+        /* Attach to target thread without stopping it. The tracee can later be
+         * stopped via PTRACE_INTERRUPT or BRK-induced ptrace-stop. Unlike
+         * PTRACE_ATTACH, SEIZE does not send SIGSTOP.
          */
         thread_entry_t *target = thread_find(pid);
         if (!target)
@@ -435,8 +436,8 @@ int64_t sys_ptrace(guest_t *g,
     }
 
     case LINUX_PTRACE_CONT: {
-        /* Resume a stopped tracee, optionally injecting a signal.
-         * data = signal to inject (0 = none).
+        /* Resume a stopped tracee, optionally injecting a signal. data = signal
+         * to inject (0 = none).
          */
         thread_entry_t *target = thread_find(pid);
         if (!target || !target->ptraced)
@@ -449,9 +450,9 @@ int64_t sys_ptrace(guest_t *g,
     }
 
     case LINUX_PTRACE_INTERRUPT: {
-        /* Force a running tracee into ptrace-stop. Uses hv_vcpus_exit
-         * to break the tracee out of hv_vcpu_run; the tracee will then
-         * enter ptrace-stop in its HV_EXIT_REASON_CANCELED handler.
+        /* Force a running tracee into ptrace-stop. Uses hv_vcpus_exit to break
+         * the tracee out of hv_vcpu_run; the tracee will then enter ptrace-stop
+         * in its HV_EXIT_REASON_CANCELED handler.
          */
         thread_entry_t *target = thread_find(pid);
         if (!target || !target->ptraced)
@@ -464,8 +465,8 @@ int64_t sys_ptrace(guest_t *g,
     }
 
     case LINUX_PTRACE_GETREGSET: {
-        /* Read tracee registers via iovec. addr = NT_PRSTATUS (1),
-         * data = guest pointer to linux iovec_t {base, len}.
+        /* Read tracee registers via iovec. addr = NT_PRSTATUS (1), data = guest
+         * pointer to linux iovec_t {base, len}.
          */
         if (addr != LINUX_NT_PRSTATUS)
             return -LINUX_EINVAL;
@@ -496,8 +497,8 @@ int64_t sys_ptrace(guest_t *g,
     }
 
     case LINUX_PTRACE_SETREGSET: {
-        /* Write tracee registers via iovec. addr = NT_PRSTATUS (1),
-         * data = guest pointer to linux iovec_t {base, len}.
+        /* Write tracee registers via iovec. addr = NT_PRSTATUS (1), data =
+         * guest pointer to linux iovec_t {base, len}.
          */
         if (addr != LINUX_NT_PRSTATUS)
             return -LINUX_EINVAL;
@@ -534,9 +535,9 @@ int64_t sys_ptrace(guest_t *g,
     }
 }
 
-/* Write a macOS struct rusage to guest memory as linux_rusage_t.
- * Field layout matches on LP64, but ru_maxrss must be converted
- * from macOS bytes to Linux kilobytes.
+/* Write a macOS struct rusage to guest memory as linux_rusage_t. Field layout
+ * matches on LP64, but ru_maxrss must be converted from macOS bytes to Linux
+ * kilobytes.
  */
 _Static_assert(sizeof(struct rusage) == sizeof(linux_rusage_t),
                "host and guest rusage layouts must match on LP64");
@@ -574,8 +575,8 @@ int64_t sys_wait4(guest_t *g,
             }
             return ptrace_tid;
         }
-        /* ptrace_tid == 0: no matching children or WNOHANG; fall through
-         * to the process table for regular fork children.
+        /* ptrace_tid == 0: no matching children or WNOHANG; fall through to the
+         * process table for regular fork children.
          */
     }
 
@@ -591,10 +592,10 @@ int64_t sys_wait4(guest_t *g,
     pthread_mutex_lock(&pid_lock);
 
     if (pid == -1) {
-        /* Wait for any child.  Always poll with WNOHANG first so wait4
-         * does not block on one specific child while another exits.  If
-         * blocking (no WNOHANG) and no child is ready, sleep briefly
-         * and retry; this gives correct "wait for any" semantics.
+        /* Wait for any child. Always poll with WNOHANG first so wait4 does not
+         * block on one specific child while another exits. If blocking (no
+         * WNOHANG) and no child is ready, sleep briefly and retry; this gives
+         * correct "wait for any" semantics.
          */
         for (;;) {
             bool found_any_child = false;
@@ -633,8 +634,7 @@ int64_t sys_wait4(guest_t *g,
                         int32_t linux_status = status;
                         if (guest_write_small(g, status_gva, &linux_status,
                                               sizeof(linux_status)) < 0) {
-                            /* Child already reaped. Match Linux: return
-                             * EFAULT
+                            /* Child already reaped. Match Linux: return EFAULT
                              */
                             pthread_mutex_lock(&pid_lock);
                             if (proc_table[slot].active &&
@@ -673,11 +673,11 @@ int64_t sys_wait4(guest_t *g,
                 return 0;
             }
 
-            /* Blocking mode: no child exited yet.  Wait on condvar for
-             * a child exit notification (signaled by proc_mark_child_exited).
-             * Use timedwait with 100ms timeout as a safety net; the condvar
-             * handles normal exits, the timeout catches edge cases where
-             * the host wait4 detects exit before proc_mark_child_exited.
+            /* Blocking mode: no child exited yet. Wait on condvar for a child
+             * exit notification (signaled by proc_mark_child_exited). Use
+             * timedwait with 100ms timeout as a safety net; the condvar handles
+             * normal exits, the timeout catches edge cases where the host wait4
+             * detects exit before proc_mark_child_exited.
              */
             struct timespec ts;
             timespec_deadline_in_ms(&ts, 100);
@@ -782,8 +782,8 @@ int64_t sys_waitid(guest_t *g,
                    uint64_t infop_gva,
                    int options)
 {
-    /* Translate options: Linux WEXITED=4, WNOHANG=1, WSTOPPED=2,
-     * WCONTINUED=8, WNOWAIT=0x01000000
+    /* Translate options: Linux WEXITED=4, WNOHANG=1, WSTOPPED=2, WCONTINUED=8,
+     * WNOWAIT=0x01000000
      */
 #define LINUX_WNOWAIT 0x01000000
     int mac_options = 0;
@@ -818,10 +818,10 @@ int64_t sys_waitid(guest_t *g,
         return -LINUX_EINVAL;
     }
 
-    /* Search process table for matching entry.  P_ALL must scan all
-     * children (not block on the first non-exited one), so the wait loop always
-     * use WNOHANG in the inner loop and retry with timedwait if the
-     * caller requested blocking.
+    /* Search process table for matching entry. P_ALL must scan all children
+     * (not block on the first non-exited one), so the wait loop always use
+     * WNOHANG in the inner loop and retry with timedwait if the caller
+     * requested blocking.
      */
     pthread_mutex_lock(&pid_lock);
     for (;;) {
@@ -850,8 +850,8 @@ int64_t sys_waitid(guest_t *g,
                 pthread_mutex_unlock(&pid_lock);
                 ret = waitpid(host_pid, &status, WNOHANG);
                 if (ret == 0) {
-                    /* This child hasn't exited yet; continue checking
-                     * others (P_ALL must scan all children).
+                    /* This child hasn't exited yet; continue checking others
+                     * (P_ALL must scan all children).
                      */
                     pthread_mutex_lock(&pid_lock);
                     continue;
@@ -895,9 +895,9 @@ int64_t sys_waitid(guest_t *g,
                 }
             }
 
-            /* Keep the table entry when WNOWAIT is set.
-             * Re-validate slot after re-locking (another thread may have
-             * reused it while the wait loop released the lock for waitpid).
+            /* Keep the table entry when WNOWAIT is set. Re-validate slot after
+             * re-locking (another thread may have reused it while the wait loop
+             * released the lock for waitpid).
              */
             if (!(options & LINUX_WNOWAIT) && proc_table[i].active &&
                 proc_table[i].host_pid == ret)
@@ -914,8 +914,8 @@ int64_t sys_waitid(guest_t *g,
 
         if (mac_options & WNOHANG) {
             pthread_mutex_unlock(&pid_lock);
-            /* Per POSIX/Linux: zero siginfo when WNOHANG returns with
-             * no waitable children, so callers can distinguish via si_pid.
+            /* Per POSIX/Linux: zero siginfo when WNOHANG returns with no
+             * waitable children, so callers can distinguish via si_pid.
              */
             if (infop_gva) {
                 uint8_t zeros[SIGINFO_SIZE] = {0};
@@ -944,8 +944,8 @@ void proc_request_hvc6_yield(void)
  * signal handlers cannot receive context parameters).
  */
 /* Written once by vcpu_run_loop before signal(SIGALRM), then only read by
- * alarm_handler / guest_signal_transport_handler. The write happens-before
- * the signal() call that installs the handlers, so no volatile needed.
+ * alarm_handler / guest_signal_transport_handler. The write happens-before the
+ * signal() call that installs the handlers, so no volatile needed.
  */
 static hv_vcpu_t g_timeout_vcpu;
 static volatile sig_atomic_t g_timed_out, g_external_guest_signal;
@@ -1015,9 +1015,9 @@ static void drain_external_guest_signal(void)
     }
 }
 
-/* HVC #4 (set sysreg) register index -> hv_sys_reg_t mapping.
- * Index must match the encoding the shim writes to X0 in shim.S; out-of-range
- * IDs trip the HVC #4 default branch in vcpu_run_loop().
+/* HVC #4 (set sysreg) register index -> hv_sys_reg_t mapping. Index must match
+ * the encoding the shim writes to X0 in shim.S; out-of-range IDs trip the HVC
+ * #4 default branch in vcpu_run_loop().
  */
 static const hv_sys_reg_t hvc4_sysregs[] = {
     HV_SYS_REG_VBAR_EL1,  /* 0 */
@@ -1033,16 +1033,16 @@ static const hv_sys_reg_t hvc4_sysregs[] = {
 
 /* Unified vCPU execution loop for both main and worker threads.
  *
- * When timeout_sec > 0 (main thread): uses alarm() for per-iteration
- * safety timeout, logs with "elfuse:" prefix.
+ * When timeout_sec > 0 (main thread): uses alarm() for per-iteration safety
+ * timeout, logs with "elfuse:" prefix.
  *
- * When timeout_sec == 0 (worker thread): skips alarm() setup (SIGALRM
- * is process-wide and would conflict). Workers are terminated by
- * exit_group setting proc_exit_group_requested and calling hv_vcpus_exit()
- * to cancel pending hv_vcpu_run calls. Logs with "elfuse: worker" prefix.
+ * When timeout_sec == 0 (worker thread): skips alarm() setup (SIGALRM is
+ * process-wide and would conflict). Workers are terminated by exit_group
+ * setting proc_exit_group_requested and calling hv_vcpus_exit() to cancel
+ * pending hv_vcpu_run calls. Logs with "elfuse: worker" prefix.
  *
- * Both modes check proc_exit_group_requested so the main thread also reacts
- * to exit_group called by a worker.
+ * Both modes check proc_exit_group_requested so the main thread also reacts to
+ * exit_group called by a worker.
  */
 int vcpu_run_loop(hv_vcpu_t vcpu,
                   hv_vcpu_exit_t *vexit,
@@ -1056,18 +1056,18 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
     const int is_main = (timeout_sec > 0);
     const char *prefix = is_main ? "elfuse" : "elfuse: worker";
 
-    /* Pin vCPU thread to a performance core via QoS class.
-     * On Apple Silicon, USER_INTERACTIVE maps to P-cores, avoiding
-     * E-core migration that causes measurable jank in HVF workloads.
+    /* Pin vCPU thread to a performance core via QoS class. On Apple Silicon,
+     * USER_INTERACTIVE maps to P-cores, avoiding E-core migration that causes
+     * measurable jank in HVF workloads.
      */
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 
     install_guest_signal_transport();
 
-    /* Main thread: set up alarm-based per-iteration timeout.
-     * Guest ITIMER_REAL is emulated internally by signal_check_timer()
-     * rather than using host setitimer, because macOS shares alarm()
-     * and setitimer(ITIMER_REAL) as the same underlying timer.
+    /* Main thread: set up alarm-based per-iteration timeout. Guest ITIMER_REAL
+     * is emulated internally by signal_check_timer() rather than using host
+     * setitimer, because macOS shares alarm() and setitimer(ITIMER_REAL) as the
+     * same underlying timer.
      */
     if (is_main) {
         g_timeout_vcpu = vcpu;
@@ -1164,13 +1164,13 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                      * the flag back to zero so the identity fast path
                      * re-engages for the next getpid loop. Without this clear,
                      * the attention flag set by signal_queue (e.g., on a
-                     * subprocess's SIGCHLD) would stick forever and
-                     * permanently disable the fast path.
+                     * subprocess's SIGCHLD) would stick forever and permanently
+                     * disable the fast path.
                      */
                     shim_globals_recompute_attention(g);
 
-                    /* Diagnostic: log signal state after exec/sigreturn
-                     * to help debug signal delivery issues.
+                    /* Diagnostic: log signal state after exec/sigreturn to help
+                     * debug signal delivery issues.
                      */
                     if (ret == SYSCALL_EXEC_HAPPENED && verbose) {
                         const signal_state_t *ss = signal_get_state();
@@ -1193,9 +1193,9 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                     }
 
                     /* After exec, verify critical registers before resuming
-                     * vCPU. This closes any gap where signal delivery or
-                     * other code between sys_execve's sync flush and
-                     * hv_vcpu_run could have modified ELR_EL1.
+                     * vCPU. This closes any gap where signal delivery or other
+                     * code between sys_execve's sync flush and hv_vcpu_run
+                     * could have modified ELR_EL1.
                      */
                     if (running && ret == SYSCALL_EXEC_HAPPENED) {
                         uint64_t verify_elr;
@@ -1228,8 +1228,8 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 }
 
                 case 4: {
-                    /* HVC #4: Set system register (from shim).
-                     * X0 = reg index into hvc4_sysregs, X1 = value.
+                    /* HVC #4: Set system register (from shim). X0 = reg index
+                     * into hvc4_sysregs, X1 = value.
                      */
                     uint64_t reg_id, value;
                     hv_vcpu_get_reg(vcpu, HV_REG_X0, &reg_id);
@@ -1252,10 +1252,11 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 }
 
                 case 7: {
-                    /* HVC #7: MRS trap emulation. Guest EL0 code read a
-                     * system register. Extract the register encoding from
-                     * ESR_EL1's ISS field and read it via HVF. Return
-                     * value in X0 for the shim to store into the saved
+                    /* HVC #7: MRS trap emulation. Guest EL0 code read a system
+                     * register. Extract the register encoding from ESR_EL1's
+                     * ISS field and read it via HVF.
+                     *
+                     * Return value in X0 for the shim to store into the saved
                      * register frame.
                      */
                     uint64_t esr;
@@ -1282,14 +1283,14 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                     uint64_t value = 0;
 
                     /* ID register emulation: return VZ-sanitized values
-                     * matching a real VZ (Lima) VM BEFORE trying HVF.
-                     * HVF's hv_vcpu_get_sys_reg succeeds for ID registers
-                     * but returns raw hardware values, which include
-                     * features the hypervisor does not actually virtualize.
+                     * matching a real VZ (Lima) VM BEFORE trying HVF. HVF's
+                     * hv_vcpu_get_sys_reg succeeds for ID registers but returns
+                     * raw hardware values, which include features the
+                     * hypervisor does not actually virtualize.
                      *
-                     * Values captured from a Lima VZ VM on Apple Silicon
-                     * via inline MRS from EL0 (kernel trap-and-emulate).
-                     * These are checked first, before the HVF call.
+                     * Values captured from a Lima VZ VM on Apple Silicon via
+                     * inline MRS from EL0 (kernel trap-and-emulate). These are
+                     * checked first, before the HVF call.
                      */
                     bool have_vz_override = false;
 
@@ -1299,9 +1300,9 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                         value = 0x00000111ff000000ULL;
                         have_vz_override = true;
                     }
-                    /* ID_AA64MMFR1_EL1 (3,0,0,7,1): VZ returns 0.
-                     * Raw hardware (e.g., 0x11212000) exposes HPDS, PAN,
-                     * LO, XNX etc. that VZ does not virtualize.
+                    /* ID_AA64MMFR1_EL1 (3,0,0,7,1): VZ returns 0. Raw hardware
+                     * (e.g., 0x11212000) exposes HPDS, PAN, LO, XNX etc. that
+                     * VZ does not virtualize.
                      */
                     if (op0 == 3 && op1 == 0 && crn == 0 && crm == 7 &&
                         op2 == 1) {
@@ -1357,9 +1358,9 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                          */
                         bool have_fallback = false;
 
-                        /* CNTFRQ_EL0 (3,3,14,0,0): counter frequency.
-                         * Read directly from host hardware (Apple Silicon
-                         * uses 24MHz).
+                        /* CNTFRQ_EL0 (3,3,14,0,0): counter frequency. Read
+                         * directly from host hardware (Apple Silicon uses
+                         * 24MHz).
                          */
                         if (op0 == 3 && op1 == 3 && crn == 14 && crm == 0 &&
                             op2 == 0) {
@@ -1368,9 +1369,9 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                             have_fallback = true;
                         }
 
-                        /* Non-ID register fallbacks for registers
-                         * that HVF does not expose. ID registers are
-                         * handled above (VZ overrides).
+                        /* Non-ID register fallbacks for registers that HVF does
+                         * not expose. ID registers are handled above (VZ
+                         * overrides).
                          */
 
                         if (verbose) {
@@ -1405,23 +1406,21 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 case 9: {
                     /* HVC #9: W^X page permission toggle for JIT.
                      *
-                     * Apple HVF enforces W^X: pages cannot be both writable
-                     * and executable simultaneously. JIT code needs to be
-                     * written (RW), then executed (RX). The shim
-                     * detects permission faults (EC=0x20 instruction abort,
-                     * EC=0x24 data abort) and forwards the faulting address
-                     * here.
+                     * Apple HVF enforces W^X: pages cannot be both writable and
+                     * executable simultaneously. JIT code needs to be written
+                     * (RW), then executed (RX). The shim detects permission
+                     * faults (EC=0x20 instruction abort, EC=0x24 data abort)
+                     * and forwards the faulting address here.
                      *
                      * Toggling at 2MiB granularity causes thrashing when the
-                     * JIT writes new code and executes existing code within
-                     * the same 2MiB block. Instead, the code splits the 2MiB
-                     * block into 4KiB L3 pages and toggle only the faulting
-                     * 4KiB page. This allows different pages within a 2MiB
-                     * block to have independent RW/RX permissions
-                     * simultaneously.
+                     * JIT writes new code and executes existing code within the
+                     * same 2MiB block. Instead, the code splits the 2MiB block
+                     * into 4KiB L3 pages and toggle only the faulting 4KiB
+                     * page. This allows different pages within a 2MiB block to
+                     * have independent RW/RX permissions simultaneously.
                      *
-                     * x0 = FAR_EL1 (faulting virtual address)
-                     * x1 = type: 0 = exec fault -> flip to RX
+                     * x0 = FAR_EL1 (faulting virtual address) x1 = type: 0 =
+                     * exec fault -> flip to RX
                      *            1 = write fault -> flip to RW
                      */
                     uint64_t far, type;
@@ -1432,17 +1431,17 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                     uint64_t page_end = page_start + 4096;
                     int new_perms = (type == 0) ? MEM_PERM_RX : MEM_PERM_RW;
 
-                    /* Hold mmap_lock for page table modifications AND
-                     * region lookups to prevent races with concurrent
+                    /* Hold mmap_lock for page table modifications AND region
+                     * lookups to prevent races with concurrent
                      * mmap/mprotect/munmap from other vCPU threads.
                      */
                     pthread_mutex_lock(&mmap_lock);
 
-                    /* Check if this is a genuine permission violation
-                     * (not a W^X toggle).  If the guest region lacks
-                     * the required permission, deliver SIGSEGV instead
-                     * of toggling.  This handles mprotect(PROT_READ),
-                     * SHM_RDONLY, PROT_NONE, and non-exec pages.
+                    /* Check if this is a genuine permission violation (not a
+                     * W^X toggle). If the guest region lacks the required
+                     * permission, deliver SIGSEGV instead of toggling. This
+                     * handles mprotect(PROT_READ), SHM_RDONLY, PROT_NONE, and
+                     * non-exec pages.
                      */
                     {
                         uint64_t off = far - g->ipa_base;
@@ -1484,11 +1483,11 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                             "%s: W^X toggle FAILED "
                             "(split=%d update=%d) far=0x%llx",
                             prefix, sr, ur, (unsigned long long) far);
-                    /* TLB flush is done by the shim (tlbi_restore_eret) for
-                     * the single faulting page. Clear this thread's pending
-                     * request so the next syscall epilogue does not re-flush
-                     * the W^X page. cpu_tlbi_req is per-vCPU, so this only
-                     * touches our own slot -- concurrent vCPUs are unaffected.
+                    /* TLB flush is done by the shim (tlbi_restore_eret) for the
+                     * single faulting page. Clear this thread's pending request
+                     * so the next syscall epilogue does not re-flush the W^X
+                     * page. cpu_tlbi_req is per-vCPU, so this only touches our
+                     * own slot -- concurrent vCPUs are unaffected.
                      */
                     tlbi_request_clear();
                     break;
@@ -1531,8 +1530,8 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                                 running = false;
                         }
                     } else {
-                        /* Non-ptraced: deliver SIGTRAP via signal frame.
-                         * Read ESR_EL1 to include in sigcontext.
+                        /* Non-ptraced: deliver SIGTRAP via signal frame. Read
+                         * ESR_EL1 to include in sigcontext.
                          */
                         uint64_t brk_esr;
                         hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_ESR_EL1, &brk_esr);
@@ -1573,10 +1572,10 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                      *   Other ECs from EL0           -> SIGILL (catch-all)
                      *
                      * For SIGSEGV, si_code is SEGV_MAPERR (translation fault)
-                     * or SEGV_ACCERR (permission fault) based on xFSC[5:2].
-                     * For SIGILL, si_code is ILL_ILLOPC (illegal opcode).
-                     * si_addr is FAR_EL1 for aborts, ELR_EL1 for SIGILL
-                     * (FAR_EL1 is UNKNOWN for EC=0 per ARM ARM).
+                     * or SEGV_ACCERR (permission fault) based on xFSC[5:2]. For
+                     * SIGILL, si_code is ILL_ILLOPC (illegal opcode). si_addr
+                     * is FAR_EL1 for aborts, ELR_EL1 for SIGILL (FAR_EL1 is
+                     * UNKNOWN for EC=0 per ARM ARM).
                      */
                     uint64_t esr, far_addr, elr_addr;
                     hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_ESR_EL1, &esr);
@@ -1585,23 +1584,21 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
 
                     uint32_t fault_ec = (uint32_t) ((esr >> 26) & 0x3F);
 
-                    /* Non-abort EC -> SIGILL. Branch out early so the
-                     * abort / SIGSEGV path below stays at the case-body
-                     * indent rather than nested inside an else branch.
-                     * FAR_EL1 is UNKNOWN for non-abort exceptions, so use
-                     * ELR_EL1 for si_addr.
+                    /* Non-abort EC -> SIGILL. Branch out early so the abort /
+                     * SIGSEGV path below stays at the case-body indent rather
+                     * than nested inside an else branch. FAR_EL1 is UNKNOWN for
+                     * non-abort exceptions, so use ELR_EL1 for si_addr.
                      *
-                     * Only EC 0x20 (instruction abort from a lower EL) and
-                     * EC 0x24 (data abort from a lower EL) are intentionally
+                     * Only EC 0x20 (instruction abort from a lower EL) and EC
+                     * 0x24 (data abort from a lower EL) are intentionally
                      * routed to the SIGSEGV path that follows. Every other
                      * forwarded EC -- 0x00 (undefined instruction), 0x18
-                     * (system instruction trap), 0x32/0x33 (software
-                     * step), 0x3C (BRK), and any unrecognized class --
-                     * lands here as SIGILL. If a future change adds a new
-                     * lower-EL abort class (e.g. 0x21 / 0x25 for higher
-                     * exception levels) that should map to SIGSEGV, the
-                     * test below needs explicit widening; do NOT relax
-                     * the check casually.
+                     * (system instruction trap), 0x32/0x33 (software step),
+                     * 0x3C (BRK), and any unrecognized class -- lands here as
+                     * SIGILL. If a future change adds a new lower-EL abort
+                     * class (e.g. 0x21 / 0x25 for higher exception levels) that
+                     * should map to SIGSEGV, the test below needs explicit
+                     * widening; do NOT relax the check casually.
                      */
                     if (fault_ec != 0x20 && fault_ec != 0x24) {
                         if (verbose)
@@ -1631,9 +1628,9 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                     }
 
                     /* Instruction or data abort. Try lazy page materialization
-                     * before declaring SIGSEGV: translation faults
-                     * (xFSC[5:2] == 0x1) may come from a MAP_NORESERVE region
-                     * with deferred page-table creation.
+                     * before declaring SIGSEGV: translation faults (xFSC[5:2]
+                     * == 0x1) may come from a MAP_NORESERVE region with
+                     * deferred page-table creation.
                      */
                     uint32_t fsc = (uint32_t) (esr & 0x3F);
                     uint32_t fsc_type = (fsc >> 2) & 0xF;
@@ -1644,25 +1641,25 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                         pthread_mutex_unlock(&mmap_lock);
                         if (mat == 0) {
                             /* Page materialized; the helpers inside
-                             * guest_materialize_lazy populated the
-                             * per-vCPU TLBI accumulator with the range
-                             * just installed (plus the I-cache hint if
-                             * the region's prot includes PROT_EXEC).
-                             * Drain it through the shared emit helper
-                             * so the shim's post-HVC-11 dispatch
-                             * (handle_el0_fault) actually issues the
-                             * TLBI before ERET. Without this, a PE that
-                             * caches translation-fault (negative)
-                             * entries would re-fault on the retry,
-                             * looping until the entry self-evicts. */
+                             * guest_materialize_lazy populated the per-vCPU
+                             * TLBI accumulator with the range just installed
+                             * (plus the I-cache hint if the region's prot
+                             * includes PROT_EXEC). Drain it through the shared
+                             * emit helper so the shim's post-HVC-11 dispatch
+                             * (handle_el0_fault) actually issues the TLBI
+                             * before ERET. Without this, a PE that caches
+                             * translation-fault (negative) entries would
+                             * re-fault on the retry, looping until the entry
+                             * self-evicts.
+                             */
                             tlbi_request_emit_to_vcpu(vcpu);
                             break;
                         }
                     }
 
-                    /* Real SIGSEGV. Permission faults (xFSC[5:2] == 0x3) map
-                     * to SEGV_ACCERR; address size, translation, and
-                     * access-flag faults map to SEGV_MAPERR for Linux.
+                    /* Real SIGSEGV. Permission faults (xFSC[5:2] == 0x3) map to
+                     * SEGV_ACCERR; address size, translation, and access-flag
+                     * faults map to SEGV_MAPERR for Linux.
                      */
                     int si_code = (fsc_type == 0x03) ? LINUX_SEGV_ACCERR
                                                      : LINUX_SEGV_MAPERR;
@@ -1684,11 +1681,11 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                     signal_queue(LINUX_SIGSEGV);
                     int sig_ret = signal_deliver(vcpu, g, &exit_code);
                     /* HVC #11 consumes X8 as the post-fault TLBI opcode.
-                     * signal_deliver() may leave it unchanged when no
-                     * handler is materialized, or set the syscall-path
-                     * frame-drop marker when one is. Neither is a TLBI
-                     * request here; lazy materialization emits its own
-                     * request and exits before this path.
+                     * signal_deliver() may leave it unchanged when no handler
+                     * is materialized, or set the syscall-path frame-drop
+                     * marker when one is. Neither is a TLBI request here; lazy
+                     * materialization emits its own request and exits before
+                     * this path.
                      */
                     hv_vcpu_set_reg(vcpu, HV_REG_X8, 0);
                     if (verbose)
@@ -1705,8 +1702,8 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                      * (DC CVAU, IC IVAU, etc.) here for logging/counting. It
                      * also passes the original Rt value in X0 so host-side
                      * emulation can handle MSR writes such as TPIDR_EL0. The
-                     * shim has already advanced PC and will restore X0 from
-                     * its saved frame before returning to EL0.
+                     * shim has already advanced PC and will restore X0 from its
+                     * saved frame before returning to EL0.
                      */
                     atomic_fetch_add(&sysreg_write_count, 1);
                     uint64_t rt_value = 0;
@@ -1722,10 +1719,10 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                     uint32_t op1 = (iss >> 14) & 0x7, crn = (iss >> 10) & 0xF;
                     uint32_t crm = (iss >> 1) & 0xF, rt = (iss >> 5) & 0x1F;
 
-                    /* TPIDR_EL0 (S3_3_C13_C0_2): userspace TLS base.
-                     * Static glibc writes this during early startup. HVF
-                     * traps the MSR, so Linux-compatible execution requires
-                     * reflecting the write into the virtual sysreg.
+                    /* TPIDR_EL0 (S3_3_C13_C0_2): userspace TLS base. Static
+                     * glibc writes this during early startup. HVF traps the
+                     * MSR, so Linux-compatible execution requires reflecting
+                     * the write into the virtual sysreg.
                      */
                     if (op0 == 3 && op1 == 3 && crn == 13 && crm == 0 &&
                         op2 == 2) {
@@ -1733,8 +1730,8 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                                                      rt_value));
                     }
                     if (verbose) {
-                        /* DC CVAU: Op0=1,Op1=3,CRn=7,CRm=11,Op2=1
-                         * IC IVAU: Op0=1,Op1=3,CRn=7,CRm=5,Op2=1
+                        /* DC CVAU: Op0=1,Op1=3,CRn=7,CRm=11,Op2=1 IC IVAU:
+                         * Op0=1,Op1=3,CRn=7,CRm=5,Op2=1
                          */
                         const char *name = "unknown";
                         if (op0 == 1 && op1 == 3 && crn == 7 && crm == 11 &&
@@ -1766,9 +1763,9 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 }
 
                 case 2: {
-                    /* HVC #2: Bad exception in guest.
-                     * Shim clobbers X0-X3,X5 with exception info.
-                     * X4,X6-X30 and SP_EL0 still hold faulting values.
+                    /* HVC #2: Bad exception in guest. Shim clobbers X0-X3,X5
+                     * with exception info. X4,X6-X30 and SP_EL0 still hold
+                     * faulting values.
                      */
                     uint64_t x0, x1, x2, x3, x5;
                     hv_vcpu_get_reg(vcpu, HV_REG_X0, &x0);
@@ -1823,11 +1820,11 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 }
 
                 case 6: {
-                    /* HVC #6: embedder extension hook.
-                     * X8 = call number, X0-X7 = arguments.
-                     * If a dispatch function is registered via
-                     * elfuse_set_hvc6_handler(), it is called here.
-                     * Otherwise falls through as a no-op. */
+                    /* HVC #6: embedder extension hook. X8 = call number, X0-X7
+                     * = arguments. If a dispatch function is registered via
+                     * elfuse_set_hvc6_handler(), it is called here. Otherwise
+                     * falls through as a no-op.
+                     */
                     if (g->hvc6_handler) {
                         uint64_t x8 = 0;
                         hv_vcpu_get_reg(vcpu, HV_REG_X8, &x8);
@@ -1858,26 +1855,25 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 }
                 }
             } else if (ec == 0x30 || ec == 0x32) {
-                /* EC=0x30: Hardware breakpoint from lower EL (EL0).
-                 * EC=0x32: Software step exception from lower EL.
-                 * Both are debug exceptions trapped to host via
+                /* EC=0x30: Hardware breakpoint from lower EL (EL0). EC=0x32:
+                 * Software step exception from lower EL. Both are debug
+                 * exceptions trapped to host via
                  * hv_vcpu_set_trap_debug_exceptions(). Forward to GDB.
                  *
-                 * TDE causes debug exceptions to bypass EL1 entirely
-                 * (EL0 -> EL2), so ELR_EL1 is NOT updated; it still
-                 * holds the stale value from the shim's last ERET.
-                 * Read the actual stop PC from HV_REG_PC and sync it
-                 * to ELR_EL1 so the GDB register snapshot sees the
-                 * correct value.
+                 * TDE causes debug exceptions to bypass EL1 entirely (EL0 ->
+                 * EL2), so ELR_EL1 is NOT updated; it still holds the stale
+                 * value from the shim's last ERET. Read the actual stop PC from
+                 * HV_REG_PC and sync it to ELR_EL1 so the GDB register snapshot
+                 * sees the correct value.
                  */
                 if (gdb_stub_is_active()) {
                     int reason =
                         (ec == 0x30) ? GDB_STOP_BREAKPOINT : GDB_STOP_STEP;
                     uint64_t stop_pc = vcpu_get_reg(vcpu, HV_REG_PC);
                     /* TDE routes debug exceptions EL0->EL2, bypassing EL1.
-                     * ELR_EL1 and SPSR_EL1 are NOT updated; sync them
-                     * from HV_REG_PC/HV_REG_CPSR so the GDB register
-                     * snapshot reads correct values.
+                     * ELR_EL1 and SPSR_EL1 are NOT updated; sync them from
+                     * HV_REG_PC/HV_REG_CPSR so the GDB register snapshot reads
+                     * correct values.
                      */
                     vcpu_set_sysreg(vcpu, HV_SYS_REG_ELR_EL1, stop_pc);
                     vcpu_set_sysreg(vcpu, HV_SYS_REG_SPSR_EL1,
@@ -1895,12 +1891,11 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                               prefix, ec);
                 }
             } else if (ec == 0x34 || ec == 0x35) {
-                /* EC=0x34: Watchpoint from lower EL (EL0, data abort).
-                 * EC=0x35: Watchpoint from current EL (shouldn't happen).
-                 * Same TDE bypass as breakpoints: ELR_EL1 and FAR_EL1
-                 * are stale because the exception went EL0->EL2. Use
-                 * HV_REG_PC for the stop PC and vexit->exception for
-                 * the watched address.
+                /* EC=0x34: Watchpoint from lower EL (EL0, data abort). EC=0x35:
+                 * Watchpoint from current EL (shouldn't happen). Same TDE
+                 * bypass as breakpoints: ELR_EL1 and FAR_EL1 are stale because
+                 * the exception went EL0->EL2. Use HV_REG_PC for the stop PC
+                 * and vexit->exception for the watched address.
                  */
                 if (gdb_stub_is_active()) {
                     uint64_t wp_pc = vcpu_get_reg(vcpu, HV_REG_PC);
@@ -1942,14 +1937,14 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 running = false;
             }
         } else if (vexit->reason == HV_EXIT_REASON_CANCELED) {
-            /* Canceled by hv_vcpus_exit(). Can be: alarm timeout,
-             * exit_group from another thread, or signal preemption
-             * (signal_queue called hv_vcpus_exit to deliver a signal
-             * while the guest was in a tight loop).
+            /* Canceled by hv_vcpus_exit(). Can be: alarm timeout, exit_group
+             * from another thread, or signal preemption (signal_queue called
+             * hv_vcpus_exit to deliver a signal while the guest was in a tight
+             * loop).
              */
             if (is_main && g_timed_out) {
-                /* Timeout already handled above the exception switch --
-                 * loop back so the timeout check fires.
+                /* Timeout already handled above the exception switch -- loop
+                 * back so the timeout check fires.
                  */
                 continue;
             }
@@ -1958,8 +1953,8 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 break;
             }
 
-            /* GDB stub: if GDB requested a stop (Ctrl+C or another thread
-             * hit a breakpoint), enter GDB stop state.
+            /* GDB stub: if GDB requested a stop (Ctrl+C or another thread hit a
+             * breakpoint), enter GDB stop state.
              */
             if (gdb_stub_stop_requested()) {
                 if (verbose)
@@ -1971,8 +1966,8 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
             }
 
             /* PTRACE_INTERRUPT: if this thread is ptraced and not already
-             * stopped, enter ptrace-stop so the tracer can inspect state.
-             * This handles hv_vcpus_exit from sys_ptrace PTRACE_INTERRUPT.
+             * stopped, enter ptrace-stop so the tracer can inspect state. This
+             * handles hv_vcpus_exit from sys_ptrace PTRACE_INTERRUPT.
              */
             if (current_thread->ptraced && !current_thread->ptrace_stopped) {
                 if (verbose)
@@ -1987,8 +1982,8 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                 continue;
             }
 
-            /* rseq preemption abort: mirrors Linux rseq_ip_fixup() on
-             * context switch.
+            /* rseq preemption abort: mirrors Linux rseq_ip_fixup() on context
+             * switch.
              */
             if (current_thread->rseq_gva != 0) {
                 uint64_t cur_pc;
@@ -2007,23 +2002,23 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
             /* Check guest ITIMER_REAL (may have fired during tight loop) */
             signal_check_timer();
 
-            /* Signal preemption: if a signal is pending, deliver it and
-             * resume the vCPU. This enables alarm()/SIGALRM delivery
-             * and tgkill-based signals in compute-bound loops.
+            /* Signal preemption: if a signal is pending, deliver it and resume
+             * the vCPU. This enables alarm()/SIGALRM delivery and tgkill-based
+             * signals in compute-bound loops.
              */
             if (signal_pending()) {
                 int sig_ret = signal_deliver(vcpu, g, &exit_code);
                 if (sig_ret < 0)
                     running = false;
-                /* sig_ret >= 0: signal delivered or nothing pending,
-                 * loop back and resume vCPU execution
+                /* sig_ret >= 0: signal delivered or nothing pending, loop back
+                 * and resume vCPU execution
                  */
                 continue;
             }
 
-            /* Fork quiesce barrier: if a sibling is performing a fork
-             * snapshot, block here until the snapshot is complete. This
-             * prevents torn memory snapshots in multithreaded guests.
+            /* Fork quiesce barrier: if a sibling is performing a fork snapshot,
+             * block here until the snapshot is complete. This prevents torn
+             * memory snapshots in multithreaded guests.
              */
             if (thread_fork_barrier_check())
                 continue;

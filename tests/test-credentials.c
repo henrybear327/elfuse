@@ -122,9 +122,9 @@ int main(void)
     EXPECT_TRUE(raw_syscall1(__NR_setgid, 0) == -1, "expected -EPERM");
 
     /* setfsuid / setfsgid: Linux contract is to return the previous fsuid /
-     * fsgid. elfuse reports the current euid / egid (1000) on every call,
-     * with no state mutation, which is what procps relies on when it
-     * brackets /proc reads with setfsuid(uid) / setfsuid(0).
+     * fsgid. elfuse reports the current euid / egid (1000) on every call, with
+     * no state mutation, which is what procps relies on when it brackets /proc
+     * reads with setfsuid(uid) / setfsuid(0).
      */
     TEST("setfsuid(0) returns 1000");
     EXPECT_TRUE(raw_syscall1(__NR_setfsuid, 0) == 1000,
@@ -143,8 +143,8 @@ int main(void)
                 "setfsgid(1000) did not return current egid");
 
     /* setfsuid(-1) / setfsgid(-1) is the canonical glibc "read fsuid without
-     * changing it" idiom: -1 is never a valid uid, so the kernel only
-     * reports the current fsuid.
+     * changing it" idiom: -1 is never a valid uid, so the kernel only reports
+     * the current fsuid.
      */
     TEST("setfsuid(-1) reports current fsuid");
     EXPECT_TRUE(raw_syscall1(__NR_setfsuid, (long) (unsigned) -1) == 1000,

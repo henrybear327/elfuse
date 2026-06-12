@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Exercises the legacy fork IPC path from a low-linked ET_EXEC. The child
- * forks again, so the grandchild only runs correctly if the intermediate child
+ * Exercises the legacy fork IPC path from a low-linked ET_EXEC. The child forks
+ * again, so the grandchild only runs correctly if the intermediate child
  * preserved the executable's true low load address when cloning guest state.
  */
 

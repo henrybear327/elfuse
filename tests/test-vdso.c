@@ -12,11 +12,11 @@
  *   5. trampolines actually execute (call __kernel_clock_gettime and
  *      compare the result against a direct SVC clock_gettime)
  *
- * Static binary so the standard test driver runs it under elfuse with
- * no sysroot. The probe walks the vDSO's dynamic linker structure
- * itself rather than relying on dlsym (which is unavailable in static
- * builds anyway), so a regression in the elf layout fails this test
- * regardless of which libc would later consume it.
+ * Static binary so the standard test driver runs it under elfuse with no
+ * sysroot. The probe walks the vDSO's dynamic linker structure itself rather
+ * than relying on dlsym (which is unavailable in static builds anyway), so a
+ * regression in the elf layout fails this test regardless of which libc would
+ * later consume it.
  */
 
 #include <elf.h>
@@ -169,12 +169,12 @@ static void test_vdso(void)
     EXPECT(ehdr->e_machine == EM_AARCH64, "vDSO e_machine");
     EXPECT(ehdr->e_type == ET_DYN, "vDSO e_type");
 
-    /* NT_GNU_ABI_TAG note. glibc 2.41's vDSO probe expects a Linux ABI tag
-     * note alongside the dynamic symbol table; walk every PT_NOTE segment
-     * the EHDR advertises and confirm exactly one entry matches the
-     * (name="GNU", type=NT_GNU_ABI_TAG, desc[0]=Linux) shape with a
-     * minimum-kernel descriptor that is at least 2.6.39 (matching the
-     * LINUX_2.6.39 symbol version this vDSO exports).
+    /* NT_GNU_ABI_TAG note. glibc 2.41's vDSO probe expects a Linux ABI tag note
+     * alongside the dynamic symbol table; walk every PT_NOTE segment the EHDR
+     * advertises and confirm exactly one entry matches the (name="GNU",
+     * type=NT_GNU_ABI_TAG, desc[0]=Linux) shape with a minimum-kernel
+     * descriptor that is at least 2.6.39 (matching the LINUX_2.6.39 symbol
+     * version this vDSO exports).
      */
     const Elf64_Phdr *probe_phdr =
         (const Elf64_Phdr *) ((const uint8_t *) ehdr + ehdr->e_phoff);
@@ -241,8 +241,8 @@ static void test_vdso(void)
         }
     }
 
-    /* Probe gettimeofday before clock_gettime so the first vDSO-mediated
-     * time fallback must be able to seed the shared vvar anchor by itself.
+    /* Probe gettimeofday before clock_gettime so the first vDSO-mediated time
+     * fallback must be able to seed the shared vvar anchor by itself.
      */
     const Elf64_Sym *gtod =
         lookup_sym(ehdr, v.symtab, v.strtab, v.hash, "__kernel_gettimeofday");
@@ -256,8 +256,8 @@ static void test_vdso(void)
 
     /* Direct call into the vDSO trampoline. Must agree with SVC for both
      * CLOCK_MONOTONIC and CLOCK_REALTIME. The preceding gettimeofday probe
-     * seeded the shared CNTVCT anchor, so both clockids exercise the
-     * post-seed fast path.
+     * seeded the shared CNTVCT anchor, so both clockids exercise the post-seed
+     * fast path.
      */
     const Elf64_Sym *cg =
         lookup_sym(ehdr, v.symtab, v.strtab, v.hash, "__kernel_clock_gettime");
@@ -269,13 +269,12 @@ static void test_vdso(void)
             const char *label;
             int64_t tolerance_ns;
         } cases[] = {
-            /* CLOCK_MONOTONIC: tight tolerance, anchor-derived value
-             * cannot drift relative to the SVC reference beyond the gap
-             * between calls.
+            /* CLOCK_MONOTONIC: tight tolerance, anchor-derived value cannot
+             * drift relative to the SVC reference beyond the gap between calls.
              */
             {CLOCK_MONOTONIC, "MONOTONIC", 10000000},
-            /* CLOCK_REALTIME: tolerance loose enough to absorb host
-             * scheduling jitter between the two clock_gettime calls.
+            /* CLOCK_REALTIME: tolerance loose enough to absorb host scheduling
+             * jitter between the two clock_gettime calls.
              */
             {CLOCK_REALTIME, "REALTIME", 10000000},
         };
@@ -303,8 +302,8 @@ static void test_vdso(void)
         }
     }
 
-    /* clock_getres vDSO entry must match raw SVC for supported clockids.
-     * NULL res must succeed for valid clockids.
+    /* clock_getres vDSO entry must match raw SVC for supported clockids. NULL
+     * res must succeed for valid clockids.
      */
     typedef int (*clock_getres_fn)(clockid_t, struct timespec *);
     const Elf64_Sym *cr =
@@ -379,8 +378,8 @@ static void test_vdso(void)
         EXPECT(fn(NULL, NULL) == 0, "vDSO gettimeofday(NULL, NULL) returned 0");
     }
 
-    /* getcpu fast path: must always return cpu=0 / node=0 (elfuse models
-     * one online CPU and one NUMA node).
+    /* getcpu fast path: must always return cpu=0 / node=0 (elfuse models one
+     * online CPU and one NUMA node).
      */
     typedef int (*getcpu_fn)(unsigned *, unsigned *, void *);
     const Elf64_Sym *gc =

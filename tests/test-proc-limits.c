@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Verifies that /proc/self/limits is readable and contains expected
- * rows matching prlimit64 values.
+ * Verifies that /proc/self/limits is readable and contains expected rows
+ * matching prlimit64 values.
  */
 
 #include <stdio.h>
@@ -86,8 +86,8 @@ int main(void)
     TEST("Max file locks row");
     EXPECT_TRUE(strstr(buf, "Max file locks"), "missing 'Max file locks'");
 
-    /* Verify Max open files has a numeric soft limit (not unlimited).
-     * Scan from the name to the end of the line for a digit sequence.
+    /* Verify Max open files has a numeric soft limit (not unlimited). Scan from
+     * the name to the end of the line for a digit sequence.
      */
     TEST("Max open files has numeric value");
     {

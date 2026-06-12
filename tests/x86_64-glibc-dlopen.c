@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * The hello/--list probes only exercise load-time PT_INTERP and ld.so
- * introspection. Runtime dlopen takes a different elfuse codepath:
- * a fresh anonymous-then-file mmap into the gap-finding allocator,
- * not the high-VA fixed-mmap replacement path the static probe
- * touches. The success line is the only signal; everything else is
- * stderr-only so the consumer regex stays trivial.
+ * introspection. Runtime dlopen takes a different elfuse codepath: a fresh
+ * anonymous-then-file mmap into the gap-finding allocator, not the high-VA
+ * fixed-mmap replacement path the static probe touches. The success line is the
+ * only signal; everything else is stderr-only so the consumer regex stays
+ * trivial.
  */
 
 #define _GNU_SOURCE
@@ -19,9 +19,9 @@
 
 static void emit(int fd, const char *s)
 {
-    /* warn_unused_result on glibc's write() prototype is not suppressed
-     * by (void) cast, so route the return through a sink variable that
-     * gets read once at function exit.
+    /* warn_unused_result on glibc's write() prototype is not suppressed by
+     * (void) cast, so route the return through a sink variable that gets read
+     * once at function exit.
      */
     ssize_t n = write(fd, s, strlen(s));
     if (n > 0)
@@ -39,9 +39,9 @@ int main(void)
     }
 
     /* dlsym -> function pointer cannot be expressed as a single ISO C
-     * conversion; the POSIX-2013 idiom is to copy the bits across a
-     * void* slot. The static_assert keeps the cast honest if a future
-     * platform ever changes pointer sizes.
+     * conversion; the POSIX-2013 idiom is to copy the bits across a void* slot.
+     * The static_assert keeps the cast honest if a future platform ever changes
+     * pointer sizes.
      */
     _Static_assert(sizeof(void *) == sizeof(double (*)(double)),
                    "void* and function pointer width mismatch");

@@ -13,9 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* HV_CHECK macro.
- * Abort on HVF API failure. Used for calls that should never fail
- * during normal operation (vCPU register access, VM mapping).
+/* HV_CHECK macro. Abort on HVF API failure. Used for calls that should never
+ * fail during normal operation (vCPU register access, VM mapping).
  */
 #define HV_CHECK(call)                                                   \
     do {                                                                 \
@@ -26,8 +25,8 @@
         }                                                                \
     } while (0)
 
-/* HV_CHECK variant that emits a structured crash report before exit.
- * Use in the vCPU run loop where vcpu and guest_t are available.
+/* HV_CHECK variant that emits a structured crash report before exit. Use in the
+ * vCPU run loop where vcpu and guest_t are available.
  */
 #define HV_CHECK_CTX(call, vcpu, g)                                      \
     do {                                                                 \
@@ -39,9 +38,8 @@
         }                                                                \
     } while (0)
 
-/* SCTLR_EL1 bits.
- * These are needed by main.c (initial setup), runtime/forkipc.c (child MMU
- * enable), and syscall/exec.c (exec MMU re-enable).
+/* SCTLR_EL1 bits. These are needed by main.c (initial setup), runtime/forkipc.c
+ * (child MMU enable), and syscall/exec.c (exec MMU re-enable).
  */
 #define SCTLR_M (1ULL << 0)    /* MMU enable */
 #define SCTLR_C (1ULL << 2)    /* Data cache enable */
@@ -50,10 +48,10 @@
 #define SCTLR_UCT (1ULL << 15) /* EL0 access to CTR_EL0 (cache type) */
 #define SCTLR_UCI (1ULL << 26) /* EL0 cache maintenance (IC IVAU, DC CVA*) */
 
-/* RES1 bits in SCTLR_EL1: these MUST be 1 for correct behavior.
- * Apple Hypervisor.framework returns default SCTLR=0x0, so the setup code must
- * set them explicitly. The hardware eventually auto-updates them, but the
- * initial instruction fetches execute with whatever the setup code wrote.
+/* RES1 bits in SCTLR_EL1: these MUST be 1 for correct behavior. Apple
+ * Hypervisor.framework returns default SCTLR=0x0, so the setup code must set
+ * them explicitly. The hardware eventually auto-updates them, but the initial
+ * instruction fetches execute with whatever the setup code wrote.
  */
 #define SCTLR_RES1                                                   \
     ((1ULL << 29) /* LSMAOE */ | (1ULL << 28) /* nTLSMD */ |         \
@@ -62,9 +60,8 @@
      (1ULL << 11) /* EOS    */ | (1ULL << 8) /* SED    */ |          \
      (1ULL << 7) /* ITD    */)
 
-/* TCR_EL1.
- * 4KiB granule, 48-bit VA, EPD1=1 (TTBR1 walks disabled).
- * Used by main.c (initial setup) and syscall/exec.c (exec re-init).
+/* TCR_EL1. 4KiB granule, 48-bit VA, EPD1=1 (TTBR1 walks disabled). Used by
+ * main.c (initial setup) and syscall/exec.c (exec re-init).
  *
  * The KBUF variant clears EPD1 (TTBR1 walks enabled) and sets TBI1=1 so
  * rosetta's TaggedPointer masking still resolves the kbuf window at the
@@ -75,9 +72,9 @@
 
 /* vCPU register helpers.
  *
- * Thin wrappers around hv_vcpu_{get,set}_reg/sys_reg with internal
- * HV_CHECK. Reduces boilerplate and centralizes error handling.
- * Use these for new code; existing call sites can migrate gradually.
+ * Thin wrappers around hv_vcpu_{get,set}_reg/sys_reg with internal HV_CHECK.
+ * Reduces boilerplate and centralizes error handling. Use these for new code;
+ * existing call sites can migrate gradually.
  */
 
 static inline uint64_t vcpu_get_gpr(hv_vcpu_t vcpu, unsigned n)
@@ -118,8 +115,8 @@ static inline void vcpu_set_sysreg(hv_vcpu_t vcpu,
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, reg, val));
 }
 
-/* Snapshot all 31 GPRs (X0..X30) into out[31].
- * Must be called on the owning thread.
+/* Snapshot all 31 GPRs (X0..X30) into out[31]. Must be called on the owning
+ * thread.
  */
 static inline void vcpu_snapshot_gprs(hv_vcpu_t vcpu, uint64_t out[31])
 {
@@ -127,8 +124,8 @@ static inline void vcpu_snapshot_gprs(hv_vcpu_t vcpu, uint64_t out[31])
         out[i] = vcpu_get_gpr(vcpu, i);
 }
 
-/* Restore all 31 GPRs (X0..X30) from in[31].
- * Must be called on the owning thread.
+/* Restore all 31 GPRs (X0..X30) from in[31]. Must be called on the owning
+ * thread.
  */
 static inline void vcpu_restore_gprs(hv_vcpu_t vcpu, const uint64_t in[31])
 {
@@ -159,8 +156,8 @@ static inline void vcpu_set_simd(hv_vcpu_t vcpu,
 
 /* SIMD/FP state snapshot.
  *
- * Bundles V0-V31 + FPSR + FPCR into a single struct for capture/restore.
- * Used by clone(CLONE_THREAD), clone(CLONE_VM), and IPC fork paths.
+ * Bundles V0-V31 + FPSR + FPCR into a single struct for capture/restore. Used
+ * by clone(CLONE_THREAD), clone(CLONE_VM), and IPC fork paths.
  */
 
 typedef struct {
@@ -168,8 +165,7 @@ typedef struct {
     uint64_t fpsr, fpcr;
 } vcpu_simd_state_t;
 
-/* Snapshot all SIMD/FP state from a vCPU. Must be called on the owning
- * thread.
+/* Snapshot all SIMD/FP state from a vCPU. Must be called on the owning thread.
  */
 static inline void vcpu_snapshot_simd(hv_vcpu_t vcpu, vcpu_simd_state_t *s)
 {

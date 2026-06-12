@@ -3,18 +3,18 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * dlopen() the companion shared library (libgdtls.so), pull its
- * gdtls_get / gdtls_set accessors via dlsym, exercise the __thread
- * variable across set/read/re-set/read. Because the library is loaded
- * after main() starts, its __thread storage uses the general-dynamic
- * model (calls into __tls_get_addr) rather than initial-exec; a broken
- * Rosetta lowering of that path surfaces as a value mismatch.
+ * dlopen() the companion shared library (libgdtls.so), pull its gdtls_get /
+ * gdtls_set accessors via dlsym, exercise the __thread variable across
+ * set/read/re-set/read. Because the library is loaded after main() starts, its
+ * __thread storage uses the general-dynamic model (calls into __tls_get_addr)
+ * rather than initial-exec; a broken Rosetta lowering of that path surfaces as
+ * a value mismatch.
  *
  * Build (on an x86_64 Linux host):
  *   gcc -O2 -ldl -o gdtls-probe x86_64-glibc-gdtls.c
  *
- * libgdtls.so must sit on the dynamic loader search path at runtime;
- * the test rootfs stages it under /lib/x86_64-linux-gnu/.
+ * libgdtls.so must sit on the dynamic loader search path at runtime; the test
+ * rootfs stages it under /lib/x86_64-linux-gnu/.
  */
 
 #define _GNU_SOURCE
@@ -53,8 +53,8 @@ int main(void)
     memcpy((void *) &get_fn, (const void *) &raw_get, sizeof(get_fn));
     memcpy((void *) &set_fn, (const void *) &raw_set, sizeof(set_fn));
 
-    /* Initial-state read goes through __tls_get_addr on the
-     * dlopened image's PT_TLS template.
+    /* Initial-state read goes through __tls_get_addr on the dlopened image's
+     * PT_TLS template.
      */
     if (get_fn() != 0x0123456789abcdefULL) {
         emit(STDERR_FILENO, "gdtls-initial-read-wrong");

@@ -149,9 +149,9 @@ int main(void)
             FAIL("timerfd_create failed");
     }
 
-    /* CLOCK_BOOTTIME backs foot's keyboard repeat timer; on macOS it
-     * resolves to CLOCK_MONOTONIC since no boottime equivalent exists.
-     * Paired with TFD_NONBLOCK to mirror foot's actual call.
+    /* CLOCK_BOOTTIME backs foot's keyboard repeat timer; on macOS it resolves
+     * to CLOCK_MONOTONIC since no boottime equivalent exists. Paired with
+     * TFD_NONBLOCK to mirror foot's actual call.
      */
     TEST("create accepts CLOCK_BOOTTIME with TFD_NONBLOCK");
     {
@@ -161,11 +161,11 @@ int main(void)
             close(fd);
     }
 
-    /* NONBLOCK shadow: the kqueue host fd cannot carry O_NONBLOCK, so the
-     * flag lives in fd_table[gfd].linux_flags. Arm with a 1s deadline so
-     * the read is non-trivially blocked, then verify EAGAIN comes from the
-     * NONBLOCK path; an unarmed timer would also return EAGAIN, so the arm
-     * step is what makes this a real probe of the shadow.
+    /* NONBLOCK shadow: the kqueue host fd cannot carry O_NONBLOCK, so the flag
+     * lives in fd_table[gfd].linux_flags. Arm with a 1s deadline so the read is
+     * non-trivially blocked, then verify EAGAIN comes from the NONBLOCK path;
+     * an unarmed timer would also return EAGAIN, so the arm step is what makes
+     * this a real probe of the shadow.
      */
     TEST("NONBLOCK: armed-but-unfired returns EAGAIN");
     {
@@ -185,10 +185,10 @@ int main(void)
             FAIL("timerfd_create");
     }
 
-    /* fcntl coherence: F_GETFL must surface O_RDWR plus the writable bits
-     * Linux honors on a timerfd (O_APPEND, O_NONBLOCK, O_NOATIME).
-     * F_SETFL persists the writable bits and silently drops everything
-     * else; O_DIRECT returns EINVAL.
+    /* fcntl coherence: F_GETFL must surface O_RDWR plus the writable bits Linux
+     * honors on a timerfd (O_APPEND, O_NONBLOCK, O_NOATIME). F_SETFL persists
+     * the writable bits and silently drops everything else; O_DIRECT returns
+     * EINVAL.
      */
     TEST("fcntl F_GETFL/F_SETFL match Linux setfl semantics");
     {
@@ -226,9 +226,9 @@ int main(void)
     }
 
     /* F_SETFD and F_SETFL touch the same linux_flags shadow but operate on
-     * disjoint bits. Toggling CLOEXEC via F_SETFD must not perturb the
-     * status bits surfaced by F_GETFL. Targets the new fd_lock-serialized
-     * RMW in both branches.
+     * disjoint bits. Toggling CLOEXEC via F_SETFD must not perturb the status
+     * bits surfaced by F_GETFL. Targets the new fd_lock-serialized RMW in both
+     * branches.
      */
     TEST("F_SETFD does not perturb F_GETFL status bits");
     {
@@ -252,11 +252,11 @@ int main(void)
             FAIL("timerfd_create");
     }
 
-    /* dup must carry the linux_flags shadow's NONBLOCK bit through; without
-     * the preserved-mask fix the new fd's F_GETFL would report blocking.
-     * (The timerfd slot table is keyed by guest_fd with no alias support,
-     * so read/settime through the dup return EBADF -- that pre-existing
-     * limitation is outside #82's scope.)
+    /* dup must carry the linux_flags shadow's NONBLOCK bit through; without the
+     * preserved-mask fix the new fd's F_GETFL would report blocking. (The
+     * timerfd slot table is keyed by guest_fd with no alias support, so
+     * read/settime through the dup return EBADF -- that pre-existing limitation
+     * is outside #82's scope.)
      */
     TEST("dup preserves O_NONBLOCK and O_RDWR in linux_flags");
     {

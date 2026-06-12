@@ -4,14 +4,12 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * shmget, shmat, shmdt, shmctl, semget, semop, semctl,
- * msgget, msgsnd, msgrcv, msgctl.
- * Forwards to macOS SysV IPC with structure translation.
+ * shmget, shmat, shmdt, shmctl, semget, semop, semctl, msgget, msgsnd, msgrcv,
+ * msgctl. Forwards to macOS SysV IPC with structure translation.
  *
- * shmat limitation: HVF guest memory cannot directly map host shm
- * segments. Data is copied between host shm and guest memory on
- * attach/detach. True cross-process shared semantics require a
- * more complex synchronization scheme.
+ * shmat limitation: HVF guest memory cannot directly map host shm segments.
+ * Data is copied between host shm and guest memory on attach/detach. True
+ * cross-process shared semantics require a more complex synchronization scheme.
  */
 
 #include <errno.h>
@@ -211,8 +209,8 @@ static int translate_semctl_cmd(int linux_cmd)
 int64_t sys_shmget(guest_t *g, int32_t key, uint64_t size, int shmflg)
 {
     (void) g;
-    /* IPC_CREAT, IPC_EXCL, IPC_PRIVATE, and permission bits are the
-     * same numeric values on Linux and macOS. Pass through directly.
+    /* IPC_CREAT, IPC_EXCL, IPC_PRIVATE, and permission bits are the same
+     * numeric values on Linux and macOS. Pass through directly.
      */
     int id = shmget((key_t) key, (size_t) size, shmflg);
     if (id < 0)
@@ -238,14 +236,14 @@ int64_t sys_shmat(guest_t *g, int shmid, uint64_t shmaddr_gva, int shmflg)
     if (host_addr == (void *) -1)
         return linux_errno();
 
-    /* Allocate guest memory via anonymous mmap. shmaddr_gva hint is
-     * ignored for simplicity; SysV SHM always lets the allocator choose.
-     * A MAP_FIXED path could be added if programs depend on it.
+    /* Allocate guest memory via anonymous mmap. shmaddr_gva hint is ignored for
+     * simplicity; SysV SHM always lets the allocator choose. A MAP_FIXED path
+     * could be added if programs depend on it.
      */
     (void) shmaddr_gva;
 
-    /* Always allocate RW initially so the code can copy shm content in.
-     * For SHM_RDONLY, downgrade to read-only via mprotect after the copy.
+    /* Always allocate RW initially so the code can copy shm content in. For
+     * SHM_RDONLY, downgrade to read-only via mprotect after the copy.
      */
     int64_t gva =
         sys_mmap_anon(g, 0, seg_size, LINUX_PROT_READ | LINUX_PROT_WRITE);
@@ -260,8 +258,8 @@ int64_t sys_shmat(guest_t *g, int shmid, uint64_t shmaddr_gva, int shmflg)
         return -LINUX_EFAULT;
     }
 
-    /* Downgrade to read-only for SHM_RDONLY via the standard mprotect
-     * path, which handles L2->L3 block splitting and TLBI correctly.
+    /* Downgrade to read-only for SHM_RDONLY via the standard mprotect path,
+     * which handles L2->L3 block splitting and TLBI correctly.
      */
     if (rdonly)
         sys_mprotect(g, (uint64_t) gva, PAGE_ALIGN_UP(seg_size),
@@ -321,8 +319,8 @@ int64_t sys_shmdt(guest_t *g, uint64_t shmaddr_gva)
     shmdt(entry.host_addr);
 
     /* Guest memory remains allocated (no munmap). Linux shmdt does not
-     * guarantee immediate unmap either; the pages become undefined.
-     * A real implementation would munmap the guest region here.
+     * guarantee immediate unmap either; the pages become undefined. A real
+     * implementation would munmap the guest region here.
      */
 
     return 0;
@@ -376,9 +374,11 @@ int64_t sys_shmctl(guest_t *g, int shmid, int cmd, uint64_t buf_gva)
     case LINUX_IPC_INFO:
     case LINUX_SHM_INFO:
     case LINUX_SHM_STAT:
-        /* IPC_INFO/SHM_INFO/SHM_STAT are Linux-specific and have no
-         * direct macOS equivalent. Return EINVAL rather than ENOSYS
-         * to match what a restricted-permission kernel would do.
+        /* IPC_INFO/SHM_INFO/SHM_STAT are Linux-specific and have no direct
+         * macOS equivalent.
+         *
+         * Return EINVAL rather than ENOSYS to match what a
+         * restricted-permission kernel would do.
          */
         return -LINUX_EINVAL;
 
@@ -567,8 +567,8 @@ int64_t sys_msgsnd(guest_t *g,
                    uint64_t msgsz,
                    int msgflg)
 {
-    /* Linux msgsnd msgp layout: long mtype followed by msgsz bytes of
-     * message text. Total read from guest = sizeof(long) + msgsz.
+    /* Linux msgsnd msgp layout: long mtype followed by msgsz bytes of message
+     * text. Total read from guest = sizeof(long) + msgsz.
      */
     if (msgsz > 65536)
         return -LINUX_EINVAL;
@@ -585,8 +585,8 @@ int64_t sys_msgsnd(guest_t *g,
         goto out;
     }
 
-    /* The mtype field is a 64-bit long on aarch64-linux. macOS also uses
-     * long (64-bit on arm64). Direct passthrough.
+    /* The mtype field is a 64-bit long on aarch64-linux. macOS also uses long
+     * (64-bit on arm64). Direct passthrough.
      */
     int flags = 0;
     if (msgflg & LINUX_IPC_NOWAIT)
@@ -610,8 +610,8 @@ int64_t sys_msgrcv(guest_t *g,
     if (msgsz > 65536)
         return -LINUX_EINVAL;
 
-    /* MSG_EXCEPT and MSG_COPY are Linux-specific queue selection modes.
-     * macOS cannot emulate either with a native msgrcv call.
+    /* MSG_EXCEPT and MSG_COPY are Linux-specific queue selection modes. macOS
+     * cannot emulate either with a native msgrcv call.
      */
     if (msgflg & (LINUX_MSG_COPY | LINUX_MSG_EXCEPT))
         return -LINUX_ENOSYS;

@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * This is a native macOS test (not a guest ELF). It deterministically
- * catches two distinct regression classes against the proctitle fix:
+ * This is a native macOS test (not a guest ELF). It deterministically catches
+ * two distinct regression classes against the proctitle fix:
  *
  *   (a) any overshoot past the contiguous argv block in the current
  *       implementation. The argv strings are laid out so their NUL
@@ -37,9 +37,9 @@
 static void on_sigsegv(int sig)
 {
     (void) sig;
-    /* Cannot rely on stdio inside an async signal handler, but a single
-     * _exit with a recognizable code is sufficient: the run target prints
-     * a meaningful failure when the child exits with 139.
+    /* Cannot rely on stdio inside an async signal handler, but a single _exit
+     * with a recognizable code is sufficient: the run target prints a
+     * meaningful failure when the child exits with 139.
      */
     _exit(139);
 }
@@ -62,8 +62,8 @@ int main(void)
     size_t page = (size_t) pgsz;
     /* Layout: [page 0: writable argv] [page 1: PROT_NONE guard]
      *         [page 2: writable envp sentinel]
-     * A reverted argv+envp walk that consults environ computes an
-     * avail spanning all three pages and memsets through the guard.
+     * A reverted argv+envp walk that consults environ computes an avail
+     * spanning all three pages and memsets through the guard.
      */
     size_t map_size = page * 3;
     char *base = (char *) mmap(NULL, map_size, PROT_READ | PROT_WRITE,
@@ -77,12 +77,12 @@ int main(void)
         return 1;
     }
 
-    /* Synthesize a contiguous argv block whose tail aligns with the
-     * boundary, mimicking the host kernel placing argv at the top of the
-     * initial stack. Total length is chosen so the bin field after the
-     * last "/" character ("busybox") drives the rewritten title past the
-     * pre-existing argv[0] string length, exercising the truncation
-     * branch as well as the simple-copy branch on the next argv entry.
+    /* Synthesize a contiguous argv block whose tail aligns with the boundary,
+     * mimicking the host kernel placing argv at the top of the initial stack.
+     * Total length is chosen so the bin field after the last "/" character
+     * ("busybox") drives the rewritten title past the pre-existing argv[0]
+     * string length, exercising the truncation branch as well as the
+     * simple-copy branch on the next argv entry.
      */
     static const char *parts[] = {
         "elfuse",
@@ -118,8 +118,8 @@ int main(void)
         return 1;
     }
 
-    /* Plant a sentinel envp string above the guard so the reverted
-     * argv+envp upper-bound walk computes avail spanning the guard.
+    /* Plant a sentinel envp string above the guard so the reverted argv+envp
+     * upper-bound walk computes avail spanning the guard.
      */
     char *envp_str = base + page * 2;
     static const char sentinel[] = "ELFUSE_PROCTITLE_TEST_SENTINEL=1";
@@ -134,10 +134,10 @@ int main(void)
 
     environ = saved_environ;
 
-    /* Tail byte must be NUL, the prefix must form a non-empty C string,
-     * and the rewritten title must not have escaped the argv span (the
-     * byte after the block tail is unreadable, so verifying the tail
-     * byte alone is the strongest check available).
+    /* Tail byte must be NUL, the prefix must form a non-empty C string, and the
+     * rewritten title must not have escaped the argv span (the byte after the
+     * block tail is unreadable, so verifying the tail byte alone is the
+     * strongest check available).
      */
     if (start[total - 1] != '\0') {
         fprintf(stderr, "test-proctitle-host: tail byte was not zeroed\n");

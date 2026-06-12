@@ -4,12 +4,12 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * elfuse's permission model rejects setuid/setresuid to any value not
- * already in {real, effective, saved}, which means a guest binary
- * cannot legally toggle between two distinct uids without privileged
- * setup. This test therefore exercises the no-op-publish path: the
- * mutator calls setresuid(uid, uid, uid) in a tight loop while the
- * reader spins on geteuid via the shim's identity fast path.
+ * elfuse's permission model rejects setuid/setresuid to any value not already
+ * in {real, effective, saved}, which means a guest binary cannot legally toggle
+ * between two distinct uids without privileged setup. This test therefore
+ * exercises the no-op-publish path: the mutator calls setresuid(uid, uid, uid)
+ * in a tight loop while the reader spins on geteuid via the shim's identity
+ * fast path.
  *
  * What it pins:
  *
@@ -77,8 +77,8 @@ int main(void)
     if (pthread_create(&tid, NULL, reader, NULL) != 0)
         return 1;
 
-    /* 50_000 no-op setresuid calls. Each triggers cred_publish_after
-     * on the elfuse side, racing the reader thread.
+    /* 50_000 no-op setresuid calls. Each triggers cred_publish_after on the
+     * elfuse side, racing the reader thread.
      */
     for (int i = 0; i < 50000; i++) {
         long r = raw_syscall3(__NR_setresuid, (long) expected_euid,

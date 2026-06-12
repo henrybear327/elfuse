@@ -15,8 +15,8 @@
 #include <stdint.h>
 #include "core/guest.h"
 
-/* Execute a new binary, replacing current process image.
- * Reads path, argv[], envp[] from guest memory, reloads ELF, resets state.
+/* Execute a new binary, replacing current process image. Reads path, argv[],
+ * envp[] from guest memory, reloads ELF, resets state.
  * Returns SYSCALL_EXEC_HAPPENED on success (caller skips X0 write), or negative
  * Linux errno on failure.
  */

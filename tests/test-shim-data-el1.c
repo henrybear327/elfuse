@@ -3,11 +3,10 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * The shim_data block holds the identity cache, attention flag,
- * urandom bitmap, ring, and lock. Mapping it with AP[2:1]=00
- * (privileged-only) prevents a guest from spoofing its own identity
- * by storing directly to the cache GVA, or from observing the bytes
- * the urandom fast path will hand out next.
+ * The shim_data block holds the identity cache, attention flag, urandom bitmap,
+ * ring, and lock. Mapping it with AP[2:1]=00 (privileged-only) prevents a guest
+ * from spoofing its own identity by storing directly to the cache GVA, or from
+ * observing the bytes the urandom fast path will hand out next.
  *
  * This test:
  *   1. Parses /proc/self/maps to find [shim-data].
@@ -89,10 +88,10 @@ static int probe_write(uint64_t addr)
     return 0;
 }
 
-/* Phase 2 (post-execve): only the perm-string and fault checks. The
- * identity and urandom sanity is already exercised in phase 1; here
- * the goal is to catch a regression where execve maps shim_data with
- * plain RW instead of RW_EL1_ONLY.
+/* Phase 2 (post-execve): only the perm-string and fault checks. The identity
+ * and urandom sanity is already exercised in phase 1; here the goal is to catch
+ * a regression where execve maps shim_data with plain RW instead of
+ * RW_EL1_ONLY.
  */
 static int run_post_exec_checks(void)
 {
@@ -190,12 +189,11 @@ int main(int argc, char **argv)
     }
     printf("OK urandom fast path still works\n");
 
-    /* The host syscall handlers must also refuse to act on a
-     * guest-supplied [shim-data] GVA. Without this defense, a guest
-     * could spoof the identity cache via read(fd, shim_data_gva, n)
-     * instead of a direct EL0 store. The host's gva_translate_perm
-     * rejects EL1-only descriptors before any host_base+offset write
-     * fires; the syscall returns EFAULT.
+    /* The host syscall handlers must also refuse to act on a guest-supplied
+     * [shim-data] GVA. Without this defense, a guest could spoof the identity
+     * cache via read(fd, shim_data_gva, n) instead of a direct EL0 store. The
+     * host's gva_translate_perm rejects EL1-only descriptors before any
+     * host_base+offset write fires; the syscall returns EFAULT.
      */
     errno = 0;
     ssize_t rc = read(fd, (void *) (uintptr_t) base, 1);
@@ -212,10 +210,10 @@ int main(int argc, char **argv)
 
     /* Phase 2: re-exec self with argv[1]='post-exec' so the post-execve
      * shim_data mapping path is exercised. If exec.c forgets to use
-     * RW_EL1_ONLY, the child process's [shim-data] perms come back as
-     * 'rw-p' and the probe_read in run_post_exec_checks succeeds (no
-     * SIGSEGV), failing the regression. The original child reaches
-     * argc=1 above; this path only runs once.
+     * RW_EL1_ONLY, the child process's [shim-data] perms come back as 'rw-p'
+     * and the probe_read in run_post_exec_checks succeeds (no SIGSEGV), failing
+     * the regression. The original child reaches argc=1 above; this path only
+     * runs once.
      */
     char *exec_argv[] = {argv[0], "post-exec", NULL};
     execv("/proc/self/exe", exec_argv);

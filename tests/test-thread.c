@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests raw clone(CLONE_THREAD) with futex-based synchronization.
- * Uses inline syscall wrappers (no pthread) to directly exercise
- * elfuse's thread implementation.
+ * Tests raw clone(CLONE_THREAD) with futex-based synchronization. Uses inline
+ * syscall wrappers (no pthread) to directly exercise elfuse's thread
+ * implementation.
  */
 
 #include <stdbool.h>
@@ -29,8 +29,8 @@ int passes = 0, fails = 0;
 /* Shared variable written by child thread, read by parent */
 static volatile int shared_value = 0;
 
-/* Child TID: written by CLONE_PARENT_SETTID and cleared by
- * CLONE_CHILD_CLEARTID on thread exit
+/* Child TID: written by CLONE_PARENT_SETTID and cleared by CLONE_CHILD_CLEARTID
+ * on thread exit
  */
 static volatile int child_tid = 0;
 
@@ -40,9 +40,9 @@ static volatile int parked_state = 0;
 
 /* Child thread function */
 
-/* This is the entry point for the child thread. Since clone returns to the
- * same instruction, main branches on the return value and calls this only in
- * the child path.
+/* This is the entry point for the child thread. Since clone returns to the same
+ * instruction, main branches on the return value and calls this only in the
+ * child path.
  */
 
 static void child_work(void)
@@ -135,9 +135,8 @@ static void test_parent_settid(void)
         raw_futex_wait((int *) &child_tid, child_tid);
     }
 
-    /* If execution reaches this point, CHILD_CLEARTID cleared it and
-     * FUTEX_WAKE woke the parent.
-     * The original value was > 0 (written by PARENT_SETTID).
+    /* If execution reaches this point, CHILD_CLEARTID cleared it and FUTEX_WAKE
+     * woke the parent. The original value was > 0 (written by PARENT_SETTID).
      */
     PASS();
 }
@@ -163,8 +162,8 @@ static void test_multi_thread(void)
 
     int spawned = 0;
     for (int i = 0; i < N_THREADS; i++) {
-        /* Store the index in a 16-byte aligned slot at the top of the
-         * child's stack. AArch64 requires SP to be 16-byte aligned.
+        /* Store the index in a 16-byte aligned slot at the top of the child's
+         * stack. AArch64 requires SP to be 16-byte aligned.
          */
         char *stack_top = mt_stacks[i] + sizeof(mt_stacks[i]);
         int *slot = (int *) (stack_top - 16);

@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests fork edge cases: fork + exec chain, fork with many FDs,
- * fork + pipe communication, and nested fork.
+ * Tests fork edge cases: fork + exec chain, fork with many FDs, fork + pipe
+ * communication, and nested fork.
  *
  * Usage: elfuse test-fork-exec <path-to-echo-test>
  *

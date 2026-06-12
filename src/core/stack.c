@@ -4,10 +4,10 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Constructs the initial stack layout that the Linux ABI requires at
- * process startup. The stack is built at the top of the guest stack
- * region and grows downward: string data at the top, then the structured
- * area (auxv, envp, argv, argc) below.
+ * Constructs the initial stack layout that the Linux ABI requires at process
+ * startup. The stack is built at the top of the guest stack region and grows
+ * downward: string data at the top, then the structured area (auxv, envp, argv,
+ * argc) below.
  */
 
 #include <stdlib.h>
@@ -160,17 +160,16 @@ uint64_t build_linux_stack(guest_t *g,
             envc++;
     }
 
-/* Bounds-check: Linux returns E2BIG for oversized argument/environment.
- * ARG_MAX on Linux is typically 2MiB; stack setup caps at reasonable stack
- * limits.
+/* Bounds-check: Linux returns E2BIG for oversized argument/environment. ARG_MAX
+ * on Linux is typically 2MiB; stack setup caps at reasonable stack limits.
  */
 #define MAX_ARGS 131072
 #define MAX_ENVS 131072
     if (argc > MAX_ARGS || envc > MAX_ENVS)
         return 0; /* Caller treats 0 as failure */
 
-    /* Phase 1: Write strings and random data at the top of the stack.
-     * stack setup works downward from stack_top.
+    /* Phase 1: Write strings and random data at the top of the stack. stack
+     * setup works downward from stack_top.
      */
     uint64_t str_ptr = stack_top;
 
@@ -225,27 +224,26 @@ uint64_t build_linux_stack(guest_t *g,
     /* AT_EXECFN: pointer to argv[0] string (write it near the top) */
     uint64_t execfn_ptr = (argc > 0) ? arg_ptrs[0] : 0;
 
-    /* Phase 2: Build the structured part of the stack.
-     * Align str_ptr down to 16 bytes first.
+    /* Phase 2: Build the structured part of the stack. Align str_ptr down to 16
+     * bytes first.
      */
     str_ptr &= ~15ULL;
     uint64_t sp = str_ptr;
 
     /* Count auxv entries: base 15 (always) + AT_EXECFN (always) + AT_BASE
      * (always, matching Linux kernel; see commit ba0b177) + optional
-     * AT_SYSINFO_EHDR + optional AT_EXECFD.
-     * Each auxv entry = 2 words. Plus AT_NULL = 2 words.
-     * Total words from auxv = (num_auxv_entries + 1) * 2.
-     * Plus envp_null(1) + envp_ptrs(envc) + argv_null(1) +
-     * argv_ptrs(argc) + argc(1).
+     * AT_SYSINFO_EHDR + optional AT_EXECFD. Each auxv entry = 2 words. Plus
+     * AT_NULL = 2 words. Total words from auxv = (num_auxv_entries + 1) * 2.
+     * Plus envp_null(1) + envp_ptrs(envc) + argv_null(1) + argv_ptrs(argc) +
+     * argc(1).
      *
-     * Base auxv: 15 entries = 30 words, AT_NULL = 2 words = 32.
-     * Always: AT_EXECFN = +2, AT_BASE = +2.
-     * Optional: AT_SYSINFO_EHDR (if vdso_base != 0) = +2,
+     * Base auxv: 15 entries = 30 words, AT_NULL = 2 words = 32. Always:
+     * AT_EXECFN = +2, AT_BASE = +2. Optional: AT_SYSINFO_EHDR (if vdso_base !=
+     * 0) = +2,
      *           AT_EXECFD (if execfd >= 0) = +2.
      * Plus envp_null(1) + envp(envc) + argv_null(1) + argv(argc) + argc(1) = 3.
-     * Total = 32 + extra + 3 + envc + argc = 35 + extra + envc + argc.
-     * For 16-byte alignment: total must be even.
+     * Total = 32 + extra + 3 + envc + argc = 35 + extra + envc + argc. For
+     * 16-byte alignment: total must be even.
      */
     int extra = 2 + 2; /* AT_EXECFN + AT_BASE (both always present) */
     if (vdso_base != 0)
@@ -254,8 +252,9 @@ uint64_t build_linux_stack(guest_t *g,
         extra += 2; /* AT_EXECFD (binfmt_misc binary fd) */
     int total_entries = 35 + extra + argc + envc;
 
-    /* Track cumulative write errors. Any failure means the stack
-     * is incomplete. Return 0 so the caller sees the failure.
+    /* Track cumulative write errors. Any failure means the stack is incomplete.
+     *
+     * Return 0 so the caller sees the failure.
      */
     int stack_err = str_err;
 
@@ -289,8 +288,8 @@ uint64_t build_linux_stack(guest_t *g,
     AUX(AT_EUID, GUEST_UID);
     AUX(AT_GID, GUEST_GID);
     AUX(AT_EGID, GUEST_GID);
-    /* Bionic's __libc_init_AT_SECURE aborts when AT_SECURE is absent.
-     * elfuse never elevates privileges, so AT_SECURE is always 0.
+    /* Bionic's __libc_init_AT_SECURE aborts when AT_SECURE is absent. elfuse
+     * never elevates privileges, so AT_SECURE is always 0.
      */
     AUX(AT_SECURE, 0);
     AUX(AT_HWCAP2, query_hwcap2());

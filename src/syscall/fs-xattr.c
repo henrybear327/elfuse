@@ -16,11 +16,10 @@
 #include "syscall/internal.h"
 #include "syscall/path.h"
 
-/* macOS xattr API has extra position and options parameters vs Linux.
- * Linux: getxattr(path, name, value, size)
- * macOS: getxattr(path, name, value, size, position, options)
- * The xattr shim passes position=0, options=0 for normal operation, and
- * options=XATTR_NOFOLLOW for lgetxattr/lsetxattr/etc.
+/* macOS xattr API has extra position and options parameters vs Linux. Linux:
+ * getxattr(path, name, value, size) macOS: getxattr(path, name, value, size,
+ * position, options) The xattr shim passes position=0, options=0 for normal
+ * operation, and options=XATTR_NOFOLLOW for lgetxattr/lsetxattr/etc.
  */
 
 #define LINUX_XATTR_NAME_MAX 255

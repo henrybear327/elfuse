@@ -215,8 +215,8 @@ static int64_t stat_at_path(guest_t *g,
     int64_t rc = 0;
     host_fd_ref_t dir_ref = {.fd = -1, .owned = false};
     if ((flags & LINUX_AT_EMPTY_PATH) && pathp[0] == '\0') {
-        /* Linux: AT_EMPTY_PATH with dirfd == AT_FDCWD operates on the
-         * current working directory.
+        /* Linux: AT_EMPTY_PATH with dirfd == AT_FDCWD operates on the current
+         * working directory.
          */
         if (dirfd == LINUX_AT_FDCWD) {
             dir_ref.fd = AT_FDCWD;

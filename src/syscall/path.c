@@ -148,12 +148,11 @@ int path_translate_at(guest_fd_t dirfd,
         return -1;
     }
 
-    /* Only the fields read on the no-rewrite fast path need explicit
-     * defaults; proc_path / guest_buf / host_buf are read-after-written
-     * by their respective resolvers. memset of all three 4 KiB buffers
-     * would add ~12 KiB of zeroing per call, which became visible at
-     * ~30 calls per dynamic-linker startup after the sidecar caches
-     * dropped the rest of the openat overhead.
+    /* Only the fields read on the no-rewrite fast path need explicit defaults;
+     * proc_path / guest_buf / host_buf are read-after-written by their
+     * respective resolvers. memset of all three 4 KiB buffers would add ~12 KiB
+     * of zeroing per call, which became visible at ~30 calls per dynamic-linker
+     * startup after the sidecar caches dropped the rest of the openat overhead.
      */
     tx->guest_path = path;
     tx->intercept_path = path;
@@ -755,10 +754,9 @@ int path_openat2_resolved_within_root(guest_fd_t dirfd,
     return 0;
 }
 
-/* Mount-class taxonomy used by RESOLVE_NO_XDEV. Distinct return values
- * mean distinct logical filesystems from the guest's perspective. FUSE
- * mounts encode mount_id into the high bits so two distinct FUSE mounts
- * compare unequal.
+/* Mount-class taxonomy used by RESOLVE_NO_XDEV. Distinct return values mean
+ * distinct logical filesystems from the guest's perspective. FUSE mounts encode
+ * mount_id into the high bits so two distinct FUSE mounts compare unequal.
  */
 #define PATH_MOUNT_ROOT 0
 #define PATH_MOUNT_PROC 1
@@ -766,12 +764,11 @@ int path_openat2_resolved_within_root(guest_fd_t dirfd,
 #define PATH_MOUNT_SYS 3
 #define PATH_MOUNT_TMP 4
 #define PATH_MOUNT_DEV_SHM 5
-/* fuse_next_mount_id is a monotonic int starting at 100 (see fuse.c).
- * The base is sized well clear of any realistic mount_id so the four
- * non-FUSE classes never collide with the FUSE class numbers even after
- * hundreds of millions of mount cycles. mount_id values that ever do
- * approach this bound would represent a runtime that long outlived
- * elfuse's intended lifetime.
+/* fuse_next_mount_id is a monotonic int starting at 100 (see fuse.c). The base
+ * is sized well clear of any realistic mount_id so the four non-FUSE classes
+ * never collide with the FUSE class numbers even after hundreds of millions of
+ * mount cycles. mount_id values that ever do approach this bound would
+ * represent a runtime that long outlived elfuse's intended lifetime.
  */
 #define PATH_MOUNT_FUSE_BASE 0x10000000
 
@@ -925,11 +922,11 @@ bool path_openat2_is_fd_magiclink_anchor(guest_fd_t dirfd, const char *path)
            normalized_proc_self_fd_anchor(normalized);
 }
 
-/* Pop one trailing component from an absolute path, refusing to drop
- * below the supplied floor length. floor_len is strlen of the walk root
- * (1 == "/" for the bare-absolute case, dirfd-base length for IN_ROOT
- * resolution). At the floor the path is left unchanged, matching Linux's
- * ".." at "/" semantics and RESOLVE_IN_ROOT's clamp-at-dirfd rule.
+/* Pop one trailing component from an absolute path, refusing to drop below the
+ * supplied floor length. floor_len is strlen of the walk root (1 == "/" for the
+ * bare-absolute case, dirfd-base length for IN_ROOT resolution). At the floor
+ * the path is left unchanged, matching Linux's ".." at "/" semantics and
+ * RESOLVE_IN_ROOT's clamp-at-dirfd rule.
  */
 static void guest_path_pop(char *current, size_t floor_len)
 {
@@ -1035,11 +1032,11 @@ int path_openat2_crosses_mount(guest_fd_t dirfd,
 
     /* The walk has to track every intermediate prefix because lexical
      * collapsing of ".." would erase a transient mount crossing (e.g.
-     * "/proc/self/../../tmp" passes through /proc before the upward
-     * components apply, and Linux NO_XDEV detects that). The start frame
-     * matches how the kernel anchors resolution: absolute paths begin at
-     * "/" regardless of dirfd; relative paths and RESOLVE_IN_ROOT begin at
-     * the dirfd's tracked guest path.
+     * "/proc/self/../../tmp" passes through /proc before the upward components
+     * apply, and Linux NO_XDEV detects that). The start frame matches how the
+     * kernel anchors resolution: absolute paths begin at "/" regardless of
+     * dirfd; relative paths and RESOLVE_IN_ROOT begin at the dirfd's tracked
+     * guest path.
      */
     if (path[0] == '/' && !in_root) {
         current[0] = '/';
@@ -1048,11 +1045,11 @@ int path_openat2_crosses_mount(guest_fd_t dirfd,
         goto out;
     }
 
-    /* IN_ROOT clamps ".." at dirfd; outside IN_ROOT the walker can
-     * traverse up to "/" so a transition like /proc/1 -> /proc -> /
-     * surfaces as the expected cross. The floor matches whichever rule
-     * applies so the precheck never out-rejects the actual resolution
-     * that follows in path_openat2_normalize_in_root.
+    /* IN_ROOT clamps ".." at dirfd; outside IN_ROOT the walker can traverse up
+     * to "/" so a transition like /proc/1 -> /proc -> / surfaces as the
+     * expected cross. The floor matches whichever rule applies so the precheck
+     * never out-rejects the actual resolution that follows in
+     * path_openat2_normalize_in_root.
      */
     size_t floor_len = in_root ? strlen(current) : 1;
 

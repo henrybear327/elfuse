@@ -4,10 +4,10 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Emulates Linux NETLINK_ROUTE sockets so that glibc's getifaddrs()
- * works. macOS has no AF_NETLINK; netlink emulation synthesizes responses by
- * querying the host via getifaddrs(3) and formatting into Linux netlink message
- * headers (struct nlmsghdr, struct ifinfomsg, struct ifaddrmsg, etc.).
+ * Emulates Linux NETLINK_ROUTE sockets so that glibc's getifaddrs() works.
+ * macOS has no AF_NETLINK; netlink emulation synthesizes responses by querying
+ * the host via getifaddrs(3) and formatting into Linux netlink message headers
+ * (struct nlmsghdr, struct ifinfomsg, struct ifaddrmsg, etc.).
  *
  * Supported operations:
  *   socket(AF_NETLINK, SOCK_RAW|SOCK_DGRAM, NETLINK_ROUTE) -> synthetic fd
@@ -36,9 +36,8 @@
 
 static void netlink_close(int guest_fd);
 
-/* Linux netlink message structures.
- * These structures are defined manually to match the Linux ABI exactly,
- * since macOS has no <linux/netlink.h>.
+/* Linux netlink message structures. These structures are defined manually to
+ * match the Linux ABI exactly, since macOS has no <linux/netlink.h>.
  */
 
 /* Netlink message header (struct nlmsghdr) */
@@ -64,9 +63,9 @@ typedef struct {
 #define RTM_NEWLINK 16
 #define RTM_NEWADDR 20
 
-/* NLM_F_* flags. Only NLM_F_MULTI is set on synthesized replies; the
- * dump-style request flags (NLM_F_ROOT|NLM_F_MATCH) are recognized in the
- * request but never echoed back, so they have no constants here.
+/* NLM_F_* flags. Only NLM_F_MULTI is set on synthesized replies; the dump-style
+ * request flags (NLM_F_ROOT|NLM_F_MATCH) are recognized in the request but
+ * never echoed back, so they have no constants here.
  */
 #define NLM_F_MULTI 0x02
 
@@ -223,8 +222,8 @@ static int nl_build_getlink(netlink_state_t *ns)
         if (nseen < 64)
             seen[nseen++] = idx;
 
-        /* Build message: nlmsghdr + ifinfomsg + attributes.
-         * Check minimum space before advancing off.
+        /* Build message: nlmsghdr + ifinfomsg + attributes. Check minimum space
+         * before advancing off.
          */
         size_t min_msg = NLMSG_HDRLEN + NLMSG_ALIGN(sizeof(ifinfomsg_t));
         if (off + min_msg > max)
@@ -252,8 +251,8 @@ static int nl_build_getlink(netlink_state_t *ns)
         n = nl_put_attr(buf + off, max - off, IFLA_MTU, &mtu, 4);
         off += n;
 
-        /* Backfill nlmsghdr now that nlmsg_len is known (header is reserved
-         * at msg_start; attributes were written after it).
+        /* Backfill nlmsghdr now that nlmsg_len is known (header is reserved at
+         * msg_start; attributes were written after it).
          */
         nlmsghdr_t hdr = {
             .nlmsg_len = (uint32_t) (off - msg_start),
@@ -579,8 +578,8 @@ int64_t netlink_recvmsg(int guest_fd, guest_t *g, uint64_t msg_gva, int flags)
     size_t avail = ns->buf_len - ns->buf_pos;
     size_t to_copy = (avail < iov.iov_len) ? avail : iov.iov_len;
 
-    /* Return complete netlink messages only. Walk from buf_pos to find
-     * the last complete message that fits in the buffer.
+    /* Return complete netlink messages only. Walk from buf_pos to find the last
+     * complete message that fits in the buffer.
      */
     size_t msg_end = 0, pos = ns->buf_pos;
     while (pos < ns->buf_len && (pos - ns->buf_pos + NLMSG_HDRLEN) <= to_copy) {
@@ -595,8 +594,9 @@ int64_t netlink_recvmsg(int guest_fd, guest_t *g, uint64_t msg_gva, int flags)
     }
 
     if (msg_end == 0) {
-        /* Buffer too small for even one message. Return what fits
-         * with MSG_TRUNC semantics
+        /* Buffer too small for even one message.
+         *
+         * Return what fits with MSG_TRUNC semantics
          */
         msg_end = to_copy;
     }

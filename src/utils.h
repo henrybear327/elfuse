@@ -19,10 +19,10 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Align x up to the next multiple of a; a must be a power of two.
- * Both x and a are evaluated as uint64_t. Most callers manipulate guest
- * addresses or sizes that already fit, so this avoids surprises from
- * signed/unsigned mixing in alignment masks.
+/* Align x up to the next multiple of a; a must be a power of two. Both x and a
+ * are evaluated as uint64_t. Most callers manipulate guest addresses or sizes
+ * that already fit, so this avoids surprises from signed/unsigned mixing in
+ * alignment masks.
  */
 #define ALIGN_UP(x, a) \
     (((uint64_t) (x) + ((uint64_t) (a) - 1)) & ~((uint64_t) (a) - 1))
@@ -31,8 +31,8 @@
 #define ALIGN_DOWN(x, a) ((uint64_t) (x) & ~((uint64_t) (a) - 1))
 
 /* The Linux ABI fixes the page size at 4KiB on aarch64 regardless of the host
- * page size, so this is shared by every guest memory path (mmap, brk,
- * mprotect, ELF loading).
+ * page size, so this is shared by every guest memory path (mmap, brk, mprotect,
+ * ELF loading).
  */
 #define GUEST_PAGE_SIZE 4096ULL
 #define PAGE_ALIGN_UP(x) ALIGN_UP(x, GUEST_PAGE_SIZE)
@@ -46,15 +46,15 @@
 /* Branchless range check: true when minx <= x < minx + size.
  *
  * Replaces the recurring pair (x >= minx && x < minx + size) with a single
- * unsigned compare: shift x into a [0, size) window and let unsigned
- * wraparound flag both underflow (x < minx) and overflow (x >= minx + size).
- * Width-safe for any operand up to uint64_t.
+ * unsigned compare: shift x into a [0, size) window and let unsigned wraparound
+ * flag both underflow (x < minx) and overflow (x >= minx + size). Width-safe
+ * for any operand up to uint64_t.
  *
- * Operands are cast to uint64_t *before* the subtraction so signed inputs
- * near the type extremes (e.g., LONG_MIN passed by a strtol result) cannot
- * trigger signed overflow UB. Negative signed values sign-extend through the
- * unsigned conversion to a large uint64_t, which still yields the correct
- * out-of-range answer.
+ * Operands are cast to uint64_t *before* the subtraction so signed inputs near
+ * the type extremes (e.g., LONG_MIN passed by a strtol result) cannot trigger
+ * signed overflow UB. Negative signed values sign-extend through the unsigned
+ * conversion to a large uint64_t, which still yields the correct out-of-range
+ * answer.
  *
  * Caveat: x and minx are evaluated twice; do not pass expressions with side
  * effects.
@@ -99,8 +99,8 @@ static inline size_t str_copy_trunc(char *dst, const char *src, size_t dst_size)
     return src_len;
 }
 
-/* close(2) on a cleanup path: preserves errno across the close so the
- * caller's failure errno survives untouched. Skips the close when fd < 0.
+/* close(2) on a cleanup path: preserves errno across the close so the caller's
+ * failure errno survives untouched. Skips the close when fd < 0.
  */
 static inline void close_keep_errno(int fd)
 {
@@ -110,8 +110,9 @@ static inline void close_keep_errno(int fd)
     errno = saved;
 }
 
-/* Enable an fd flag if it is not already set. Returns 0 on success or -1 with
- * errno preserved from the failing fcntl call.
+/* Enable an fd flag if it is not already set.
+ *
+ * Returns 0 on success or -1 with errno preserved from the failing fcntl call.
  */
 static inline int fd_set_fd_flag(int fd, int flag)
 {
@@ -150,12 +151,12 @@ static inline int fd_set_nonblock(int fd)
 
 /* Carry overflow/underflow between tv_nsec and tv_sec so the result is a
  * canonical timespec with 0 <= tv_nsec < 1e9. Uses div/mod (which truncate
- * toward zero in C99) plus a single borrow so the LONG_MIN case never
- * negates tv_nsec -- that would be undefined behavior.
+ * toward zero in C99) plus a single borrow so the LONG_MIN case never negates
+ * tv_nsec -- that would be undefined behavior.
  *
- * NSEC_PER_SEC is also defined by mach/clock_types.h and dispatch/time.h
- * on macOS; the guard avoids redefinition warnings when those system
- * headers are pulled in transitively.
+ * NSEC_PER_SEC is also defined by mach/clock_types.h and dispatch/time.h on
+ * macOS; the guard avoids redefinition warnings when those system headers are
+ * pulled in transitively.
  */
 #ifndef NSEC_PER_SEC
 #define NSEC_PER_SEC 1000000000L
@@ -171,8 +172,8 @@ static inline void timespec_normalize(struct timespec *ts)
     }
 }
 
-/* Compute a CLOCK_REALTIME absolute deadline that is rel_ms milliseconds in
- * the future, suitable for pthread_cond_timedwait().
+/* Compute a CLOCK_REALTIME absolute deadline that is rel_ms milliseconds in the
+ * future, suitable for pthread_cond_timedwait().
  */
 static inline void timespec_deadline_in_ms(struct timespec *out, long rel_ms)
 {
@@ -184,8 +185,8 @@ static inline void timespec_deadline_in_ms(struct timespec *out, long rel_ms)
 
 /* Bitmap helpers.
  *
- * Operate on a single uint64_t word. For multi-word bitmaps, callers index
- * the word and pass the bit position within it. Centralizing the shift and
+ * Operate on a single uint64_t word. For multi-word bitmaps, callers index the
+ * word and pass the bit position within it. Centralizing the shift and
  * compiler-intrinsic calls here keeps the meaning ("the bit for slot N",
  * "lowest set bit") visible at the call site instead of leaving readers to
  * decode 1ULL << (n) and __builtin_ctzll.
@@ -200,8 +201,8 @@ static inline uint64_t bit_mask64_low(unsigned int n)
     return n >= 64 ? UINT64_MAX : (BIT64(n) - 1);
 }
 
-/* Position of the lowest set bit. word must be non-zero -- __builtin_ctzll
- * is undefined on zero. Range: 0..63.
+/* Position of the lowest set bit. word must be non-zero -- __builtin_ctzll is
+ * undefined on zero. Range: 0..63.
  */
 static inline int bit_ctz64(uint64_t word)
 {
@@ -217,7 +218,7 @@ static inline int bit_popcount64(uint64_t word)
 /* Compiler attribute wrappers.
  *
  * PACKED removes inter-field padding, used for Linux ABI structures whose
- * layout must match the kernel exactly (e.g., linux_dirent64). Apply at the
- * end of a struct definition: } PACKED name_t;.
+ * layout must match the kernel exactly (e.g., linux_dirent64). Apply at the end
+ * of a struct definition: } PACKED name_t;.
  */
 #define PACKED __attribute__((packed))

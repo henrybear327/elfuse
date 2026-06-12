@@ -4,15 +4,15 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Validates X11 socket transport by speaking raw X11 wire protocol
- * over AF_UNIX or TCP.  Zero external library dependencies; all X11
- * protocol structures are hand-coded.
+ * Validates X11 socket transport by speaking raw X11 wire protocol over AF_UNIX
+ * or TCP. Zero external library dependencies; all X11 protocol structures are
+ * hand-coded.
  *
  * Tests: DISPLAY env var parsing, Xauthority reading, X server socket
  *        connect, window creation + map, Expose event handling + draw.
  *
- * All X11-server-dependent tests skip gracefully when DISPLAY is
- * unset or the X server is unreachable (exit 0, 0 failures).
+ * All X11-server-dependent tests skip gracefully when DISPLAY is unset or the X
+ * server is unreachable (exit 0, 0 failures).
  *
  * Syscalls exercised: socket(198), connect(203), read(63), write(64),
  *                     ppoll(73), openat(56), close(57)
@@ -70,7 +70,7 @@ static inline int pad4(int n)
     return (n + 3) & ~3;
 }
 
-/* Read exactly n bytes from fd.  Retries on EINTR.
+/* Read exactly n bytes from fd. Retries on EINTR.
  * Returns 0 on success, -1 on failure/EOF.
  */
 static int read_exact(int fd, void *buf, int n)
@@ -99,8 +99,8 @@ typedef struct {
     int display_number, screen_number;
 } display_info_t;
 
-/* Parse X11 DISPLAY string into structured info.
- * Supports:  ":N", ":N.S", "host:N", "/path:N"
+/* Parse X11 DISPLAY string into structured info. Supports: ":N", ":N.S",
+ * "host:N", "/path:N"
  * Returns 0 on success, -1 on invalid format.
  */
 static int parse_display(const char *display, display_info_t *info)
@@ -126,10 +126,10 @@ static int parse_display(const char *display, display_info_t *info)
         snprintf(info->socket_path, sizeof(info->socket_path),
                  "/tmp/.X11-unix/X%d", info->display_number);
     } else if (display[0] == '/') {
-        /* "/path:N": XQuartz launchd or custom socket path.
-         * libxcb convention: the path before ':N' is the socket.
-         * Fallback: try the full DISPLAY string as the socket filename
-         * (some setups embed ':N' in the actual filename).
+        /* "/path:N": XQuartz launchd or custom socket path. libxcb convention:
+         * the path before ':N' is the socket. Fallback: try the full DISPLAY
+         * string as the socket filename (some setups embed ':N' in the actual
+         * filename).
          */
         info->type = DISPLAY_UNIX;
         if (host_len < (int) sizeof(info->socket_path)) {
@@ -182,8 +182,8 @@ static int xauth_skip(int fd, uint16_t n)
     return 0;
 }
 
-/* Find an Xauthority entry matching display_num.
- * Reads from XAUTHORITY env var or $HOME/.Xauthority.
+/* Find an Xauthority entry matching display_num. Reads from XAUTHORITY env var
+ * or $HOME/.Xauthority.
  * Returns 0 if found, -1 if not.
  */
 static int find_xauth(int display_num, xauth_t *auth)
@@ -288,8 +288,8 @@ static uint32_t x11_alloc_id(x11_conn_t *c)
     return c->id_base | (c->next_id & c->id_mask);
 }
 
-/* Connect to X server and perform protocol handshake.
- * On success, conn is populated and conn->fd is open.
+/* Connect to X server and perform protocol handshake. On success, conn is
+ * populated and conn->fd is open.
  * Returns 0 on success, -1 on failure.
  */
 static int x11_connect(const display_info_t *info,
@@ -392,9 +392,8 @@ static int x11_connect(const display_info_t *info,
     /* Parse fixed fields:
      *   +0: release_number(4)  +4: resource_id_base(4)
      *   +8: resource_id_mask(4) +12: motion_buf_size(4)
-     *  +16: vendor_length(2)   +18: max_request_length(2)
-     *  +20: num_screens(1)     +21: num_formats(1)
-     *  +22..+31: image_byte_order, etc.
+     * +16: vendor_length(2) +18: max_request_length(2) +20: num_screens(1) +21:
+     * num_formats(1) +22..+31: image_byte_order, etc.
      */
     conn->id_base = le32(data + 4);
     conn->id_mask = le32(data + 8);
@@ -455,8 +454,8 @@ static int x11_create_window(x11_conn_t *c,
                              uint32_t bg_pixel,
                              uint32_t event_mask)
 {
-    /* value_mask = CWBackPixel(0x02) | CWEventMask(0x800) = 0x0802
-     * 2 value words -> total length = (32 + 8) / 4 = 10 dwords
+    /* value_mask = CWBackPixel(0x02) | CWEventMask(0x800) = 0x0802 2 value
+     * words -> total length = (32 + 8) / 4 = 10 dwords
      */
     uint8_t req[40];
     req[0] = 1;             /* opcode: CreateWindow */
@@ -519,7 +518,7 @@ static int x11_destroy_window(x11_conn_t *c, uint32_t wid)
     return (write(c->fd, req, 8) == 8) ? 0 : -1;
 }
 
-/* Read one X11 event (32 bytes).  Handles variable-length replies and
+/* Read one X11 event (32 bytes). Handles variable-length replies and
  * GenericEvents by consuming their extra data transparently.
  * Returns the event code (2-34), 0 for Error, or -1 for read failure.
  */
@@ -588,8 +587,8 @@ int main(void)
     TEST("DISPLAY parse '/path/sock:0'");
     {
         display_info_t d;
-        /* Path does not exist on disk, so parse_display falls back to
-         * the full string as socket_path
+        /* Path does not exist on disk, so parse_display falls back to the full
+         * string as socket_path
          */
         if (parse_display("/path/to/sock:0", &d) == 0 &&
             d.type == DISPLAY_UNIX && d.display_number == 0)
@@ -656,8 +655,8 @@ int main(void)
         uint32_t events = (1u << 15) | (1u << 0);
         bool ok = false;
 
-        /* Use white_pixel/black_pixel for maximum visual compatibility
-         * (works on TrueColor, PseudoColor, and any other visual)
+        /* Use white_pixel/black_pixel for maximum visual compatibility (works
+         * on TrueColor, PseudoColor, and any other visual)
          */
         if (x11_create_window(&conn, wid, conn.root_window, 100, 100, 200, 200,
                               conn.white_pixel, events) < 0 ||

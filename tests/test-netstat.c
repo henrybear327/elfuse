@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Creates TCP and UDP sockets, then reads /proc/net/tcp and /proc/net/udp
- * to verify the sockets appear with correct addresses/ports/states.
- * Also exercises /proc/net/unix, /proc/net/tcp6, and /proc/net/raw.
+ * Creates TCP and UDP sockets, then reads /proc/net/tcp and /proc/net/udp to
+ * verify the sockets appear with correct addresses/ports/states. Also exercises
+ * /proc/net/unix, /proc/net/tcp6, and /proc/net/raw.
  */
 
 #include <stdio.h>

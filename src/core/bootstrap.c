@@ -57,7 +57,9 @@ static bool append_boot_region(mem_region_t *regions,
 }
 
 /* Emit one mem_region_t per PT_LOAD segment of an ELF image, offset by the
- * caller-supplied load base. Returns false if the boot region array fills up.
+ * caller-supplied load base.
+ *
+ * Returns false if the boot region array fills up.
  */
 static bool append_elf_segment_regions(mem_region_t *regions,
                                        int *nregions,
@@ -77,8 +79,8 @@ static bool append_elf_segment_regions(mem_region_t *regions,
 
 /* Register one semantic guest_region_t per PT_LOAD segment of an ELF image.
  * va_load_base controls the guest-visible range, gpa_load_base controls the
- * backing GPA recorded in region metadata, and path is used for
- * /proc/self/maps reporting.
+ * backing GPA recorded in region metadata, and path is used for /proc/self/maps
+ * reporting.
  */
 static void register_elf_segment_regions(guest_t *g,
                                          const elf_info_t *info,
@@ -519,10 +521,10 @@ int guest_bootstrap_prepare(guest_t *g,
 
     t0 = startup_trace_now_ns();
     if (want_rosetta) {
-        /* /proc/self/maps for a rosetta guest reports the rosetta translator
-         * as a single anonymous region covering [VA, VA+size). The original
-         * x86_64 binary is not loaded into guest memory; rosetta exposes it
-         * via fd 3 once rosetta_finalize pre-opens it.
+        /* /proc/self/maps for a rosetta guest reports the rosetta translator as
+         * a single anonymous region covering [VA, VA+size). The original x86_64
+         * binary is not loaded into guest memory; rosetta exposes it via fd 3
+         * once rosetta_finalize pre-opens it.
          */
         register_elf_segment_regions(g, &rr.rosetta_info, 0,
                                      g->rosetta_guest_base - g->rosetta_va_base,
@@ -612,10 +614,10 @@ int guest_bootstrap_prepare(guest_t *g,
         return -1;
     }
     startup_trace_step("build_linux_stack", t0);
-    /* rosetta_argv was copied into the guest stack; the host allocation is
-     * no longer needed. The strings themselves are constants (ROSETTA_PATH)
-     * or owned by the caller (binary_path, guest_argv entries) so freeing
-     * just the array is safe.
+    /* rosetta_argv was copied into the guest stack; the host allocation is no
+     * longer needed. The strings themselves are constants (ROSETTA_PATH) or
+     * owned by the caller (binary_path, guest_argv entries) so freeing just the
+     * array is safe.
      */
     free(rosetta_argv);
 
@@ -650,8 +652,8 @@ int guest_bootstrap_create_vcpu(guest_t *g,
     uint64_t t0;
     /* Rosetta needs TTBR1 walks enabled and TBI1=1 so the kbuf window at
      * KBUF_VA_BASE (bits-63-set) resolves and TaggedPointer extraction keeps
-     * working. Aarch64 guests stay on the EPD1=1 variant which keeps the
-     * upper VA range fault-clean.
+     * working. Aarch64 guests stay on the EPD1=1 variant which keeps the upper
+     * VA range fault-clean.
      */
     uint64_t tcr_value = g->is_rosetta ? TCR_EL1_VALUE_KBUF : TCR_EL1_VALUE;
     uint64_t ttbr1_value = g->is_rosetta ? g->ttbr1 : 0;
@@ -684,10 +686,10 @@ int guest_bootstrap_create_vcpu(guest_t *g,
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL0, sp_ipa));
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, el1_sp));
 
-    /* Round-trip a sentinel through TPIDR_EL1 before installing the real
-     * value. Validates only the hv_vcpu_{set,get}_sys_reg pre-run round
-     * trip, not preservation across hv_vcpu_run -- the test-shim-identity
-     * microbench is the end-to-end check for that.
+    /* Round-trip a sentinel through TPIDR_EL1 before installing the real value.
+     * Validates only the hv_vcpu_{set,get}_sys_reg pre-run round trip, not
+     * preservation across hv_vcpu_run -- the test-shim-identity microbench is
+     * the end-to-end check for that.
      */
     if (shim_globals_self_test(vcpu) < 0)
         return -1;
@@ -790,11 +792,11 @@ int guest_bootstrap_rosetta_post_reset(guest_t *g,
         !out_stack_pointer || !out_ttbr0)
         return -1;
 
-    /* Re-anchor brk/stack to the Rosetta defaults. guest_reset already
-     * restored mmap_next/mmap_end/mmap_rx_* to their initial values, but
-     * brk/stack were tuned for the previous image, so reset them here.
-     * The x86_64 target binary lives behind fd 3, not in guest memory,
-     * so brk_base does not move with the target's load_max.
+    /* Re-anchor brk/stack to the Rosetta defaults. guest_reset already restored
+     * mmap_next/mmap_end/mmap_rx_* to their initial values, but brk/stack were
+     * tuned for the previous image, so reset them here. The x86_64 target
+     * binary lives behind fd 3, not in guest memory, so brk_base does not move
+     * with the target's load_max.
      */
     g->elf_load_min = ELF_DEFAULT_BASE;
     g->brk_base = BRK_BASE_DEFAULT;

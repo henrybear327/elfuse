@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Provides leveled logging (TRACE through FATAL) with timestamps, source
- * file:line, optional ANSI color, and thread-safe output.
- * All output goes to stderr.
+ * file:line, optional ANSI color, and thread-safe output. All output goes to
+ * stderr.
  */
 
 #pragma once
@@ -30,14 +30,14 @@ enum log_level {
 #define log_error(...) log_impl(LOG_ERROR, __FILE__, __LINE__, __VA_ARGS__)
 #define log_fatal(...) log_impl(LOG_FATAL, __FILE__, __LINE__, __VA_ARGS__)
 
-/* Initialize the logging subsystem. Installs a default pthread-based
- * lock and detects ANSI color support via isatty(STDERR_FILENO).
- * Call once at program startup before any log output.
+/* Initialize the logging subsystem. Installs a default pthread-based lock and
+ * detects ANSI color support via isatty(STDERR_FILENO). Call once at program
+ * startup before any log output.
  */
 void log_init(void);
 
-/* Set the minimum log level. Messages below this level are suppressed.
- * Default after log_init() is LOG_WARN.
+/* Set the minimum log level. Messages below this level are suppressed. Default
+ * after log_init() is LOG_WARN.
  */
 void log_set_level(int level);
 

@@ -1,13 +1,12 @@
-/* Verify SIMD/FP state preservation across
- * clone(CLONE_THREAD)
+/* Verify SIMD/FP state preservation across clone(CLONE_THREAD)
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Loads known patterns into V0-V3, FPSR, and FPCR before clone.
- * The child thread reads them back and verifies the values match.
- * This catches the bug where child threads inherit zeroed SIMD state.
+ * Loads known patterns into V0-V3, FPSR, and FPCR before clone. The child
+ * thread reads them back and verifies the values match. This catches the bug
+ * where child threads inherit zeroed SIMD state.
  */
 
 #include <stdint.h>
@@ -36,8 +35,8 @@ static void child_read_simd(void)
     uint64_t fpcr, fpsr;
 
     /* Single asm block: read all SIMD state atomically w.r.t. compiler
-     * scheduling. Without this, the compiler could insert code between
-     * separate asm volatile blocks that clobbers v0-v3.
+     * scheduling. Without this, the compiler could insert code between separate
+     * asm volatile blocks that clobbers v0-v3.
      */
     __asm__ volatile(
         "mov %[v0lo], v0.d[0]\n\t"

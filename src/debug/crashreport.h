@@ -4,10 +4,10 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * When elfuse encounters a fatal error (timeout, bad exception, unexpected
- * HVC, etc.), crash_report() prints a structured diagnostic to stderr
- * formatted as a GitHub issue template. This gives users all the info
- * they need to file a useful bug report.
+ * When elfuse encounters a fatal error (timeout, bad exception, unexpected HVC,
+ * etc.), crash_report() prints a structured diagnostic to stderr formatted as a
+ * GitHub issue template. This gives users all the info they need to file a
+ * useful bug report.
  */
 
 #pragma once
@@ -28,10 +28,9 @@ typedef enum {
 
 /* Print a structured crash report to stderr.
  *
- * vcpu: vCPU handle for register dump (0 if unavailable).
- * g: guest state for memory layout dump (NULL if unavailable).
- * type: crash classification.
- * detail: human-readable context string (e.g., "HVC #99", "EC=0x20").
+ * vcpu: vCPU handle for register dump (0 if unavailable). g: guest state for
+ * memory layout dump (NULL if unavailable). type: crash classification. detail:
+ * human-readable context string (e.g., "HVC #99", "EC=0x20").
  */
 void crash_report(hv_vcpu_t vcpu,
                   const guest_t *g,

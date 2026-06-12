@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Pins three properties of the elfuse xattr surface that the host
- * shim has to translate:
+ * Pins three properties of the elfuse xattr surface that the host shim has to
+ * translate:
  *
  *   1. lgetxattr returns the stored value on a regular file.
  *   2. lgetxattr on a symlink does not follow the link, so requesting
@@ -14,10 +14,9 @@
  *      ENOATTR(93) or its synonym ENODATA(96); both must translate to
  *      Linux ENODATA(61).
  *
- * Regression: an earlier revision lacked the ENOATTR translation
- * entry, so the default in linux_errno() fell through to EINVAL,
- * which masked real "attribute not present" outcomes and broke
- * fontconfig / glibc xattr probes.
+ * Regression: an earlier revision lacked the ENOATTR translation entry, so the
+ * default in linux_errno() fell through to EINVAL, which masked real "attribute
+ * not present" outcomes and broke fontconfig / glibc xattr probes.
  *
  * Syscalls exercised: setxattr(5), lsetxattr(6), getxattr(8),
  *                     lgetxattr(9)

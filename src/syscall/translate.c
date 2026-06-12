@@ -16,10 +16,10 @@
 
 /* Linux errno translation. */
 
-/* X-macro table: macOS->Linux errno mappings where values differ.
- * Only entries where macOS and Linux numeric values diverge are listed.
- * Errno values 1-34 are (mostly) identical and handled by the default path,
- * except EDEADLK (macOS 11 vs Linux 35) which must be explicit.
+/* X-macro table: macOS->Linux errno mappings where values differ. Only entries
+ * where macOS and Linux numeric values diverge are listed. Errno values 1-34
+ * are (mostly) identical and handled by the default path, except EDEADLK (macOS
+ * 11 vs Linux 35) which must be explicit.
  *
  * Format: _(macOS_errno, Linux_errno)
  */
@@ -70,8 +70,8 @@
     _(EOPNOTSUPP,      LINUX_EOPNOTSUPP)      /* mac 102 -> linux 95 */
 /* clang-format on */
 
-/* Convert macOS errno to the equivalent Linux errno value.
- * macOS and Linux errno values diverge starting around errno 35.
+/* Convert macOS errno to the equivalent Linux errno value. macOS and Linux
+ * errno values diverge starting around errno 35.
  * Returns the negative Linux errno for direct use as a syscall return.
  */
 int64_t linux_errno(void)
@@ -95,10 +95,10 @@ int64_t linux_errno(void)
         return -LINUX_EOPNOTSUPP;
 #endif
         /* macOS xattr "attribute not found" lives at 93 (ENOATTR) on modern
-         * SDKs; on some versions ENOATTR is a synonym for ENODATA(96). Map
-         * both to Linux ENODATA(61) so getxattr/lgetxattr/fgetxattr report
-         * missing attrs correctly. Guarded by #if to avoid duplicate cases
-         * when the headers alias the two macros.
+         * SDKs; on some versions ENOATTR is a synonym for ENODATA(96). Map both
+         * to Linux ENODATA(61) so getxattr/lgetxattr/fgetxattr report missing
+         * attrs correctly. Guarded by #if to avoid duplicate cases when the
+         * headers alias the two macros.
          */
 #ifdef ENOATTR
 #if !defined(ENODATA) || ENOATTR != ENODATA
@@ -131,9 +131,9 @@ int64_t linux_errno(void)
 
 /* Linux AT_* flags translation. */
 
-/* Translate Linux AT_* flags to macOS equivalents.
- * For unlinkat, fstatat, linkat, fchmodat, fchownat, utimensat.
- * Linux and macOS use different values for AT_SYMLINK_NOFOLLOW etc.
+/* Translate Linux AT_* flags to macOS equivalents. For unlinkat, fstatat,
+ * linkat, fchmodat, fchownat, utimensat. Linux and macOS use different values
+ * for AT_SYMLINK_NOFOLLOW etc.
  */
 int translate_at_flags(int linux_flags)
 {
@@ -148,10 +148,10 @@ int translate_at_flags(int linux_flags)
     return mac_flags;
 }
 
-/* Translate Linux faccessat flags to macOS equivalents.
- * Linux AT_EACCESS (0x200) shares the same value as AT_REMOVEDIR; the meaning
- * is context-dependent: 0x200 means AT_REMOVEDIR for unlinkat, but AT_EACCESS
- * for faccessat.
+/* Translate Linux faccessat flags to macOS equivalents. Linux AT_EACCESS
+ * (0x200) shares the same value as AT_REMOVEDIR; the meaning is
+ * context-dependent: 0x200 means AT_REMOVEDIR for unlinkat, but AT_EACCESS for
+ * faccessat.
  */
 int translate_faccessat_flags(int linux_flags)
 {
@@ -165,9 +165,9 @@ int translate_faccessat_flags(int linux_flags)
 
 /* Linux open flags translation. */
 
-/* X-macro table: Linux open flag -> macOS open flag (1:1 bit mappings).
- * Flags that have no macOS equivalent (O_LARGEFILE, O_DIRECT) are not listed
- * and are silently dropped.
+/* X-macro table: Linux open flag -> macOS open flag (1:1 bit mappings). Flags
+ * that have no macOS equivalent (O_LARGEFILE, O_DIRECT) are not listed and are
+ * silently dropped.
  *
  * Format: _(linux_flag, macos_flag)
  */
@@ -224,8 +224,8 @@ int translate_open_flags(int linux_flags)
     return flags;
 }
 
-/* Translate macOS status flags (from fcntl F_GETFL) to Linux equivalents.
- * Only status flags differ; access mode (low 2 bits) is the same.
+/* Translate macOS status flags (from fcntl F_GETFL) to Linux equivalents. Only
+ * status flags differ; access mode (low 2 bits) is the same.
  */
 int mac_to_linux_status_flags(int mac_flags)
 {

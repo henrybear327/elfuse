@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Creates two threads: one doing rapid open/close cycles on temp files,
- * the other reading/writing on FDs in the same range. Verifies no EBADF
- * on wrong files or use-after-close on the wrong file.
+ * Creates two threads: one doing rapid open/close cycles on temp files, the
+ * other reading/writing on FDs in the same range. Verifies no EBADF on wrong
+ * files or use-after-close on the wrong file.
  *
  * Syscalls: clone(220), openat(56), close(57), write(64), read(63),
  *           futex(98), exit(93)

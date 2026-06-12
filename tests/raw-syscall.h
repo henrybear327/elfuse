@@ -6,11 +6,11 @@
  *
  * Provides raw_syscall{0,1,2,3,4,5,6}() plus convenience wrappers (raw_clone,
  * raw_futex_wait, raw_futex_wake, raw_gettid, raw_getpid, raw_tgkill,
- * raw_exit).  Architecture is selected at compile time via __aarch64__
- * / __x86_64__ predefined macros.
+ * raw_exit). Architecture is selected at compile time via __aarch64__ /
+ * __x86_64__ predefined macros.
  *
- * Syscall numbers come from <sys/syscall.h> (__NR_*), which already
- * provides the correct values per architecture.
+ * Syscall numbers come from <sys/syscall.h> (__NR_*), which already provides
+ * the correct values per architecture.
  */
 
 #pragma once

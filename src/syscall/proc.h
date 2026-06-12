@@ -43,13 +43,13 @@ int proc_cwd_refresh(void);
 void proc_cwd_set_virtual(const char *path);
 void proc_cwd_invalidate(void);
 
-/* Store shim blob pointer/size (called from main.c at startup).
- * Avoids #including shim_blob.h in this module.
+/* Store shim blob pointer/size (called from main.c at startup). Avoids
+ * #including shim_blob.h in this module.
  */
 void proc_set_shim(const unsigned char *blob, unsigned int len);
 
-/* Like proc_set_shim but takes ownership of the malloc'd blob.
- * Used by fork_child_main which allocates the blob from IPC.
+/* Like proc_set_shim but takes ownership of the malloc'd blob. Used by
+ * fork_child_main which allocates the blob from IPC.
  */
 void proc_set_shim_owned(unsigned char *blob, unsigned int len);
 
@@ -57,25 +57,29 @@ void proc_set_shim_owned(unsigned char *blob, unsigned int len);
 const unsigned char *proc_get_shim_blob(void);
 unsigned int proc_get_shim_size(void);
 
-/* Store the current ELF binary path for /proc/self/exe emulation.
- * Called from main.c at startup and after execve.
+/* Store the current ELF binary path for /proc/self/exe emulation. Called from
+ * main.c at startup and after execve.
  */
 void proc_set_elf_path(const char *path);
 
-/* Get the stored ELF binary path. Returns NULL if not set. The returned
- * pointer references shared mutable state and is safe only for boolean
- * tests; callers that consume the string must use proc_elf_path_snapshot.
+/* Get the stored ELF binary path.
+ *
+ * Returns NULL if not set. The returned pointer references shared mutable state
+ * and is safe only for boolean tests; callers that consume the string must use
+ * proc_elf_path_snapshot.
  */
 const char *proc_get_elf_path(void);
 
-/* Copy the stored ELF binary path into out. Returns true on success, false
- * if no path is set or outsz is too small. Locked against concurrent
- * proc_set_elf_path() so the returned content is consistent.
+/* Copy the stored ELF binary path into out.
+ *
+ * Returns true on success, false if no path is set or outsz is too small.
+ * Locked against concurrent proc_set_elf_path() so the returned content is
+ * consistent.
  */
 bool proc_elf_path_snapshot(char *out, size_t outsz);
 
-/* Store the absolute path of the elfuse binary itself.  Used to spawn
- * fork/clone children.  Set once at startup via _NSGetExecutablePath().
+/* Store the absolute path of the elfuse binary itself. Used to spawn fork/clone
+ * children. Set once at startup via _NSGetExecutablePath().
  */
 void proc_set_elfuse_path(const char *path);
 
@@ -87,36 +91,36 @@ void proc_set_rosetta_enabled(bool enabled);
 bool proc_rosetta_enabled(void);
 
 /* Runtime indicator: true once the guest_t has been initialized in rosetta
- * mode. Distinct from proc_rosetta_enabled which reflects the user opt-in.
- * Code paths that lack direct guest_t access (proc_intercept_readlink) can
- * branch on the runtime state without threading g through every signature.
+ * mode. Distinct from proc_rosetta_enabled which reflects the user opt-in. Code
+ * paths that lack direct guest_t access (proc_intercept_readlink) can branch on
+ * the runtime state without threading g through every signature.
  */
 void proc_set_rosetta_active(bool active);
 bool proc_rosetta_active(void);
 
-/* Store the guest command line for /proc/self/cmdline emulation.
- * argv is a NULL-terminated array of strings.
+/* Store the guest command line for /proc/self/cmdline emulation. argv is a
+ * NULL-terminated array of strings.
  */
 void proc_set_cmdline(int argc, const char **argv);
 
-/* Set cmdline from a raw pre-formatted buffer (NUL-separated args).
- * Used by fork_child_main to restore parent's cmdline from IPC.
+/* Set cmdline from a raw pre-formatted buffer (NUL-separated args). Used by
+ * fork_child_main to restore parent's cmdline from IPC.
  */
 void proc_set_cmdline_raw(const char *buf, size_t len);
 
 /* Get the stored cmdline buffer and its length. Returns NULL if not set. */
 const char *proc_get_cmdline(size_t *len_out);
 
-/* Store the guest environment for /proc/self/environ emulation.
- * envp is a NULL-terminated array of "KEY=val" strings.
+/* Store the guest environment for /proc/self/environ emulation. envp is a
+ * NULL-terminated array of "KEY=val" strings.
  */
 void proc_set_environ(const char **envp);
 
 /* Get the stored environ buffer (NUL-separated). Returns NULL if not set. */
 const char *proc_get_environ(size_t *len_out);
 
-/* Store the guest auxiliary vector for /proc/self/auxv emulation.
- * data is the raw auxv key-value pairs as pushed on the stack.
+/* Store the guest auxiliary vector for /proc/self/auxv emulation. data is the
+ * raw auxv key-value pairs as pushed on the stack.
  */
 void proc_set_auxv(const void *data, size_t len);
 
@@ -134,8 +138,8 @@ int64_t proc_get_pgid(void);
 int64_t proc_get_fg_pgrp(void);
 
 /* Publish the current pgid/sid pair into the shim cache while holding
- * session_lock. Use this at cache initialization points so an external
- * snapshot cannot overwrite a newer setpgid/setsid publish.
+ * session_lock. Use this at cache initialization points so an external snapshot
+ * cannot overwrite a newer setpgid/setsid publish.
  */
 void proc_publish_pgsid_snapshot(guest_t *g);
 
@@ -167,10 +171,10 @@ uint32_t proc_get_gid(void);
 uint32_t proc_get_egid(void);
 uint32_t proc_get_sgid(void);
 
-/* Linux setuid semantics for non-root processes:
- * setuid(uid)      : set euid; if uid == ruid or suid, also set ruid+suid
- * setreuid(r,e)    : swap real/effective within {ruid, euid, suid}
- * setresuid(r,e,s) : set any combination within {ruid, euid, suid}
+/* Linux setuid semantics for non-root processes: setuid(uid) : set euid; if uid
+ * == ruid or suid, also set ruid+suid setreuid(r,e) : swap real/effective
+ * within {ruid, euid, suid} setresuid(r,e,s) : set any combination within
+ * {ruid, euid, suid}
  * Returns 0 on success, -EPERM if transition is not allowed.
  */
 int64_t proc_sys_setuid(uint32_t uid);
@@ -192,16 +196,15 @@ void proc_set_ids(uint32_t uid,
 int32_t proc_get_nice(void);
 void proc_set_nice(int32_t val);
 
-/* setpriority/getpriority: only PRIO_PROCESS for self.
- * setpriority clamps prio to [-20, 19].
- * getpriority returns 20-nice (always > 0 per Linux convention).
+/* setpriority/getpriority: only PRIO_PROCESS for self. setpriority clamps prio
+ * to [-20, 19]. getpriority returns 20-nice (always > 0 per Linux convention).
  */
 int64_t proc_sys_setpriority(int which, int who, int prio);
 int64_t proc_sys_getpriority(int which, int who);
 
 /* rseq abort: check if the thread is inside a restartable sequence critical
  * section and abort it. Called from signal delivery and vCPU preemption.
- * Returns:  0 = no active critical section (or no rseq registered)
+ * Returns: 0 = no active critical section (or no rseq registered)
  *           1 = PC redirected to abort_ip (*pc updated)
  *          -1 = signature mismatch (caller should deliver SIGSEGV)
  * Always clears rseq_cs pointer in the guest struct rseq.
@@ -219,35 +222,40 @@ int64_t proc_alloc_pid(void);
  */
 void proc_set_sysroot(const char *path);
 
-/* Get the stored sysroot path. Returns NULL if not set.
+/* Get the stored sysroot path.
+ *
+ * Returns NULL if not set.
  *
  * The returned pointer aliases a static buffer mutated by proc_set_sysroot()
  * under a private lock; callers that only test for NULL are safe, but any
- * caller that reads the string content must use proc_sysroot_snapshot()
- * instead to avoid a torn read against a concurrent chroot.
+ * caller that reads the string content must use proc_sysroot_snapshot() instead
+ * to avoid a torn read against a concurrent chroot.
  */
 const char *proc_get_sysroot(void);
 
 /* Copy the current sysroot into out (NUL-terminated) under the same lock that
- * serializes proc_set_sysroot(). Returns true if a sysroot is configured and
- * fits in outsz; false if unset, truncating, or out/outsz is invalid (in which
- * case out[0] is set to '\0' when possible).
+ * serializes proc_set_sysroot().
+ *
+ * Returns true if a sysroot is configured and fits in outsz; false if unset,
+ * truncating, or out/outsz is invalid (in which case out[0] is set to '\0' when
+ * possible).
  */
 bool proc_sysroot_snapshot(char *out, size_t outsz);
 void proc_set_sysroot_casefold(bool enabled);
 bool proc_sysroot_casefold_enabled(void);
 
-/* Resolve an absolute guest path through the stored sysroot. Returns path
- * unchanged when no sysroot applies or when the sysroot-backed path does not
- * exist, buf when a sysroot-backed file exists, or NULL if sysroot path
- * construction would truncate or escape containment checks.
+/* Resolve an absolute guest path through the stored sysroot.
+ *
+ * Returns path unchanged when no sysroot applies or when the sysroot-backed
+ * path does not exist, buf when a sysroot-backed file exists, or NULL if
+ * sysroot path construction would truncate or escape containment checks.
  */
 const char *proc_resolve_sysroot_path(const char *path,
                                       char *buf,
                                       size_t bufsz);
 
-/* Resolve an absolute guest path through the stored sysroot for operations
- * that must not follow the final path component (readlinkat, O_NOFOLLOW,
+/* Resolve an absolute guest path through the stored sysroot for operations that
+ * must not follow the final path component (readlinkat, O_NOFOLLOW,
  * AT_SYMLINK_NOFOLLOW).
  */
 const char *proc_resolve_sysroot_nofollow_path(const char *path,
@@ -267,10 +275,10 @@ const char *proc_resolve_sysroot_create_path(const char *path,
 
 /* Return value sentinel from syscall_dispatch (returns int):
  *   0 = continue, 1 = exit, SYSCALL_EXEC_HAPPENED = exec/sigreturn.
- * Also used as int64_t return from sc_xxx handlers where it must not
- * collide with valid syscall returns (>=0), Linux errno (-1..-4095),
- * or SC_EXIT_SENTINEL (INT64_MIN | code).  -0x10000 is outside all
- * these ranges and fits in int.
+ * Also used as int64_t return from sc_xxx handlers where it must not collide
+ * with valid syscall returns (>=0), Linux errno (-1..-4095), or
+ * SC_EXIT_SENTINEL (INT64_MIN | code). -0x10000 is outside all these ranges and
+ * fits in int.
  */
 #define SYSCALL_EXEC_HAPPENED (-0x10000)
 
@@ -294,8 +302,10 @@ int proc_register_child(pid_t host_pid, int64_t guest_pid);
 /* Mark a child as exited by host PID (for CLONE_VFORK wait). */
 void proc_mark_child_exited(pid_t host_pid, int status);
 
-/* Collect host PIDs of active (non-exited) fork children.
- * Writes up to max_pids entries into out[]. Returns the count written.
+/* Collect host PIDs of active (non-exited) fork children. Writes up to max_pids
+ * entries into out[].
+ *
+ * Returns the count written.
  */
 int proc_get_child_pids(pid_t *out, int max_pids);
 
@@ -338,8 +348,8 @@ int64_t sys_wait4(guest_t *g,
                   int options,
                   uint64_t rusage_gva);
 
-/* waitid: wait for child process using idtype/id semantics.
- * Fills siginfo_t at infop_gva on success.
+/* waitid: wait for child process using idtype/id semantics. Fills siginfo_t at
+ * infop_gva on success.
  */
 int64_t sys_waitid(guest_t *g,
                    int idtype,
@@ -362,12 +372,14 @@ int proc_exit_group_requested(void);
  */
 void proc_request_hvc6_yield(void);
 
-/* Run the vCPU execution loop. Returns the exit code.
+/* Run the vCPU execution loop.
  *
- * When timeout_sec > 0 (main thread): uses alarm() for per-iteration
- * safety timeout. When timeout_sec == 0 (worker thread): skips alarm()
- * (SIGALRM is process-wide). Workers are terminated by exit_group via
- * hv_vcpus_exit(). Both modes check proc_exit_group_requested.
+ * Returns the exit code.
+ *
+ * When timeout_sec > 0 (main thread): uses alarm() for per-iteration safety
+ * timeout. When timeout_sec == 0 (worker thread): skips alarm() (SIGALRM is
+ * process-wide). Workers are terminated by exit_group via hv_vcpus_exit(). Both
+ * modes check proc_exit_group_requested.
  */
 int vcpu_run_loop(hv_vcpu_t vcpu,
                   hv_vcpu_exit_t *vexit,

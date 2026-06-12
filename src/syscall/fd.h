@@ -14,8 +14,8 @@
 #include <stdint.h>
 #include "core/guest.h"
 
-/* Initialize all special FD subsystem state arrays. Must be called
- * once from syscall_init() before any guest code runs.
+/* Initialize all special FD subsystem state arrays. Must be called once from
+ * syscall_init() before any guest code runs.
  */
 void timerfd_init(void);
 void eventfd_init(void);
@@ -33,13 +33,14 @@ int64_t sys_timerfd_gettime(guest_t *g, int fd, uint64_t curr_value_gva);
 /* eventfd (emulated via pipe + counter) */
 int64_t sys_eventfd2(unsigned int initval, int flags);
 
-/* Duplicate an eventfd into a new guest_fd slot, sharing the counter and
- * pipe state with src_fd. Mirrors the Linux contract that dup'd eventfds
- * share the same underlying kernel object. src_host_fd must be the host
- * fd snapshotted from fd_table[src_fd].host_fd by the caller; the
- * implementation uses it to verify under fd_lock + sfd_lock that the source
- * fd still refers to the same live eventfd between the caller's snapshot and
- * the dup commit. Returns the new guest_fd or -1 with errno set.
+/* Duplicate an eventfd into a new guest_fd slot, sharing the counter and pipe
+ * state with src_fd. Mirrors the Linux contract that dup'd eventfds share the
+ * same underlying kernel object. src_host_fd must be the host fd snapshotted
+ * from fd_table[src_fd].host_fd by the caller; the implementation uses it to
+ * verify under fd_lock + sfd_lock that the source fd still refers to the same
+ * live eventfd between the caller's snapshot and the dup commit.
+ *
+ * Returns the new guest_fd or -1 with errno set.
  */
 int eventfd_dup_fd(int src_fd,
                    int src_host_fd,
@@ -57,8 +58,8 @@ int64_t sys_signalfd4(guest_t *g,
 
 /* Special read/write handlers for eventfd, signalfd, and timerfd FD types.
  * Called from sys_read/sys_write when the fd type requires special semantics
- * (8-byte counter for eventfd, signalfd_siginfo for signalfd, 8-byte
- * expiration count for timerfd).
+ * (8-byte counter for eventfd, signalfd_siginfo for signalfd, 8-byte expiration
+ * count for timerfd).
  */
 int64_t eventfd_read(int guest_fd,
                      guest_t *g,

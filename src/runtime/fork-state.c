@@ -37,10 +37,10 @@ int fork_ipc_write_all(int fd, const void *buf, size_t len)
             return -1;
         }
         if (n == 0) {
-            /* Defensive: an unexpected zero return on a blocking socket
-             * would otherwise spin forever, since p and len stay at the
-             * same offset. Treat it as an IO failure so the parent and
-             * child both bail rather than wedge.
+            /* Defensive: an unexpected zero return on a blocking socket would
+             * otherwise spin forever, since p and len stay at the same offset.
+             * Treat it as an IO failure so the parent and child both bail
+             * rather than wedge.
              */
             errno = EIO;
             return -1;
@@ -260,11 +260,11 @@ int fork_ipc_send_fd_table(int ipc_sock)
         if (fd_table[i].type == FD_CLOSED)
             continue;
 
-        /* Synthetic-fd types are filtered here; see fd_type_is_synthetic
-         * in syscall/internal.h for the rationale (kqueue cannot cross
-         * SCM_RIGHTS on macOS, per-class side tables are not serialized).
-         * The child sees these slots as FD_CLOSED and recreates them via
-         * the appropriate syscall.
+        /* Synthetic-fd types are filtered here; see fd_type_is_synthetic in
+         * syscall/internal.h for the rationale (kqueue cannot cross SCM_RIGHTS
+         * on macOS, per-class side tables are not serialized). The child sees
+         * these slots as FD_CLOSED and recreates them via the appropriate
+         * syscall.
          */
         int t = fd_table[i].type;
         if (fd_type_is_synthetic(t))
@@ -400,12 +400,12 @@ int fork_ipc_recv_fd_table(int ipc_fd, guest_t *g)
                    sizeof(fd_table[gfd].proc_path));
             fd_table[gfd].seals = fd_entries[i].seals;
         } else if (fd_type_is_synthetic(fd_entries[i].type)) {
-            /* Defense in depth: the parent's fork_ipc_send_fd_table
-             * already filters synthetic types out of the SCM_RIGHTS
-             * payload (see fd_type_is_synthetic in syscall/internal.h).
-             * If anything still arrives here, drop the inherited host
-             * fd and leave the slot FD_CLOSED so the child must
-             * recreate the fd via the appropriate syscall.
+            /* Defense in depth: the parent's fork_ipc_send_fd_table already
+             * filters synthetic types out of the SCM_RIGHTS payload (see
+             * fd_type_is_synthetic in syscall/internal.h). If anything still
+             * arrives here, drop the inherited host fd and leave the slot
+             * FD_CLOSED so the child must recreate the fd via the appropriate
+             * syscall.
              */
             log_debug(
                 "fork-child: dropping unexpected synthetic-type fd %d (type "

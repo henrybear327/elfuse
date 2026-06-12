@@ -3,11 +3,11 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Linux dup of an eventfd produces a second descriptor that points at the
- * same kernel object; reads and writes on either fd see the same counter.
- * elfuse used to give each dup'd guest_fd a fresh side-table slot, so
- * dup'd eventfds diverged and breaking programs that signal across the
- * pair. This test pins the contract by:
+ * Linux dup of an eventfd produces a second descriptor that points at the same
+ * kernel object; reads and writes on either fd see the same counter. elfuse
+ * used to give each dup'd guest_fd a fresh side-table slot, so dup'd eventfds
+ * diverged and breaking programs that signal across the pair. This test pins
+ * the contract by:
  *   - duping an eventfd initialised with counter=7, reading via the dup,
  *     verifying the dup observes the source's initial value
  *   - writing via the source, reading via the dup, verifying state shares

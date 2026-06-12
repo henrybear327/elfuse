@@ -5,8 +5,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Thread table with _Thread_local fast path for current thread access.
- * Protected by a mutex since thread creation/destruction is infrequent
- * relative to per-syscall access (which uses the lock-free TLS pointer).
+ * Protected by a mutex since thread creation/destruction is infrequent relative
+ * to per-syscall access (which uses the lock-free TLS pointer).
  */
 
 #include <errno.h>
@@ -24,9 +24,9 @@
 #include "core/guest.h" /* guest_t (shim_data_base/ipa_base), BLOCK_2MIB */
 #include "hvutil.h"     /* vcpu_get_gpr, vcpu_get_sysreg */
 
-/* From syscall/signal.h, included here directly to avoid pulling in
- * the full signal header (macOS defines sa_handler as a macro that
- * conflicts with the linux_sigaction_t field name).
+/* From syscall/signal.h, included here directly to avoid pulling in the full
+ * signal header (macOS defines sa_handler as a macro that conflicts with the
+ * linux_sigaction_t field name).
  */
 #define LINUX_SS_DISABLE 2
 
@@ -38,10 +38,10 @@ static int thread_can_add_deferred_unmap_locked(thread_entry_t *t,
                                                 uint64_t start,
                                                 uint64_t end);
 
-/* Top of the EL1 exception stack region (one 4KiB slot per thread).
- * The shim data block sits at high IPA, computed at guest_init time and
- * stored in g->shim_data_base; the top of the EL1 stacks is the next
- * 2MiB boundary above that. Caller must hold a guest_t reference.
+/* Top of the EL1 exception stack region (one 4KiB slot per thread). The shim
+ * data block sits at high IPA, computed at guest_init time and stored in
+ * g->shim_data_base; the top of the EL1 stacks is the next 2MiB boundary above
+ * that. Caller must hold a guest_t reference.
  */
 static inline uint64_t sp_el1_top(const guest_t *g)
 {
@@ -64,8 +64,8 @@ static _Atomic int active_thread_count = 0;
     THREAD_FOR_EACH (t)           \
         if (t->active)
 
-/* Iterate active slots without holding thread_lock. Uses an acquire load on
- * the active flag so the lock-free observers in thread_tid_alive() and
+/* Iterate active slots without holding thread_lock. Uses an acquire load on the
+ * active flag so the lock-free observers in thread_tid_alive() and
  * thread_signal_deliverable() see a consistent transition.
  */
 #define THREAD_FOR_EACH_ACTIVE_RELAXED(t) \
@@ -164,8 +164,8 @@ thread_entry_t *thread_alloc(int64_t tid,
     return result;
 }
 
-/* Free an SP_EL1 slot for reuse. Must be called with thread_lock held.
- * Reads the slot index recorded at allocation time and clears the bit.
+/* Free an SP_EL1 slot for reuse. Must be called with thread_lock held. Reads
+ * the slot index recorded at allocation time and clears the bit.
  */
 static void thread_free_sp_el1_locked(thread_entry_t *t)
 {
@@ -194,10 +194,9 @@ void thread_deactivate(thread_entry_t *t)
 
     pthread_mutex_lock(&thread_lock);
 
-    /* If this is a VM-clone child, mark it as exited and wake the
-     * tracer/parent so wait4 can collect the exit status.  Must happen BEFORE
-     * destroying the condvars, since broadcasting a destroyed condvar is
-     * undefined behavior.
+    /* If this is a VM-clone child, mark it as exited and wake the tracer/parent
+     * so wait4 can collect the exit status. Must happen BEFORE destroying the
+     * condvars, since broadcasting a destroyed condvar is undefined behavior.
      */
     /* Guard against double-deactivation: if already inactive, skip. */
     if (!t->active) {
@@ -290,8 +289,8 @@ uint64_t thread_alloc_sp_el1(const guest_t *g, thread_entry_t *t)
         log_error("thread: SP_EL1 slots exhausted");
     } else {
         int slot = bit_ctz64(free_mask);
-        /* Main thread's SP_EL1 sits at the top of the shim data block.
-         * Each subsequent thread is 4KiB below.
+        /* Main thread's SP_EL1 sits at the top of the shim data block. Each
+         * subsequent thread is 4KiB below.
          */
         uint64_t top = sp_el1_top(g);
         sp = top - (uint64_t) slot * 4096;
@@ -338,10 +337,10 @@ void thread_join_workers(void)
     /* Poll/join each worker OUTSIDE the lock. Workers that responded to
      * hv_vcpus_exit typically finish within microseconds. Threads stuck in
      * uninterruptible host calls (blocking read/poll) are given 100ms to
-     * finish. If still alive, detach and let process exit clean up. The vCPU
-     * is NOT destroyed here because HVF vCPUs are thread-affine, so
-     * cross-thread hv_vcpu_destroy while the owning thread may still be inside
-     * hv_vcpu_run is unsafe.
+     * finish. If still alive, detach and let process exit clean up. The vCPU is
+     * NOT destroyed here because HVF vCPUs are thread-affine, so cross-thread
+     * hv_vcpu_destroy while the owning thread may still be inside hv_vcpu_run
+     * is unsafe.
      */
     for (int w = 0; w < nworkers; w++) {
         for (int i = 0; i < 20; i++) {
@@ -378,8 +377,8 @@ void thread_destroy_all_vcpus(void)
 
 void thread_interrupt_all(void)
 {
-    /* Collect active vCPUs under the lock, then call hv_vcpus_exit outside
-     * the lock to avoid holding it during a framework call.
+    /* Collect active vCPUs under the lock, then call hv_vcpus_exit outside the
+     * lock to avoid holding it during a framework call.
      */
     hv_vcpu_t vcpus[MAX_THREADS];
     int count = 0;
@@ -449,12 +448,11 @@ void thread_quiesce_siblings(void)
     /* Force siblings out of hv_vcpu_run */
     hv_vcpus_exit(vcpus, (uint32_t) count);
 
-    /* Wait until all siblings have blocked on the barrier.
-     * Use a bounded wait: siblings in long-running host syscalls (poll, read,
-     * accept) may not reach the barrier check promptly since hv_vcpus_exit only
-     * affects threads inside hv_vcpu_run. After the timeout, proceed with the
-     * snapshot; the sibling is blocked in a host syscall and not mutating guest
-     * memory.
+    /* Wait until all siblings have blocked on the barrier. Use a bounded wait:
+     * siblings in long-running host syscalls (poll, read, accept) may not reach
+     * the barrier check promptly since hv_vcpus_exit only affects threads
+     * inside hv_vcpu_run. After the timeout, proceed with the snapshot; the
+     * sibling is blocked in a host syscall and not mutating guest memory.
      */
     pthread_mutex_lock(&thread_lock);
     if (fork_quiesced_count < fork_target_count) {
@@ -523,11 +521,11 @@ int thread_collect_and_defer_stack_ranges(
 retry:
     nranges = 0;
 
-    /* Pass 1: enumerate every thread whose live stack overlaps [start, end)
-     * and verify each one can record a new deferred-unmap entry. If the
+    /* Pass 1: enumerate every thread whose live stack overlaps [start, end) and
+     * verify each one can record a new deferred-unmap entry. If the
      * caller-provided buffer is too small or any thread is at its
-     * deferred-unmap cap, refuse the whole operation so pass 2 never has
-     * to handle a partial commit.
+     * deferred-unmap cap, refuse the whole operation so pass 2 never has to
+     * handle a partial commit.
      */
     THREAD_FOR_EACH_ACTIVE (t) {
         uint64_t rs = t->stack_map_start;
@@ -562,8 +560,8 @@ retry:
         }
         nranges++;
     }
-    /* Pass 2: commit. Both passes iterate the table in the same order
-     * under the same lock, so the active set seen here matches pass 1.
+    /* Pass 2: commit. Both passes iterate the table in the same order under the
+     * same lock, so the active set seen here matches pass 1.
      */
     for (int i = 0; i < nranges; i++) {
         (void) thread_add_deferred_unmap_locked(txns[i].thread, txns[i].start,
@@ -724,9 +722,9 @@ static int thread_add_deferred_unmap_locked(thread_entry_t *t,
     if (!t || start >= end)
         return 0;
 
-    /* Absorb every existing slot that overlaps or is adjacent to [start,
-     * end), expanding the candidate as needed. Compact the array in place
-     * by pulling the live tail into each absorbed slot.
+    /* Absorb every existing slot that overlaps or is adjacent to [start, end),
+     * expanding the candidate as needed. Compact the array in place by pulling
+     * the live tail into each absorbed slot.
      */
     int n = t->deferred_stack_unmap_count;
     int i = 0;

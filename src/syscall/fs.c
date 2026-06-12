@@ -4,9 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Stat, open, close, directory, permissions, and other filesystem
- * operations. All functions are called from syscall_dispatch() in
- * syscall/syscall.c.
+ * Stat, open, close, directory, permissions, and other filesystem operations.
+ * All functions are called from syscall_dispatch() in syscall/syscall.c.
  */
 
 #include <stdbool.h>
@@ -239,12 +238,12 @@ static int fd_alloc_opened_host(int host_fd,
      * atomically with respect to the slot's identity. fd_alloc_*_relaxed drops
      * fd_lock before returning, so a sibling vCPU's pathological
      * close(guest_fd) + open() could reuse the slot between alloc and the
-     * metadata install below. Re-acquire fd_lock and verify the
-     * (type, host_fd) tuple still matches what just got allocated; if it does
-     * not, the slot belongs to a different file now and any install would
-     * clobber the sibling's entry. The sibling's close path already cleaned up
-     * the host_fd of this side via fd_cleanup_entry, so this side only owns
-     * dir, which gets closed below.
+     * metadata install below. Re-acquire fd_lock and verify the (type, host_fd)
+     * tuple still matches what just got allocated; if it does not, the slot
+     * belongs to a different file now and any install would clobber the
+     * sibling's entry. The sibling's close path already cleaned up the host_fd
+     * of this side via fd_cleanup_entry, so this side only owns dir, which gets
+     * closed below.
      */
     bool installed = false;
     pthread_mutex_lock(&fd_lock);
@@ -361,8 +360,8 @@ int64_t sys_openat_path(guest_t *g,
             /* Got a host fd from the intercept. Device nodes (/dev/...) use
              * fd_alloc() for POSIX lowest-fd semantics because busybox sh
              * relies on close(0)+open("/dev/null") returning fd 0. Synthetic
-             * /proc files use fd_alloc_from(128) to avoid races with
-             * concurrent GC finalizers that may close stale low-numbered fds.
+             * /proc files use fd_alloc_from(128) to avoid races with concurrent
+             * GC finalizers that may close stale low-numbered fds.
              */
             int type = intercepted_fd_type(tx.intercept_path, intercepted,
                                            linux_flags);
@@ -462,11 +461,11 @@ int64_t sys_close(int fd)
 
     int host_fd = -1;
     if (fd_close_regular_relaxed(fd, &host_fd)) {
-        /* The fast path bypasses fd_cleanup_entry, so any side tables
-         * keyed by host_fd that the slow path drops must be drained here
-         * too. proc_pty_close_keepalive is a cheap no-op for non-pty fds
-         * and prevents the keepalive slave from leaking past a /dev/ptmx
-         * close when no per-type cleanup is registered.
+        /* The fast path bypasses fd_cleanup_entry, so any side tables keyed by
+         * host_fd that the slow path drops must be drained here too.
+         * proc_pty_close_keepalive is a cheap no-op for non-pty fds and
+         * prevents the keepalive slave from leaking past a /dev/ptmx close when
+         * no per-type cleanup is registered.
          */
         proc_pty_close_keepalive(host_fd);
         if (close(host_fd) < 0)
@@ -474,9 +473,9 @@ int64_t sys_close(int fd)
         return 0;
     }
 
-    /* Atomically snapshot and mark closed under fd_lock.  This prevents
-     * a TOCTOU race where two concurrent sys_close() calls both read
-     * the same open entry and double-close the host fd.
+    /* Atomically snapshot and mark closed under fd_lock. This prevents a TOCTOU
+     * race where two concurrent sys_close() calls both read the same open entry
+     * and double-close the host fd.
      */
     fd_entry_t snap;
     if (!fd_snapshot_and_close_relaxed(fd, &snap))
@@ -495,11 +494,12 @@ static void discard_allocated_fd(int guest_fd)
         fd_cleanup_entry(guest_fd, &snap);
 }
 
-/* Open a DIR stream over a dup of dst_host_fd if the source was an
- * FD_DIR. Returns NULL on success-but-no-stream-needed (non-dir source)
- * or on dup/fdopendir failure with errno preserved. Pulled out of the
- * critical section in install_fd_alias_metadata_atomic because dup and
- * fdopendir are slow syscalls that must not hold fd_lock.
+/* Open a DIR stream over a dup of dst_host_fd if the source was an FD_DIR.
+ *
+ * Returns NULL on success-but-no-stream-needed (non-dir source) or on
+ * dup/fdopendir failure with errno preserved. Pulled out of the critical
+ * section in install_fd_alias_metadata_atomic because dup and fdopendir are
+ * slow syscalls that must not hold fd_lock.
  */
 static DIR *clone_dir_stream(const fd_entry_t *src_snap,
                              int dst_host_fd,
@@ -525,13 +525,13 @@ static DIR *clone_dir_stream(const fd_entry_t *src_snap,
     return dir;
 }
 
-/* Install dup-alias metadata atomically with the slot identity. Uses
- * the (type, host_fd) tuple as proof that the slot still belongs to
- * the in-flight duplicate_guest_fd call; a sibling vCPU's pathological
- * close + open between the relaxed allocator's lock release and this
- * call could otherwise clobber the sibling's freshly-installed entry.
- * Returns true on successful install, false if the slot was
- * reallocated (caller must closedir any cloned dir to avoid a leak).
+/* Install dup-alias metadata atomically with the slot identity. Uses the (type,
+ * host_fd) tuple as proof that the slot still belongs to the in-flight
+ * duplicate_guest_fd call; a sibling vCPU's pathological close + open between
+ * the relaxed allocator's lock release and this call could otherwise clobber
+ * the sibling's freshly-installed entry.
+ * Returns true on successful install, false if the slot was reallocated (caller
+ * must closedir any cloned dir to avoid a leak).
  */
 static bool install_fd_alias_metadata_atomic(int dst_fd,
                                              int expected_type,
@@ -572,8 +572,8 @@ static bool install_fd_alias_metadata_atomic(int dst_fd,
 }
 
 /* Duplicate a guest fd into either the next free slot >= min_guest_fd or a
- * fixed slot. The helper keeps fd metadata copying and directory-stream
- * cloning in one place so dup(), dup3(), and fcntl(F_DUPFD*) stay consistent.
+ * fixed slot. The helper keeps fd metadata copying and directory-stream cloning
+ * in one place so dup(), dup3(), and fcntl(F_DUPFD*) stay consistent.
  */
 static int duplicate_guest_fd(int src_fd,
                               int min_guest_fd,
@@ -582,14 +582,14 @@ static int duplicate_guest_fd(int src_fd,
                               int linux_flags)
 {
     /* Hold pty_keepalive_lock across the source snapshot, host dup, and
-     * keepalive mirror so a concurrent sys_close on src_fd cannot remove
-     * the source's keepalive entry between fd_snapshot_and_dup and
-     * proc_pty_dup_keepalive_locked. Without this bracket the alias would
-     * land in fd_table with no keepalive of its own.
+     * keepalive mirror so a concurrent sys_close on src_fd cannot remove the
+     * source's keepalive entry between fd_snapshot_and_dup and
+     * proc_pty_dup_keepalive_locked. Without this bracket the alias would land
+     * in fd_table with no keepalive of its own.
      *
-     * Lock order is pty_keepalive_lock -> fd_lock (fd_snapshot_and_dup
-     * takes fd_lock internally); proc_pty_master_adopt's joint-locked
-     * publish uses the same order so the two paths do not deadlock.
+     * Lock order is pty_keepalive_lock -> fd_lock (fd_snapshot_and_dup takes
+     * fd_lock internally); proc_pty_master_adopt's joint-locked publish uses
+     * the same order so the two paths do not deadlock.
      */
     proc_pty_lock_for_dup();
     fd_entry_t src_snap;
@@ -607,11 +607,10 @@ static int duplicate_guest_fd(int src_fd,
         return fuse_dup_fd(src_fd, min_guest_fd, fixed_guest_fd, fixed_slot,
                            linux_flags);
     }
-    /* eventfd dup must share the underlying counter and pipe state across
-     * the source and destination fds (Linux contract). Pass src_snap's
-     * host_fd through so eventfd_dup_fd can verify the source fd still
-     * refers to the same live eventfd between the snapshot here and the
-     * bind there.
+    /* eventfd dup must share the underlying counter and pipe state across the
+     * source and destination fds (Linux contract). Pass src_snap's host_fd
+     * through so eventfd_dup_fd can verify the source fd still refers to the
+     * same live eventfd between the snapshot here and the bind there.
      */
     if (src_snap.type == FD_EVENTFD) {
         proc_pty_unlock_for_dup();
@@ -625,13 +624,12 @@ static int duplicate_guest_fd(int src_fd,
         return -1;
     }
 
-    /* Mirror any /dev/ptmx keepalive BEFORE fd_alloc publishes guest_fd.
-     * Once the guest fd exists, a sibling thread can close it; that runs
-     * fd_cleanup_entry which calls proc_pty_close_keepalive(new_host_fd).
-     * For that cleanup to drop the freshly-duped keepalive, the keepalive
-     * entry must already be in the table; registering after fd_alloc would
-     * lose the race and leak the slave fd. No-op when the source has no
-     * keepalive.
+    /* Mirror any /dev/ptmx keepalive BEFORE fd_alloc publishes guest_fd. Once
+     * the guest fd exists, a sibling thread can close it; that runs
+     * fd_cleanup_entry which calls proc_pty_close_keepalive(new_host_fd). For
+     * that cleanup to drop the freshly-duped keepalive, the keepalive entry
+     * must already be in the table; registering after fd_alloc would lose the
+     * race and leak the slave fd. No-op when the source has no keepalive.
      */
     proc_pty_dup_keepalive_locked(src_snap.host_fd, new_host_fd);
     proc_pty_unlock_for_dup();
@@ -653,10 +651,10 @@ static int duplicate_guest_fd(int src_fd,
         return -1;
     }
 
-    /* Clone the DIR stream outside fd_lock (dup + fdopendir would block
-     * other fd ops), then install everything atomically under fd_lock
-     * with a tuple verification so a sibling close + reopen on the same
-     * guest_fd cannot make this install land on an unrelated slot.
+    /* Clone the DIR stream outside fd_lock (dup + fdopendir would block other
+     * fd ops), then install everything atomically under fd_lock with a tuple
+     * verification so a sibling close + reopen on the same guest_fd cannot make
+     * this install land on an unrelated slot.
      */
     bool dir_clone_failed = false;
     DIR *dir = clone_dir_stream(&src_snap, new_host_fd, &dir_clone_failed);
@@ -669,10 +667,10 @@ static int duplicate_guest_fd(int src_fd,
 
     if (!install_fd_alias_metadata_atomic(guest_fd, new_type, new_host_fd,
                                           &src_snap, linux_flags, dir)) {
-        /* Slot was reallocated by a sibling while metadata install was
-         * pending; the sibling's close path already cleaned up new_host_fd
-         * via fd_cleanup_entry, so the only resource this side still
-         * owns is the cloned DIR stream.
+        /* Slot was reallocated by a sibling while metadata install was pending;
+         * the sibling's close path already cleaned up new_host_fd via
+         * fd_cleanup_entry, so the only resource this side still owns is the
+         * cloned DIR stream.
          */
         if (dir)
             closedir(dir);
@@ -735,9 +733,9 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
         return -LINUX_EBADF;
 
     /* Snapshot the slot under fd_lock once; readers use fd_snap below, and
-     * writers reacquire fd_lock and revalidate against fd_snap.generation
-     * so a close+reopen between the snapshot and the RMW returns EBADF
-     * instead of mutating an unrelated fd.
+     * writers reacquire fd_lock and revalidate against fd_snap.generation so a
+     * close+reopen between the snapshot and the RMW returns EBADF instead of
+     * mutating an unrelated fd.
      */
     fd_entry_t fd_snap;
     if (!fd_snapshot(fd, &fd_snap))
@@ -774,8 +772,8 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
     case 2: /* F_SETFD */
         /* Hold fd_lock across the read-modify-write so the CLOEXEC flip is
          * atomic against a concurrent F_SETFL on the same shadow word and
-         * against any fd_lock-protected reader. Revalidate against the
-         * snapshot generation so a close+reopen returns EBADF.
+         * against any fd_lock-protected reader. Revalidate against the snapshot
+         * generation so a close+reopen returns EBADF.
          */
         pthread_mutex_lock(&fd_lock);
         if (fd_table[fd].type == FD_CLOSED ||
@@ -794,9 +792,9 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
             return fd_snap.linux_flags;
         /* Linux timerfd F_GETFL reports O_RDWR plus the writable status bits
          * the kernel honors. Surface only those bits from the shadow rather
-         * than echoing arbitrary linux_flags bits so stray F_SETFL args
-         * cannot leak through here. O_ASYNC stays off because timerfd_fops
-         * lacks ->fasync, so generic_setfl drops it.
+         * than echoing arbitrary linux_flags bits so stray F_SETFL args cannot
+         * leak through here. O_ASYNC stays off because timerfd_fops lacks
+         * ->fasync, so generic_setfl drops it.
          */
         if (fd_type == FD_TIMERFD)
             return LINUX_O_RDWR |
@@ -822,14 +820,14 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
     {
         if (fuse_fd) {
             /* Preserve LINUX_O_ACCMODE: F_SETFL is not allowed to change the
-             * access mode in the Linux kernel, and without preserving it
-             * here a stray F_SETFL(0) would silently flip an O_RDWR FUSE
-             * shadow to O_RDONLY, surfacing the wrong mode through F_GETFL.
+             * access mode in the Linux kernel, and without preserving it here a
+             * stray F_SETFL(0) would silently flip an O_RDWR FUSE shadow to
+             * O_RDONLY, surfacing the wrong mode through F_GETFL.
              *
-             * Hold fd_lock across the read-modify-write so the update is
-             * atomic against a concurrent F_SETFD and any fd_lock-protected
-             * reader. Revalidate against the snapshot generation so a
-             * close+reopen returns EBADF.
+             * Hold fd_lock across the read-modify-write so the update is atomic
+             * against a concurrent F_SETFD and any fd_lock-protected reader.
+             * Revalidate against the snapshot generation so a close+reopen
+             * returns EBADF.
              */
             pthread_mutex_lock(&fd_lock);
             if (fd_table[fd].type != fd_type ||
@@ -851,13 +849,13 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
         }
         /* Timerfd: kqueue host fd rejects fcntl(F_SETFL), so mirror Linux's
          * file-status word in the linux_flags shadow. Of Linux's writable
-         * status flags (O_APPEND, O_ASYNC, O_DIRECT, O_NOATIME, O_NONBLOCK)
-         * the timerfd kernel object honors O_APPEND, O_NONBLOCK, and
-         * O_NOATIME. O_ASYNC is silently dropped (timerfd_fops lacks
-         * ->fasync). O_DIRECT returns -EINVAL because the inode lacks
-         * FMODE_CAN_ODIRECT. Bits outside the writable set (access mode,
-         * CLOEXEC, O_PATH/DIRECTORY/NOFOLLOW/etc.) are silently ignored,
-         * matching how Linux F_SETFL drops them.
+         * status flags (O_APPEND, O_ASYNC, O_DIRECT, O_NOATIME, O_NONBLOCK) the
+         * timerfd kernel object honors O_APPEND, O_NONBLOCK, and O_NOATIME.
+         * O_ASYNC is silently dropped (timerfd_fops lacks ->fasync). O_DIRECT
+         * returns -EINVAL because the inode lacks FMODE_CAN_ODIRECT. Bits
+         * outside the writable set (access mode, CLOEXEC,
+         * O_PATH/DIRECTORY/NOFOLLOW/etc.) are silently ignored, matching how
+         * Linux F_SETFL drops them.
          */
         if (fd_type == FD_TIMERFD) {
             const int setfl_mask =
@@ -892,13 +890,13 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
         host_fd_ref_t host_ref;
         if (host_fd_ref_open(fd, &host_ref) < 0)
             return -LINUX_EBADF;
-        /* Translate Linux struct flock (aarch64) to macOS struct flock.
-         * Linux aarch64 layout: {short l_type, short l_whence,
+        /* Translate Linux struct flock (aarch64) to macOS struct flock. Linux
+         * aarch64 layout: {short l_type, short l_whence,
          *   long l_start, long l_len, int l_pid, pad[4]}
          * macOS layout: {off_t l_start, off_t l_len, pid_t l_pid,
          *   short l_type, short l_whence}
-         * Use guest_read/guest_write (not guest_ptr) to safely handle
-         * structs that span 2MiB page table block boundaries.
+         * Use guest_read/guest_write (not guest_ptr) to safely handle structs
+         * that span 2MiB page table block boundaries.
          */
         uint8_t lflock[32]; /* Linux struct flock is 32 bytes on aarch64 */
         if (guest_read_small(g, arg, lflock, sizeof(lflock)) < 0)
@@ -915,9 +913,10 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
         /* l_type constants differ between Linux and macOS/BSD:
          *   Linux: F_RDLCK=0, F_WRLCK=1, F_UNLCK=2
          *   macOS: F_RDLCK=1, F_UNLCK=2, F_WRLCK=3
-         * Passing the Linux value straight through makes a Linux F_RDLCK (0)
-         * an invalid type on macOS, which fcntl() rejects with EINVAL. This is
-         * the lock POSIX databases (e.g. SQLite) take first, so it must map. */
+         * Passing the Linux value straight through makes a Linux F_RDLCK (0) an
+         * invalid type on macOS, which fcntl() rejects with EINVAL. This is the
+         * lock POSIX databases (e.g. SQLite) take first, so it must map.
+         */
         short mac_type;
         switch (l_type) {
         case 0: /* LINUX_F_RDLCK */
@@ -1031,8 +1030,8 @@ int64_t sys_close_range(unsigned int first,
     if (last >= (unsigned) FD_TABLE_SIZE)
         last = FD_TABLE_SIZE - 1;
 
-    /* CLOSE_RANGE_CLOEXEC: mark FDs as CLOEXEC without closing them.
-     * Hold fd_lock to prevent races with concurrent fd_alloc/close.
+    /* CLOSE_RANGE_CLOEXEC: mark FDs as CLOEXEC without closing them. Hold
+     * fd_lock to prevent races with concurrent fd_alloc/close.
      */
     if (flags & LINUX_CLOSE_RANGE_CLOEXEC) {
         pthread_mutex_lock(&fd_lock);
@@ -1058,8 +1057,8 @@ int64_t sys_close_range(unsigned int first,
 
 /* directory operations. */
 
-/* getdents64: read directory entries from a guest directory fd.
- * Uses the persistent DIR* stored in fd_table (created by openat).
+/* getdents64: read directory entries from a guest directory fd. Uses the
+ * persistent DIR* stored in fd_table (created by openat).
  */
 int64_t sys_getdents64(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
 {
@@ -1086,16 +1085,16 @@ int64_t sys_getdents64(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
     size_t guest_pos = 0;
     struct dirent *de;
 
-    /* Temp buffer for dirent serialization. Max dirent64 is 280 bytes
-     * (19-byte header + NAME_MAX=255 + null + padding to 8). Using a
-     * stack buffer avoids guest_ptr boundary issues: guest_write() handles
-     * 2MiB block crossings that raw memcpy into guest_ptr() cannot.
+    /* Temp buffer for dirent serialization. Max dirent64 is 280 bytes (19-byte
+     * header + NAME_MAX=255 + null + padding to 8). Using a stack buffer avoids
+     * guest_ptr boundary issues: guest_write() handles 2MiB block crossings
+     * that raw memcpy into guest_ptr() cannot.
      */
     uint8_t entry_buf[280];
 
     while (1) {
         /* Save position BEFORE readdir so getdents emulation can rewind if the
-         * entry does not fit.  macOS telldir returns an opaque cookie --
+         * entry does not fit. macOS telldir returns an opaque cookie --
          * arithmetic on it (e.g. telldir()-1) is undefined.
          */
         long saved_pos = telldir(dir);
@@ -1227,13 +1226,13 @@ int64_t sys_chroot(guest_t *g, uint64_t path_gva)
     char path[LINUX_PATH_MAX];
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
-    /* Only accept chroot("/") as a no-op. The original motivation was
-     * coreutils stdbuf (fork -> chroot("/") -> exec) which never changes
-     * roots in practice. Accepting an arbitrary path was a containment
-     * escape: a guest already running under --sysroot=/opt/sr could call
-     * chroot("/etc") and pivot to the host's /etc with no boundary check.
-     * Real chroot() requires CAP_SYS_CHROOT, which the guest does not have
-     * in elfuse's single-process VM model.
+    /* Only accept chroot("/") as a no-op. The original motivation was coreutils
+     * stdbuf (fork -> chroot("/") -> exec) which never changes roots in
+     * practice. Accepting an arbitrary path was a containment escape: a guest
+     * already running under --sysroot=/opt/sr could call chroot("/etc") and
+     * pivot to the host's /etc with no boundary check. Real chroot() requires
+     * CAP_SYS_CHROOT, which the guest does not have in elfuse's single-process
+     * VM model.
      */
     if (strcmp(path, "/") == 0)
         return 0;
@@ -1496,9 +1495,9 @@ int64_t sys_renameat2(guest_t *g,
     }
 
     /* Apply sysroot resolution for absolute paths */
-    /* RENAME_NOREPLACE: fail if destination exists. macOS renamex_np
-     * supports RENAME_EXCL for the same semantics. Only supported for
-     * AT_FDCWD paths (renamex_np does not take dirfd arguments).
+    /* RENAME_NOREPLACE: fail if destination exists. macOS renamex_np supports
+     * RENAME_EXCL for the same semantics. Only supported for AT_FDCWD paths
+     * (renamex_np does not take dirfd arguments).
      */
     if (flags & LINUX_RENAME_NOREPLACE) {
         if (olddirfd == LINUX_AT_FDCWD && newdirfd == LINUX_AT_FDCWD) {
@@ -1509,8 +1508,8 @@ int64_t sys_renameat2(guest_t *g,
             }
             return close_dir_refs_result(&olddir_ref, &newdir_ref, 0);
         }
-        /* For non-CWD dirfds, emulate with link+unlink. This is not atomic,
-         * but linkat() still preserves the "destination must not exist"
+        /* For non-CWD dirfds, emulate with link+unlink. This is not atomic, but
+         * linkat() still preserves the "destination must not exist"
          * requirement. This path still cannot handle directories because
          * hardlinking directories is not allowed.
          */
@@ -1989,14 +1988,13 @@ int64_t sys_utimensat(guest_t *g,
     if (flags & LINUX_AT_SYMLINK_NOFOLLOW)
         mac_flags |= AT_SYMLINK_NOFOLLOW;
 
-    /* macOS utimensat() does not support NULL path (Linux extension).
-     * When path is NULL, the caller wants to operate on dirfd itself,
-     * so use futimens() instead. Linux's do_utimes_fd rejects any flags
-     * with EINVAL, and utimensat(AT_FDCWD, NULL, ...) returns EFAULT
-     * because there is no real fd to apply timestamps to; mirror both
-     * here rather than letting futimens(AT_FDCWD, ...) be invoked with
-     * macOS's AT_FDCWD sentinel (-2), which returns EBADF and would not
-     * match Linux semantics.
+    /* macOS utimensat() does not support NULL path (Linux extension). When path
+     * is NULL, the caller wants to operate on dirfd itself, so use futimens()
+     * instead. Linux's do_utimes_fd rejects any flags with EINVAL, and
+     * utimensat(AT_FDCWD, NULL, ...) returns EFAULT because there is no real fd
+     * to apply timestamps to; mirror both here rather than letting
+     * futimens(AT_FDCWD, ...) be invoked with macOS's AT_FDCWD sentinel (-2),
+     * which returns EBADF and would not match Linux semantics.
      */
     if (!path_arg) {
         if (flags) {

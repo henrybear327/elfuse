@@ -3,9 +3,9 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Companion to test-epoll-mt.c. That test covers the original dup-as-ident
- * bug (registrations vanishing across epoll_ctl). This one covers the ABA
- * race jserv flagged in review (PR #73, poll.c:723):
+ * Companion to test-epoll-mt.c. That test covers the original dup-as-ident bug
+ * (registrations vanishing across epoll_ctl). This one covers the ABA race
+ * around src/syscall/poll.c sys_epoll_ctl:
  *
  *   A registration in inst->regs[fd] is keyed on the guest fd *number*, but
  *   the kqueue knote is keyed on the underlying host fd. When the guest
@@ -16,11 +16,10 @@
  *   *new* file's host fd: EV_DELETE/EV_MOD against the wrong knote, returning
  *   success for a registration Linux considers already gone.
  *
- * The fix stamps fd_entry_t.generation into epoll_reg_t at ADD time and
- * rejects DEL/MOD when fd_table[fd].generation no longer matches, so a
- * close+reopen is detected as a stale registration. The generation counter is
- * monotonic, so the reused fd number gets a fresh stamp that never collides
- * with the old one.
+ * The fix stamps fd_entry_t.generation into epoll_reg_t at ADD time and rejects
+ * DEL/MOD when fd_table[fd].generation no longer matches, so a close+reopen is
+ * detected as a stale registration. The generation counter is monotonic, so the
+ * reused fd number gets a fresh stamp that never collides with the old one.
  *
  * Asserted behavior (matches Linux, which auto-removes an fd from the epoll
  * interest list on close):
@@ -55,7 +54,8 @@ static char sibling_stack[16384] __attribute__((aligned(16)));
 
 /* Sibling thread: stays alive so the guest is multi-threaded across the
  * parent's epoll_ctl() calls, then exits. Raw syscalls only -- a
- * clone(CLONE_THREAD) child has no libc TLS. */
+ * clone(CLONE_THREAD) child has no libc TLS.
+ */
 static int sibling_fn(void *arg)
 {
     (void) arg;
@@ -68,10 +68,13 @@ static int sibling_fn(void *arg)
     return 0;
 }
 
-/* Reopen a fresh eventfd onto exactly the guest fd number that was just
- * closed, so the ABA (same number, new open file, new generation) is exercised
+/* Reopen a fresh eventfd onto exactly the guest fd number that was just closed,
+ * so the ABA (same number, new open file, new generation) is exercised
  * regardless of fd-allocator policy. The lowest-free allocator normally hands
- * back oldfd directly; dup3() forces it otherwise. Returns oldfd, or -1. */
+ * back oldfd directly; dup3() forces it otherwise.
+ *
+ * Returns oldfd, or -1.
+ */
 static int reopen_same_number(int oldfd)
 {
     int nf = eventfd(0, EFD_NONBLOCK);
@@ -89,8 +92,11 @@ static int reopen_same_number(int oldfd)
 }
 
 /* Register fd for EPOLLIN, make it readable, and assert the edge is observed
- * with the expected data.fd within a generous finite budget. Returns 1 on
- * success. Leaves the eventfd counter signalled (caller drains/closes). */
+ * with the expected data.fd within a generous finite budget.
+ *
+ * Returns 1 on success. Leaves the eventfd counter signalled (caller
+ * drains/closes).
+ */
 static int add_and_expect_edge(int epfd, int fd)
 {
     struct epoll_event ev = {.events = EPOLLIN, .data.fd = fd};
@@ -135,8 +141,9 @@ int main(void)
     TEST("epoll_create1");
     EXPECT_TRUE(epfd >= 0, "epoll_create1 failed");
 
-    /* Control: the generation guard must not over-fire. A registration on a
-     * fd that is never closed must still DEL cleanly (generation matches). */
+    /* Control: the generation guard must not over-fire. A registration on a fd
+     * that is never closed must still DEL cleanly (generation matches).
+     */
     TEST("DEL on still-open registration succeeds");
     {
         int efd = eventfd(0, EFD_NONBLOCK);
@@ -147,8 +154,9 @@ int main(void)
         close(efd);
     }
 
-    /* Register file A on a fd number, confirm it really is live, then close
-     * it and reopen a different file B onto the same number. */
+    /* Register file A on a fd number, confirm it really is live, then close it
+     * and reopen a different file B onto the same number.
+     */
     int efd = eventfd(0, EFD_NONBLOCK);
     TEST("ABA setup: register + observe edge on file A");
     EXPECT_TRUE(efd >= 0 && add_and_expect_edge(epfd, efd),
@@ -161,7 +169,8 @@ int main(void)
     EXPECT_EQ(reused, efd, "could not reuse fd number");
 
     /* The stale registration must be treated as gone. Without the generation
-     * guard these act on file B's host fd and return success. */
+     * guard these act on file B's host fd and return success.
+     */
     TEST("DEL after close+reopen -> ENOENT");
     {
         struct epoll_event ev = {.events = EPOLLIN, .data.fd = efd};
@@ -177,9 +186,10 @@ int main(void)
                      "stale MOD did not report ENOENT");
     }
 
-    /* A fresh registration on the reused number must work end to end and
-     * report the *new* file's readiness -- proving the new knote is keyed on
-     * file B's host fd, not corrupted by the cleared stale state. */
+    /* A fresh registration on the reused number must work end to end and report
+     * the *new* file's readiness -- proving the new knote is keyed on file B's
+     * host fd, not corrupted by the cleared stale state.
+     */
     TEST("fresh ADD after ABA delivers edge for file B");
     EXPECT_TRUE(add_and_expect_edge(epfd, efd),
                 "reused fd failed to register/deliver after ABA");

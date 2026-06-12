@@ -8,8 +8,8 @@
  * Translates Linux aarch64 I/O syscalls into macOS equivalents, handling
  * terminal attribute translation and pipe splice emulation.
  *
- * Poll/select/epoll declarations are in syscall/poll.h.
- * Special FD types (eventfd, signalfd, timerfd) are in syscall/fd.h.
+ * Poll/select/epoll declarations are in syscall/poll.h. Special FD types
+ * (eventfd, signalfd, timerfd) are in syscall/fd.h.
  */
 
 #pragma once
@@ -24,9 +24,9 @@ int64_t sys_write(guest_t *g, int fd, uint64_t buf_gva, uint64_t count);
 int64_t sys_read(guest_t *g, int fd, uint64_t buf_gva, uint64_t count);
 void urandom_fd_cleanup(int guest_fd);
 void urandom_fd_reset_cache(int guest_fd);
-/* Initialize the per-fd urandom cache locks. Must run before any guest
- * thread enters sys_read or sys_readv on /dev/urandom. Called from
- * syscall_init alongside the other subsystem init hooks.
+/* Initialize the per-fd urandom cache locks. Must run before any guest thread
+ * enters sys_read or sys_readv on /dev/urandom. Called from syscall_init
+ * alongside the other subsystem init hooks.
  */
 void io_init(void);
 int64_t sys_pread64(guest_t *g,

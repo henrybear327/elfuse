@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests: setsid, getsid, getpgid, setpgid, and basic job-control
- * ioctl semantics (TIOCGPGRP, TIOCSPGRP).
+ * Tests: setsid, getsid, getpgid, setpgid, and basic job-control ioctl
+ * semantics (TIOCGPGRP, TIOCSPGRP).
  */
 
 #include <stdio.h>

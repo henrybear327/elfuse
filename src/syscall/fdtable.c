@@ -25,8 +25,8 @@
 #include "syscall/abi.h"
 #include "syscall/internal.h"
 
-/* Protects the FD table (fd_alloc, fd_alloc_at, fd_alloc_from, sys_close).
- * File descriptor operations from concurrent threads must be serialized.
+/* Protects the FD table (fd_alloc, fd_alloc_at, fd_alloc_from, sys_close). File
+ * descriptor operations from concurrent threads must be serialized.
  */
 pthread_mutex_t fd_lock = PTHREAD_MUTEX_INITIALIZER; /* Lock order: 3 */
 
@@ -35,8 +35,8 @@ fd_entry_t fd_table[FD_TABLE_SIZE];
 static uint64_t fd_next_generation = 1;
 
 /* RLIMIT_NOFILE tracking. */
-/* Guest-side soft limit for RLIMIT_NOFILE. fd_alloc checks this.
- * Default matches typical Linux default (1024). Updated by prlimit64.
+/* Guest-side soft limit for RLIMIT_NOFILE. fd_alloc checks this. Default
+ * matches typical Linux default (1024). Updated by prlimit64.
  */
 static _Atomic int rlimit_nofile_cur = FD_TABLE_SIZE;
 
@@ -98,13 +98,12 @@ void fd_refresh_urandom_bitmap(int fd)
         return;
 
     /* Hold fd_lock across both the read of (type, linux_flags) AND the
-     * shim_globals bitmap publish. Dropping the lock before the publish
-     * would let a concurrent sys_close flip the slot to FD_CLOSED in
-     * the gap; the subsequent mark would then stomp a stale 'readable
-     * urandom' bit onto a freed slot, and the EL1 fast path honors that
-     * bitmap. shim_globals_mark_urandom_fd is itself atomic on the
-     * bitmap word, but atomicity is meaningless without an in-lock
-     * source-to-publish window.
+     * shim_globals bitmap publish. Dropping the lock before the publish would
+     * let a concurrent sys_close flip the slot to FD_CLOSED in the gap; the
+     * subsequent mark would then stomp a stale 'readable urandom' bit onto a
+     * freed slot, and the EL1 fast path honors that bitmap.
+     * shim_globals_mark_urandom_fd is itself atomic on the bitmap word, but
+     * atomicity is meaningless without an in-lock source-to-publish window.
      */
     pthread_mutex_lock(&fd_lock);
     int type = fd_table[fd].type;
@@ -116,8 +115,7 @@ void fd_refresh_urandom_bitmap(int fd)
 }
 
 /* Find the lowest free FD >= minfd using the bitmap.
- * Returns -1 if no free FD exists at or above minfd.
- * Caller must hold fd_lock.
+ * Returns -1 if no free FD exists at or above minfd. Caller must hold fd_lock.
  */
 static int fd_bitmap_find_free(int minfd)
 {
@@ -146,8 +144,8 @@ static int fd_bitmap_find_free(int minfd)
 
 /* fdtable_init. */
 
-/* Initialize the FD table and bitmap, pre-open stdin/stdout/stderr.
- * Extracted from syscall_init(); call before any guest code runs.
+/* Initialize the FD table and bitmap, pre-open stdin/stdout/stderr. Extracted
+ * from syscall_init(); call before any guest code runs.
  */
 void fdtable_init(void)
 {
@@ -174,8 +172,10 @@ void fdtable_init(void)
 
 /* FD helpers. */
 
-/* Find and populate the lowest free FD >= minfd. Returns -1 with errno=EMFILE
- * if no slot is available within RLIMIT_NOFILE. Caller must hold fd_lock.
+/* Find and populate the lowest free FD >= minfd.
+ *
+ * Returns -1 with errno=EMFILE if no slot is available within RLIMIT_NOFILE.
+ * Caller must hold fd_lock.
  */
 static int fd_alloc_locked(int minfd,
                            int type,
@@ -193,8 +193,10 @@ static int fd_alloc_locked(int minfd,
     return fd;
 }
 
-/* Allocate the lowest available FD. Returns -1 if table is full
- * or RLIMIT_NOFILE would be exceeded (sets errno to EMFILE).
+/* Allocate the lowest available FD.
+ *
+ * Returns -1 if table is full or RLIMIT_NOFILE would be exceeded (sets errno to
+ * EMFILE).
  */
 int fd_alloc(int type, int host_fd, void (*cleanup)(int))
 {
@@ -204,8 +206,9 @@ int fd_alloc(int type, int host_fd, void (*cleanup)(int))
     return fd;
 }
 
-/* Allocate the lowest available FD >= minfd. Returns -1 if none available
- * or RLIMIT_NOFILE would be exceeded.
+/* Allocate the lowest available FD >= minfd.
+ *
+ * Returns -1 if none available or RLIMIT_NOFILE would be exceeded.
  */
 int fd_alloc_from(int minfd, int type, int host_fd, void (*cleanup)(int))
 {
@@ -226,8 +229,9 @@ int fd_alloc_from_relaxed(int minfd,
 }
 
 /* Allocate a specific FD slot. Enforces RLIMIT_NOFILE. Properly cleans up any
- * existing entry (including DIR* for directory FDs) before overwriting. Returns
- * -1 if out of range.
+ * existing entry (including DIR* for directory FDs) before overwriting.
+ *
+ * Returns -1 if out of range.
  */
 int fd_alloc_at(int fd, int type, int host_fd, void (*cleanup)(int))
 {
@@ -236,9 +240,9 @@ int fd_alloc_at(int fd, int type, int host_fd, void (*cleanup)(int))
     if (fd >= rlimit_nofile_cur)
         return -1;
 
-    /* Snapshot old slot state under fd_lock, then replace atomically.
-     * Cleanup happens AFTER releasing fd_lock to avoid lock ordering
-     * violation: cleanup functions acquire sfd_lock/inotify_lock.
+    /* Snapshot old slot state under fd_lock, then replace atomically. Cleanup
+     * happens AFTER releasing fd_lock to avoid lock ordering violation: cleanup
+     * functions acquire sfd_lock/inotify_lock.
      */
     fd_entry_t old = {.type = FD_CLOSED};
 
@@ -271,17 +275,16 @@ int fd_alloc_at_relaxed(int fd, int type, int host_fd, void (*cleanup)(int))
     return fd;
 }
 
-/* Internal: mark fd closed with fd_lock already held.
- * Clear host_fd and dir BEFORE marking the slot free in the bitmap.
- * Otherwise another thread could fd_alloc() this slot, populate it
- * with a new host_fd/dir, and then the current stale writes would corrupt
- * the new entry.
+/* Internal: mark fd closed with fd_lock already held. Clear host_fd and dir
+ * BEFORE marking the slot free in the bitmap. Otherwise another thread could
+ * fd_alloc() this slot, populate it with a new host_fd/dir, and then the
+ * current stale writes would corrupt the new entry.
  */
 void fd_mark_closed_unlocked(int fd)
 {
     /* Clear before publishing FD_CLOSED/free. The EL1 urandom read fast path
-     * intentionally avoids fd_lock, so it must not observe a stale urandom
-     * bit after this slot has become invalid or reusable.
+     * intentionally avoids fd_lock, so it must not observe a stale urandom bit
+     * after this slot has become invalid or reusable.
      */
     shim_globals_mark_urandom_fd(fd, false);
     fd_table[fd].type = FD_CLOSED;
@@ -300,8 +303,10 @@ void fd_mark_closed(int fd)
     pthread_mutex_unlock(&fd_lock);
 }
 
-/* Snapshot fd_table[fd] into *out and optionally close it. Caller must
- * hold fd_lock. Returns true if the slot was open, false if closed.
+/* Snapshot fd_table[fd] into *out and optionally close it. Caller must hold
+ * fd_lock.
+ *
+ * Returns true if the slot was open, false if closed.
  */
 static bool fd_snapshot_locked(int fd, fd_entry_t *out, bool close_it)
 {
@@ -313,10 +318,12 @@ static bool fd_snapshot_locked(int fd, fd_entry_t *out, bool close_it)
     return true;
 }
 
-/* Atomically snapshot an fd entry and mark it closed. Returns true if the
- * slot was open (snapshot written to *out), false if already closed. This
- * eliminates the TOCTOU race where two concurrent sys_close() calls
- * both snapshot the same open entry and double-close the host fd.
+/* Atomically snapshot an fd entry and mark it closed.
+ *
+ * Returns true if the slot was open (snapshot written to *out), false if
+ * already closed. This eliminates the TOCTOU race where two concurrent
+ * sys_close() calls both snapshot the same open entry and double-close the host
+ * fd.
  */
 bool fd_snapshot_and_close(int fd, fd_entry_t *out)
 {
@@ -353,10 +360,11 @@ bool fd_close_regular_relaxed(int fd, int *host_fd_out)
     return true;
 }
 
-/* Look up a guest FD. Returns host FD or -1 if invalid.
- * WARNING: unsafe for concurrent use; a concurrent close() can
- * invalidate the returned host fd between this call and use.
- * For race-prone paths, use fd_snapshot() or fd_to_host_dup().
+/* Look up a guest FD.
+ *
+ * Returns host FD or -1 if invalid. WARNING: unsafe for concurrent use; a
+ * concurrent close() can invalidate the returned host fd between this call and
+ * use. For race-prone paths, use fd_snapshot() or fd_to_host_dup().
  */
 int fd_to_host(int guest_fd)
 {
@@ -367,8 +375,10 @@ int fd_to_host(int guest_fd)
     return fd_table[guest_fd].host_fd;
 }
 
-/* Snapshot an fd entry under fd_lock. Returns true if the slot was open
- * (entry copied to *out), false if closed or out of range.
+/* Snapshot an fd entry under fd_lock.
+ *
+ * Returns true if the slot was open (entry copied to *out), false if closed or
+ * out of range.
  */
 bool fd_snapshot(int guest_fd, fd_entry_t *out)
 {
@@ -414,10 +424,10 @@ void fd_publish_linux_flags(int guest_fd, int linux_flags)
     pthread_mutex_unlock(&fd_lock);
 }
 
-/* Sized to cover all FD_* constants in abi.h plus a small headroom. Indexed
- * by type. Each slot defaults to NULL (no per-type cleanup). Modules that
- * own a type call fd_register_cleanup() at init time; dup and fork-restore
- * paths read back the binding via fd_cleanup_for_type().
+/* Sized to cover all FD_* constants in abi.h plus a small headroom. Indexed by
+ * type. Each slot defaults to NULL (no per-type cleanup). Modules that own a
+ * type call fd_register_cleanup() at init time; dup and fork-restore paths read
+ * back the binding via fd_cleanup_for_type().
  */
 #define FD_TYPE_REGISTRY_SIZE 32
 static void (*fd_type_cleanup[FD_TYPE_REGISTRY_SIZE])(int);
@@ -436,10 +446,12 @@ void (*fd_cleanup_for_type(int type))(int)
     return fd_type_cleanup[type];
 }
 
-/* Look up a guest FD and return a dup'd host fd that the caller owns.
- * The dup is performed under fd_lock so that close() on another thread
- * cannot invalidate the host fd between lookup and dup. Caller must
- * close the returned fd when done. Returns -1 on failure.
+/* Look up a guest FD and return a dup'd host fd that the caller owns. The dup
+ * is performed under fd_lock so that close() on another thread cannot
+ * invalidate the host fd between lookup and dup. Caller must close the returned
+ * fd when done.
+ *
+ * Returns -1 on failure.
  */
 int fd_to_host_dup(int guest_fd)
 {
@@ -457,12 +469,12 @@ int fd_to_host_dup(int guest_fd)
 
 /* FD cleanup. */
 
-/* Release all type-specific resources for a closed FD entry.
- * Caller must have already removed the entry from fd_table (via
- * fd_snapshot_and_close or fd_mark_closed). Does NOT hold fd_lock.
+/* Release all type-specific resources for a closed FD entry. Caller must have
+ * already removed the entry from fd_table (via fd_snapshot_and_close or
+ * fd_mark_closed). Does NOT hold fd_lock.
  *
- * This consolidates the cleanup logic that was previously duplicated
- * in sys_close, close_guest_fd_snapshot, and the execve CLOEXEC loop.
+ * This consolidates the cleanup logic that was previously duplicated in
+ * sys_close, close_guest_fd_snapshot, and the execve CLOEXEC loop.
  */
 void fd_cleanup_entry(int guest_fd, const fd_entry_t *snap)
 {
@@ -479,8 +491,8 @@ void fd_cleanup_entry(int guest_fd, const fd_entry_t *snap)
         snap->cleanup(guest_fd);
 
     /* Drop any /dev/ptmx keepalive slave fd paired with this host fd. Must
-     * happen before close(snap->host_fd) because the side table is keyed by
-     * the still-live host master fd. No-op for non-pty fds.
+     * happen before close(snap->host_fd) because the side table is keyed by the
+     * still-live host master fd. No-op for non-pty fds.
      */
     proc_pty_close_keepalive(snap->host_fd);
 

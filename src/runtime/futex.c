@@ -85,10 +85,9 @@ static _Atomic int futex_interrupt_requested = 0;
  *   0-30: TID of lock holder (0 = unlocked)
  *   31:   FUTEX_WAITERS (at least one thread is blocked)
  *
- * Linux kernel: FUTEX_WAITERS=0x80000000 (bit 31),
- * FUTEX_OWNER_DIED=0x40000000 (bit 30), FUTEX_TID_MASK=0x3FFFFFFF.
- * FUTEX_OWNER_DIED=0x40000000 (bit 30) is set by robust_list_walk
- * on thread exit. FUTEX_TID_MASK is 30 bits.
+ * Linux kernel: FUTEX_WAITERS=0x80000000 (bit 31), FUTEX_OWNER_DIED=0x40000000
+ * (bit 30), FUTEX_TID_MASK=0x3FFFFFFF. FUTEX_OWNER_DIED=0x40000000 (bit 30) is
+ * set by robust_list_walk on thread exit. FUTEX_TID_MASK is 30 bits.
  */
 #define FUTEX_TID_MASK 0x3FFFFFFFU
 #define FUTEX_OWNER_DIED 0x40000000U
@@ -97,21 +96,21 @@ static _Atomic int futex_interrupt_requested = 0;
 /* Address-wait helper state.
  *
  * os_sync_available is set in futex_init() when the runtime supports the
- * os_sync_wait_on_address family (macOS 14.4+). Plain FUTEX_WAIT remains on
- * the bucket path until Darwin can preserve Linux's -EAGAIN race semantics, so
+ * os_sync_wait_on_address family (macOS 14.4+). Plain FUTEX_WAIT remains on the
+ * bucket path until Darwin can preserve Linux's -EAGAIN race semantics, so
  * os_sync_wait_enabled stays false for now and the wake-side helper stays
  * dormant too.
  *
  * The wait quantum is capped at 100 ms so proc_exit_group_requested() and
  * futex_interrupt_pending() get noticed promptly without a process-wide
- * broadcast channel. EINTR is only returned when an actual deliverable
- * signal is queued for this thread (confirmed under sig_lock via
- * signal_pending(), not the atomic hint, so that rt_sigprocmask masking the
- * queued signal cannot leave a stale-true edge behind), or when a guest
- * itimer expires under the poll loop's signal_check_timer poke. Earlier
- * revisions returned -EINTR after one unconditional second of waiting to
- * unblock shutdown-stalled multi-threaded runtimes, but that broke POSIX
- * sem_wait callers that do not retry on EINTR (e.g. foot's render worker).
+ * broadcast channel. EINTR is only returned when an actual deliverable signal
+ * is queued for this thread (confirmed under sig_lock via signal_pending(), not
+ * the atomic hint, so that rt_sigprocmask masking the queued signal cannot
+ * leave a stale-true edge behind), or when a guest itimer expires under the
+ * poll loop's signal_check_timer poke. Earlier revisions returned -EINTR after
+ * one unconditional second of waiting to unblock shutdown-stalled
+ * multi-threaded runtimes, but that broke POSIX sem_wait callers that do not
+ * retry on EINTR (e.g. foot's render worker).
  */
 #if ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS
 static bool os_sync_available;
@@ -154,8 +153,8 @@ static void futex_waiter_notify_group(futex_waiter_t *w)
     pthread_mutex_unlock(w->group_lock);
 }
 
-/* One bucket in the hash table. Protected by its own mutex.
- * Lock order: 7 (leaf locks, index-ordered when two acquired).
+/* One bucket in the hash table. Protected by its own mutex. Lock order: 7 (leaf
+ * locks, index-ordered when two acquired).
  */
 typedef struct {
     pthread_mutex_t lock;
@@ -179,8 +178,8 @@ static inline bool futex_uaddr_is_aligned(uint64_t uaddr)
 }
 
 /* Unlink a waiter from its bucket's singly-linked list. Caller must hold
- * b->lock. Silently returns if the waiter is not in the list (already
- * unlinked by a wake/requeue).
+ * b->lock. Silently returns if the waiter is not in the list (already unlinked
+ * by a wake/requeue).
  */
 static void bucket_unlink_locked(futex_bucket_t *b, const futex_waiter_t *w)
 {
@@ -227,8 +226,8 @@ int futex_interrupt_pending(void)
  * next blocking wait, mirroring how real Linux delivers SIGCHLD. Without the
  * clear, the flag stays set and every subsequent epoll_pwait, ppoll, futex
  * wait, etc. spins on EINTR until execve clears it -- in foot's case it never
- * does, and the spinning main thread eventually faults in a code path the
- * guest never expects to reach.
+ * does, and the spinning main thread eventually faults in a code path the guest
+ * never expects to reach.
  */
 int futex_interrupt_consume(void)
 {
@@ -242,10 +241,10 @@ int futex_interrupt_consume(void)
  * delta_sec = lts.tv_sec - mono.tv_sec) cannot overflow even for adversarial
  * inputs. INT64_MAX / 4 leaves four-way headroom for any pairwise sum or
  * difference and still allows absolute CLOCK_REALTIME deadlines billions of
- * years into the future, which comfortably covers the year-2038/2106
- * envelope. Linux saturates at KTIME_MAX (INT64_MAX ns ~ 292 years) on
- * conversion to ktime_t; this code stays in struct timespec so it does not
- * need that conversion, only the cap.
+ * years into the future, which comfortably covers the year-2038/2106 envelope.
+ * Linux saturates at KTIME_MAX (INT64_MAX ns ~ 292 years) on conversion to
+ * ktime_t; this code stays in struct timespec so it does not need that
+ * conversion, only the cap.
  */
 #define FUTEX_TIMESPEC_SEC_MAX (INT64_MAX / 4)
 
@@ -255,9 +254,9 @@ static int linux_timespec_is_valid(const linux_timespec_t *lts)
            lts->tv_nsec >= 0 && lts->tv_nsec < 1000000000L;
 }
 
-/* Convert a Linux guest timespec to an absolute struct timespec deadline.
- * For FUTEX_WAIT (relative timeout), adds the duration to the current time.
- * For FUTEX_WAIT_BITSET (absolute timeout), uses the value directly.
+/* Convert a Linux guest timespec to an absolute struct timespec deadline. For
+ * FUTEX_WAIT (relative timeout), adds the duration to the current time. For
+ * FUTEX_WAIT_BITSET (absolute timeout), uses the value directly.
  * Returns 0 on success, -1 if the guest pointer is invalid, -2 if the guest
  * timespec is malformed.
  */
@@ -324,8 +323,8 @@ static uint64_t futex_remaining_ns(const struct timespec *deadline,
         return 0;
     if (delta_sec >= 1)
         return cap_ns;
-    /* delta_sec == 0 and delta_nsec > 0; the borrow above guarantees
-     * delta_nsec < NSEC_PER_SEC.
+    /* delta_sec == 0 and delta_nsec > 0; the borrow above guarantees delta_nsec
+     * < NSEC_PER_SEC.
      */
     uint64_t rem = (uint64_t) delta_nsec;
     return rem < cap_ns ? rem : cap_ns;
@@ -516,8 +515,8 @@ static int64_t futex_wait(guest_t *g,
 
     pthread_mutex_lock(&b->lock);
 
-    /* Atomically read the futex word while holding the bucket lock.
-     * If it does not match, return EAGAIN immediately.
+    /* Atomically read the futex word while holding the bucket lock. If it does
+     * not match, return EAGAIN immediately.
      */
     uint32_t *word = (uint32_t *) guest_ptr(g, uaddr);
     if (!word) {
@@ -570,10 +569,10 @@ static int64_t futex_wait(guest_t *g,
         /* Lock-order: bucket lock(7) outranks sig_lock(4), so signal_pending()
          * and signal_check_timer() may only be called once the bucket lock has
          * been released. Drop it, poke the itimers, observe queued signals
-         * under sig_lock (the slow-path confirm avoids the stale-true edge
-         * that the atomic hint can carry after rt_sigprocmask masks the
-         * queued signal), then re-acquire and re-check waiter.woken in case
-         * a wake landed in the window.
+         * under sig_lock (the slow-path confirm avoids the stale-true edge that
+         * the atomic hint can carry after rt_sigprocmask masks the queued
+         * signal), then re-acquire and re-check waiter.woken in case a wake
+         * landed in the window.
          */
         pthread_mutex_unlock(&b->lock);
         signal_check_timer();
@@ -583,10 +582,10 @@ static int64_t futex_wait(guest_t *g,
         if (__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE))
             break;
 
-        /* Return EINTR only when a real deliverable signal is queued for
-         * this thread. POSIX callers (e.g. glibc sem_wait, foot's render
-         * worker) often do not retry on EINTR, so synthetic spurious
-         * wakeups cannot be issued here.
+        /* Return EINTR only when a real deliverable signal is queued for this
+         * thread. POSIX callers (e.g. glibc sem_wait, foot's render worker)
+         * often do not retry on EINTR, so synthetic spurious wakeups cannot be
+         * issued here.
          */
         if (sig_ready) {
             ret = -LINUX_EINTR;
@@ -638,9 +637,9 @@ static int64_t futex_wait(guest_t *g,
     return ret;
 }
 
-/* FUTEX_WAKE / FUTEX_WAKE_BITSET: wake up to val waiters at uaddr.
- * Woken waiters are unlinked from the bucket list so subsequent operations do
- * not count them as still-sleeping entries.
+/* FUTEX_WAKE / FUTEX_WAKE_BITSET: wake up to val waiters at uaddr. Woken
+ * waiters are unlinked from the bucket list so subsequent operations do not
+ * count them as still-sleeping entries.
  *
  * If the Darwin address-wait path is ever enabled again, drain any kernel-side
  * waiters at the same address up to the remaining budget so a wake site that
@@ -792,13 +791,13 @@ static int64_t futex_requeue(guest_t *g,
     /* If the Darwin address-wait path is enabled again, drain the remaining
      * wake + requeue budget against kernel-side waiters at uaddr. The kernel
      * API has no facility for migrating waiters between addresses, so the
-     * requeue portion degrades into a wake at uaddr: waiters return to
-     * userland and either re-acquire what they actually need (typically the
-     * mutex pthread_cond_broadcast wanted to requeue onto) or re-wait.
-     * Widen the cap to uint64_t before adding so INT_MAX + INT_MAX fits,
-     * then clamp to UINT32_MAX inside futex_os_sync_wake_n; this preserves
-     * the INT_MAX "wake all" sentinel without overflowing the syscall return
-     * contract (woken + requeued must not exceed wake_count + requeue_count).
+     * requeue portion degrades into a wake at uaddr: waiters return to userland
+     * and either re-acquire what they actually need (typically the mutex
+     * pthread_cond_broadcast wanted to requeue onto) or re-wait. Widen the cap
+     * to uint64_t before adding so INT_MAX + INT_MAX fits, then clamp to
+     * UINT32_MAX inside futex_os_sync_wake_n; this preserves the INT_MAX "wake
+     * all" sentinel without overflowing the syscall return contract (woken +
+     * requeued must not exceed wake_count + requeue_count).
      */
     uint64_t remaining_wake = (uint64_t) wake_count - (uint64_t) woken;
     uint64_t remaining_requeue = (uint64_t) requeue_count - (uint64_t) requeued;
@@ -811,9 +810,9 @@ static int64_t futex_requeue(guest_t *g,
 /* FUTEX_WAKE_OP: atomically modify *uaddr2, wake val waiters at uaddr, then
  * conditionally wake val2 waiters at uaddr2 based on the old value.
  *
- * The op argument encodes: operation on *uaddr2 and comparison predicate.
- * Used by glibc's pthread_cond_signal; musl does NOT use this, but futex
- * emulation implements it for compatibility with glibc-linked binaries.
+ * The op argument encodes: operation on *uaddr2 and comparison predicate. Used
+ * by glibc's pthread_cond_signal; musl does NOT use this, but futex emulation
+ * implements it for compatibility with glibc-linked binaries.
  *
  * val3 encodes both the operation and comparison:
  *   bits 28-31: op code (SET=0, ADD=1, OR=2, ANDN=3, XOR=4)
@@ -847,13 +846,12 @@ static int64_t futex_wake_op(guest_t *g,
         pthread_mutex_lock(&b1->lock);
     }
 
-    /* Decode operation and comparison from val3.
-     * Bits 31-28: operation (bit 31 = OPARG_SHIFT flag, bits 30-28 = op)
-     * Bits 27-24: comparison operator
-     * Bits 23-12: op_arg (operand for modify, 12-bit signed)
-     * Bits 11-0:  cmp_arg (operand for compare, 12-bit signed)
-     * Both op_arg and cmp_arg are sign-extended from 12 bits to match
-     * the Linux kernel's sign_extend32() in futex_atomic_op_inuser().
+    /* Decode operation and comparison from val3. Bits 31-28: operation (bit 31
+     * = OPARG_SHIFT flag, bits 30-28 = op) Bits 27-24: comparison operator Bits
+     * 23-12: op_arg (operand for modify, 12-bit signed) Bits 11-0: cmp_arg
+     * (operand for compare, 12-bit signed) Both op_arg and cmp_arg are
+     * sign-extended from 12 bits to match the Linux kernel's sign_extend32() in
+     * futex_atomic_op_inuser().
      */
     unsigned wake_op = (val3 >> 28) & 0xF;
     unsigned wake_cmp = (val3 >> 24) & 0xF;
@@ -877,9 +875,9 @@ static int64_t futex_wake_op(guest_t *g,
         return -LINUX_EFAULT;
     }
 
-    /* Atomic read-modify-write on *uaddr2 using CAS loop.
-     * Matches Linux kernel's futex_atomic_op_inuser() semantics:
-     * the modification must be atomic w.r.t. concurrent guest stores.
+    /* Atomic read-modify-write on *uaddr2 using CAS loop. Matches Linux
+     * kernel's futex_atomic_op_inuser() semantics: the modification must be
+     * atomic w.r.t. concurrent guest stores.
      */
     uint32_t old_val, new_val;
     do {
@@ -1152,8 +1150,8 @@ static int64_t futex_lock_pi(guest_t *g, uint64_t uaddr, uint64_t timeout_gva)
                     return -LINUX_ETIMEDOUT;
                 }
             } else {
-                /* No timeout: poll every 100ms to check exit_group
-                 * and dead lock owners.
+                /* No timeout: poll every 100ms to check exit_group and dead
+                 * lock owners.
                  */
                 struct timespec poll_ts;
                 timespec_deadline_in_ms(&poll_ts, 100);
@@ -1168,9 +1166,9 @@ static int64_t futex_lock_pi(guest_t *g, uint64_t uaddr, uint64_t timeout_gva)
                 }
 
                 /* Check if the owner thread has died while the waiter was
-                 * waiting. If so, clear the lock and retry.
-                 * Use thread_tid_alive (lock-free) instead of thread_find to
-                 * avoid lock order inversion: bucket lock(7) is held here, and
+                 * waiting. If so, clear the lock and retry. Use
+                 * thread_tid_alive (lock-free) instead of thread_find to avoid
+                 * lock order inversion: bucket lock(7) is held here, and
                  * thread_find acquires thread_lock(5).
                  */
                 uint32_t check = __atomic_load_n(word, __ATOMIC_SEQ_CST);
@@ -1211,8 +1209,8 @@ static int64_t futex_lock_pi(guest_t *g, uint64_t uaddr, uint64_t timeout_gva)
     }
 }
 
-/* FUTEX_TRYLOCK_PI: Non-blocking version of LOCK_PI.
- * CAS 0 -> TID; if the lock is held, return -EAGAIN immediately.
+/* FUTEX_TRYLOCK_PI: Non-blocking version of LOCK_PI. CAS 0 -> TID; if the lock
+ * is held, return -EAGAIN immediately.
  */
 static int64_t futex_trylock_pi(guest_t *g, uint64_t uaddr)
 {
@@ -1239,8 +1237,8 @@ static int64_t futex_trylock_pi(guest_t *g, uint64_t uaddr)
 /* FUTEX_UNLOCK_PI: Release the PI lock at uaddr and wake one waiter.
  *
  * Called by the lock owner when FUTEX_WAITERS is set (slow unlock path).
- * Atomically clear the word to 0 (releasing the lock + clearing WAITERS),
- * then wake one blocked waiter so it can retry CAS(0->TID) acquisition.
+ * Atomically clear the word to 0 (releasing the lock + clearing WAITERS), then
+ * wake one blocked waiter so it can retry CAS(0->TID) acquisition.
  */
 static int64_t futex_unlock_pi(guest_t *g, uint64_t uaddr)
 {
@@ -1259,8 +1257,8 @@ static int64_t futex_unlock_pi(guest_t *g, uint64_t uaddr)
     if ((cur & FUTEX_TID_MASK) != tid)
         return -LINUX_EPERM;
 
-    /* Atomically release: set word to 0 (clear TID + WAITERS flag).
-     * Use CAS loop in case another thread is concurrently setting WAITERS.
+    /* Atomically release: set word to 0 (clear TID + WAITERS flag). Use CAS
+     * loop in case another thread is concurrently setting WAITERS.
      */
     for (;;) {
         uint32_t v = __atomic_load_n(word, __ATOMIC_SEQ_CST);
@@ -1361,18 +1359,17 @@ int futex_wake_one(guest_t *g, uint64_t uaddr)
 
 /* Unlink a waiter from whichever bucket it currently sits in, with retry on
  * concurrent requeue. The waiter's struct lives on the calling thread's stack;
- * leaving a dangling reference behind is a real host-safety bug because a
- * later wake at the new uaddr would dereference it. The regular futex_wait
+ * leaving a dangling reference behind is a real host-safety bug because a later
+ * wake at the new uaddr would dereference it. The regular futex_wait
  * self-dequeue path handles the same race the same way.
  *
  * Termination: on each iteration we either find w in the bucket (unlink and
- * return), or observe w->woken==1 under the bucket lock (the wake path
- * unlinks before storing woken with RELEASE under the bucket lock; once we
- * acquire that bucket lock we synchronize with it), or determine w was
- * requeued elsewhere (re-hash and retry). Forward progress is guaranteed
- * because every requeue and every wake also holds bucket locks, so once we
- * take the lock for the bucket that hashes w's current uaddr, no concurrent
- * mover can step around us.
+ * return), or observe w->woken==1 under the bucket lock (the wake path unlinks
+ * before storing woken with RELEASE under the bucket lock; once we acquire that
+ * bucket lock we synchronize with it), or determine w was requeued elsewhere
+ * (re-hash and retry). Forward progress is guaranteed because every requeue and
+ * every wake also holds bucket locks, so once we take the lock for the bucket
+ * that hashes w's current uaddr, no concurrent mover can step around us.
  */
 static void waitv_unlink(futex_waiter_t *w)
 {
@@ -1394,8 +1391,8 @@ static void waitv_unlink(futex_waiter_t *w)
         pthread_mutex_unlock(&b->lock);
         if (found || was_woken)
             return;
-        /* w must have been requeued to another bucket while we hashed.
-         * Re-read uaddr and try again.
+        /* w must have been requeued to another bucket while we hashed. Re-read
+         * uaddr and try again.
          */
     }
 }
@@ -1599,10 +1596,10 @@ int64_t sys_futex_waitv(guest_t *g,
     for (int i = nbuckets - 1; i >= 0; i--)
         pthread_mutex_unlock(&bucket_ptrs[i]->lock);
 
-    /* All enqueued. Block on shared.cond until any wake site signals it.
-     * The bounded sleep (capped at 500ms or the user deadline, whichever is
-     * sooner) gives proc_exit_group_requested() and timeout checks a chance to
-     * run if the cond_signal never arrives.
+    /* All enqueued. Block on shared.cond until any wake site signals it. The
+     * bounded sleep (capped at 500ms or the user deadline, whichever is sooner)
+     * gives proc_exit_group_requested() and timeout checks a chance to run if
+     * the cond_signal never arrives.
      */
     int result_idx = -1;
     pthread_mutex_lock(&shared.lock);
@@ -1720,28 +1717,28 @@ void robust_list_walk(guest_t *g, thread_entry_t *t)
     int64_t futex_offset = (int64_t) head[1];
     uint64_t pending = head[2]; /* list_op_pending */
 
-    /* The head of the list is at &head->list (which is head_gva itself).
-     * Walk entries until the walk loops back to the head pointer.
+    /* The head of the list is at &head->list (which is head_gva itself). Walk
+     * entries until the walk loops back to the head pointer.
      */
     uint64_t head_entry = head_gva; /* address of head->list field */
     int count = 0;
 
     while (list_ptr != head_entry && count < ROBUST_LIST_LIMIT) {
-        /* The futex word is at list_ptr + futex_offset.
-         * Use unsigned add to avoid signed overflow UB; skip entries where the
-         * result wraps past the guest address space.
+        /* The futex word is at list_ptr + futex_offset. Use unsigned add to
+         * avoid signed overflow UB; skip entries where the result wraps past
+         * the guest address space.
          */
         uint64_t futex_gva;
         if (futex_offset >= 0)
             futex_gva = list_ptr + (uint64_t) futex_offset;
         else
             futex_gva = list_ptr - (uint64_t) (-futex_offset);
-        /* Canonical user-VA range check (bits 47:0). Anything with bit 63
-         * set is kernel-VA territory and is never a valid futex address.
-         * The previous primary-buffer-only check (futex_gva < ipa_base +
+        /* Canonical user-VA range check (bits 47:0). Anything with bit 63 set
+         * is kernel-VA territory and is never a valid futex address. The
+         * previous primary-buffer-only check (futex_gva < ipa_base +
          * guest_size) silently dropped rosetta's high-VA futexes; the
-         * subsequent guest_read_small / guest_write_small calls do the
-         * actual mapping check via the page-table walker.
+         * subsequent guest_read_small / guest_write_small calls do the actual
+         * mapping check via the page-table walker.
          */
         if (futex_gva > 0x0000FFFFFFFFFFFFULL ||
             !futex_uaddr_is_aligned(futex_gva)) {
@@ -1796,8 +1793,8 @@ void robust_list_walk(guest_t *g, thread_entry_t *t)
         else
             futex_gva = pending - (uint64_t) (-futex_offset);
         /* Canonical user-VA + alignment only; guest_read_small below is the
-         * actual reachability test, so rosetta high-VA robust futexes are
-         * not silently skipped (was: futex_gva >= ipa_base + guest_size).
+         * actual reachability test, so rosetta high-VA robust futexes are not
+         * silently skipped (was: futex_gva >= ipa_base + guest_size).
          */
         if (futex_gva > 0x0000FFFFFFFFFFFFULL ||
             !futex_uaddr_is_aligned(futex_gva))

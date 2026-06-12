@@ -4,10 +4,10 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Standalone native macOS test program (NOT a guest binary). Uses HVF
- * directly to create a VM with two vCPUs sharing the same guest physical
- * memory, page tables, and shim binary. Validates the fundamentals needed
- * for Linux clone(CLONE_THREAD) support in elfuse.
+ * Standalone native macOS test program (NOT a guest binary). Uses HVF directly
+ * to create a VM with two vCPUs sharing the same guest physical memory, page
+ * tables, and shim binary. Validates the fundamentals needed for Linux
+ * clone(CLONE_THREAD) support in elfuse.
  *
  * Tests:
  *   1. Basic dual vCPU creation: can hv_vcpu_create() be called twice?
@@ -16,8 +16,8 @@
  *   4. Register preservation: are callee-saved regs safe across SVCs?
  *   5. TLBI broadcast: does TLBI VMALLE1IS propagate across vCPUs?
  *
- * Build: clang -O2 -framework Hypervisor -arch arm64 -Ibuild -o test $<
- * Run:   codesign --entitlements entitlements.plist -f -s - test && ./test
+ * Build: clang -O2 -framework Hypervisor -arch arm64 -Ibuild -o test $< Run:
+ * codesign --entitlements entitlements.plist -f -s - test && ./test
  */
 
 #include <Hypervisor/Hypervisor.h>
@@ -114,8 +114,8 @@
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
-/* Page table pool allocator. One instance per test since each test creates
- * a fresh VM.
+/* Page table pool allocator. One instance per test since each test creates a
+ * fresh VM.
  */
 typedef struct {
     void *host_base;  /* Host mmap pointer */
@@ -266,10 +266,11 @@ typedef struct {
     uint64_t x0, x1, x8; /* Registers at exit */
 } vcpu_exit_t;
 
-/* Run the vCPU until it exits via HVC #0 or HVC #5. Handles HVC #4
- * (sysreg set) internally, same as elfuse's run loop. Returns the exit
- * reason and register values. max_hvc5 limits how many HVC #5 exits
- * to handle before returning (0 = stop on first HVC #5).
+/* Run the vCPU until it exits via HVC #0 or HVC #5. Handles HVC #4 (sysreg set)
+ * internally, same as elfuse's run loop.
+ *
+ * Returns the exit reason and register values. max_hvc5 limits how many HVC #5
+ * exits to handle before returning (0 = stop on first HVC #5).
  */
 static int run_vcpu(hv_vcpu_t vcpu,
                     hv_vcpu_exit_t *vexit,
@@ -289,8 +290,8 @@ static int run_vcpu(hv_vcpu_t vcpu,
                 uint16_t imm = vexit->exception.syndrome & 0xFFFF;
 
                 if (imm == 4) {
-                    /* HVC #4: set sysreg (from shim _start). Same encoding
-                     * as elfuse's run loop: X0 = index into hvc4_sysregs.
+                    /* HVC #4: set sysreg (from shim _start). Same encoding as
+                     * elfuse's run loop: X0 = index into hvc4_sysregs.
                      */
                     static const hv_sys_reg_t hvc4_sysregs[] = {
                         HV_SYS_REG_VBAR_EL1,  /* 0 */
@@ -384,8 +385,8 @@ typedef struct {
     char name[16];        /* For debug messages */
 } thread_ctx_t;
 
-/* Thread function: create vCPU, configure, run, record exits.
- * HVF requires vCPU operations on the creating thread.
+/* Thread function: create vCPU, configure, run, record exits. HVF requires vCPU
+ * operations on the creating thread.
  *
  * Handles HVC #5 exits:
  *   X8=93  -> treat as exit (like Linux exit syscall), stop running
@@ -416,14 +417,14 @@ static void *vcpu_thread(void *arg)
         return NULL;
     }
 
-    /* Run until exit. run_vcpu handles HVC #4 internally.
-     * The handler handles HVC #5 here: marker SVCs get resumed, X8=93 stops.
+    /* Run until exit. run_vcpu handles HVC #4 internally. The handler handles
+     * HVC #5 here: marker SVCs get resumed, X8=93 stops.
      */
     int markers_left = ctx->max_hvc5;
     for (;;) {
         vcpu_exit_t ex;
-        /* Tell run_vcpu to return on every HVC #5 (max_hvc5=0) so
-         * The handler can inspect X8 and decide whether to resume or stop.
+        /* Tell run_vcpu to return on every HVC #5 (max_hvc5=0) so the handler
+         * can inspect X8 and decide whether to resume or stop.
          */
         int rc = run_vcpu(vcpu, vexit, &ex, 0);
 
@@ -474,9 +475,9 @@ static int vm_create(vm_state_t *vm)
         return -1;
     vm->pt_next = PT_POOL_BASE;
 
-    /* Query max IPA size and configure VM (matches guest.c pattern).
-     * The test uses only 16MiB, so any IPA size works; this is for
-     * API consistency with elfuse's production code path.
+    /* Query max IPA size and configure VM (matches guest.c pattern). The test
+     * uses only 16MiB, so any IPA size works; this is for API consistency with
+     * elfuse's production code path.
      */
     uint32_t max_ipa = 0;
     hv_vm_config_get_max_ipa_size(&max_ipa);
@@ -519,11 +520,11 @@ static void vm_destroy(vm_state_t *vm)
 
 /* TEST 1: Basic Dual vCPU Creation
  *
- * Can hv_vcpu_create() be called twice in one VM? Can both vCPUs
- * execute concurrently on separate host threads?
+ * Can hv_vcpu_create() be called twice in one VM? Can both vCPUs execute
+ * concurrently on separate host threads?
  *
- * Guest code: mov x0, #0; mov x8, #93; svc #0
- * Both vCPUs run the same trivial program, exit via SVC #0 (X8=93).
+ * Guest code: mov x0, #0; mov x8, #93; svc #0. Both vCPUs run the same trivial
+ * program and exit via SVC #0 (X8=93).
  */
 
 static int test1_basic_dual_vcpu(void)
@@ -600,8 +601,8 @@ static int test1_basic_dual_vcpu(void)
 
 /* TEST 2: Shared Memory Writes
  *
- * vCPU-A writes 0xAA to DATA_BASE+0, vCPU-B writes 0xBB to DATA_BASE+8.
- * Host verifies both values after both vCPUs exit.
+ * vCPU-A writes 0xAA to DATA_BASE+0, vCPU-B writes 0xBB to DATA_BASE+8. Host
+ * verifies both values after both vCPUs exit.
  */
 
 static int test2_shared_memory(void)
@@ -704,9 +705,9 @@ static int test2_shared_memory(void)
 
 /* TEST 3: Separate SP_EL1 / Multiple SVCs
  *
- * Each vCPU does two SVCs: a marker SVC (X8=0xAAAA / 0xBBBB) then
- * an exit SVC (X8=93). Exercises the shim's 256-byte SP_EL1 stack
- * frame twice per vCPU, concurrently.
+ * Each vCPU does two SVCs: a marker SVC (X8=0xAAAA / 0xBBBB) then an exit SVC
+ * (X8=93). Exercises the shim's 256-byte SP_EL1 stack frame twice per vCPU,
+ * concurrently.
  */
 
 static int test3_separate_sp_el1(void)
@@ -804,10 +805,10 @@ static int test3_separate_sp_el1(void)
 
 /* TEST 4: Register Preservation
  *
- * Each vCPU sets X19=0x1234, X20=0x5678, does SVC (marker), then
- * reports X19/X20 via X0/X1 in a second SVC. Verifies the shim's
- * stp/ldp save/restore on per-vCPU SP_EL1 does not corrupt callee-
- * saved registers when two vCPUs run concurrently.
+ * Each vCPU sets X19=0x1234, X20=0x5678, does SVC (marker), then reports
+ * X19/X20 via X0/X1 in a second SVC. Verifies the shim's stp/ldp save/restore
+ * on per-vCPU SP_EL1 does not corrupt callee- saved registers when two vCPUs
+ * run concurrently.
  */
 
 static int test4_register_preservation(void)
@@ -929,9 +930,9 @@ static int test4_register_preservation(void)
  *   5. vCPU-B starts, reads from 0x800000, reports value via SVC, exits
  *   6. Host verifies vCPU-B read 0xDEAD
  *
- * This test runs vCPUs SEQUENTIALLY (not concurrently) to isolate
- * the TLBI broadcast question: does vCPU-A's TLBI invalidate
- * vCPU-B's TLB when B starts later?
+ * This test runs vCPUs SEQUENTIALLY (not concurrently) to isolate the TLBI
+ * broadcast question: does vCPU-A's TLBI invalidate vCPU-B's TLB when B starts
+ * later?
  */
 
 static void *vcpu_thread_tlbi_a(void *arg)

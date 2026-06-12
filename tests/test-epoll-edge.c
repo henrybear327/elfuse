@@ -86,8 +86,8 @@ int main(void)
         close(epfd);
     }
 
-    /* Drain-to-EAGAIN consumes the edge: next epoll_wait returns 0
-     * with no new data. This is the canonical EPOLLET use pattern.
+    /* Drain-to-EAGAIN consumes the edge: next epoll_wait returns 0 with no new
+     * data. This is the canonical EPOLLET use pattern.
      */
     TEST("EPOLLET: drain-to-EAGAIN consumes edge");
     {
@@ -120,8 +120,8 @@ int main(void)
         close(epfd);
     }
 
-    /* New data after drain re-arms the edge. This proves edge transitions
-     * from not-readable to readable are observed.
+    /* New data after drain re-arms the edge. This proves edge transitions from
+     * not-readable to readable are observed.
      */
     TEST("EPOLLET: new edge after drain + new data");
     {
@@ -157,8 +157,8 @@ int main(void)
         close(epfd);
     }
 
-    /* EPOLLET on a SOCK_STREAM pair, the typical server path.
-     * Repeated drain-fill cycles, each producing exactly one edge.
+    /* EPOLLET on a SOCK_STREAM pair, the typical server path. Repeated
+     * drain-fill cycles, each producing exactly one edge.
      */
     TEST("EPOLLET: stream socket drain-fill cycles");
     {
@@ -198,8 +198,8 @@ int main(void)
         }
     }
 
-    /* EPOLLET on eventfd. Counter semantics: read() returns the
-     * accumulated count and resets to 0; that drain consumes the edge.
+    /* EPOLLET on eventfd. Counter semantics: read() returns the accumulated
+     * count and resets to 0; that drain consumes the edge.
      */
     TEST("EPOLLET: eventfd counter drain");
     {
@@ -233,8 +233,8 @@ int main(void)
         close(epfd);
     }
 
-    /* EPOLLET + EPOLLONESHOT: edge fires exactly once and stays armed
-     * until EPOLL_CTL_MOD re-arms.
+    /* EPOLLET + EPOLLONESHOT: edge fires exactly once and stays armed until
+     * EPOLL_CTL_MOD re-arms.
      */
     TEST("EPOLLET + EPOLLONESHOT");
     {
@@ -319,9 +319,9 @@ int main(void)
         close(epfd);
     }
 
-    /* EOF reports an edge: pipe write end closed -> EPOLLHUP set
-     * on the read end, observable through one EPOLLET wait. Require
-     * EPOLLHUP explicitly so a regression that drops it is caught.
+    /* EOF reports an edge: pipe write end closed -> EPOLLHUP set on the read
+     * end, observable through one EPOLLET wait. Require EPOLLHUP explicitly so
+     * a regression that drops it is caught.
      */
     TEST("EPOLLET: EOF / EPOLLHUP edge");
     {
@@ -343,9 +343,9 @@ int main(void)
         close(epfd);
     }
 
-    /* EPOLLRDHUP edge on socketpair half-close: peer shuts down its
-     * write side, the read side sees EPOLLRDHUP. Distinct from EPOLLHUP
-     * because the local write side is still functional.
+    /* EPOLLRDHUP edge on socketpair half-close: peer shuts down its write side,
+     * the read side sees EPOLLRDHUP. Distinct from EPOLLHUP because the local
+     * write side is still functional.
      */
     TEST("EPOLLET: EPOLLRDHUP on half-close");
     {
@@ -374,12 +374,12 @@ int main(void)
         }
     }
 
-    /* Multi-filter EPOLLONESHOT: register both EPOLLIN and EPOLLOUT.
-     * After EPOLLOUT fires (send buffer initially empty), the unfired
-     * EPOLLIN filter must NOT fire on a subsequent epoll_wait until
-     * EPOLL_CTL_MOD re-arms. Without the oneshot_armed guard in the
-     * wait result loop, kqueue's still-registered EVFILT_READ would
-     * leak through. Re-arm via MOD must then surface the pending IN.
+    /* Multi-filter EPOLLONESHOT: register both EPOLLIN and EPOLLOUT. After
+     * EPOLLOUT fires (send buffer initially empty), the unfired EPOLLIN filter
+     * must NOT fire on a subsequent epoll_wait until EPOLL_CTL_MOD re-arms.
+     * Without the oneshot_armed guard in the wait result loop, kqueue's
+     * still-registered EVFILT_READ would leak through. Re-arm via MOD must then
+     * surface the pending IN.
      */
     TEST("EPOLLET + EPOLLONESHOT: surviving filter stays disarmed");
     {
@@ -396,16 +396,16 @@ int main(void)
             };
             epoll_ctl(epfd, EPOLL_CTL_ADD, sv[0], &ev);
 
-            /* First wait: only EPOLLOUT is ready (send buffer empty,
-             * receive buffer empty).
+            /* First wait: only EPOLLOUT is ready (send buffer empty, receive
+             * buffer empty).
              */
             struct epoll_event out;
             int n = epoll_wait(epfd, &out, 1, 100);
             if (n != 1 || !(out.events & EPOLLOUT)) {
                 FAIL("EPOLLOUT did not fire first");
             } else {
-                /* Now make the read side ready. The disarmed fd must
-                 * stay silent until MOD re-arms.
+                /* Now make the read side ready. The disarmed fd must stay
+                 * silent until MOD re-arms.
                  */
                 write(sv[1], "x", 1);
                 n = epoll_wait(epfd, &out, 1, 50);
@@ -413,9 +413,9 @@ int main(void)
                     FAIL("EPOLLIN leaked through ONESHOT disarm");
                 } else {
                     /* Re-arm dropping OUT entirely. Pending EPOLLIN must
-                     * surface; EPOLLOUT must NOT, because MOD has to clean
-                     * up the surviving EVFILT_WRITE that ONESHOT did not
-                     * remove (only the firing filter was removed).
+                     * surface; EPOLLOUT must NOT, because MOD has to clean up
+                     * the surviving EVFILT_WRITE that ONESHOT did not remove
+                     * (only the firing filter was removed).
                      */
                     ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
                     ev.data.fd = sv[0];
@@ -483,16 +483,16 @@ int main(void)
             };
             epoll_ctl(epfd, EPOLL_CTL_ADD, sv[0], &ev);
 
-            /* First wait: only IN fires (OUT was not ready). EV_ONESHOT
-             * removes EVFILT_READ; EVFILT_WRITE survives in kqueue.
+            /* First wait: only IN fires (OUT was not ready). EV_ONESHOT removes
+             * EVFILT_READ; EVFILT_WRITE survives in kqueue.
              */
             struct epoll_event out;
             int n = epoll_wait(epfd, &out, 1, 100);
             if (n != 1 || (out.events & EPOLLOUT)) {
                 FAIL("expected only IN to fire (OUT must not be ready)");
             } else {
-                /* MOD to IN-only -- drops OUT entirely. The implementation
-                 * must remove the surviving EVFILT_WRITE; with the kevent
+                /* MOD to IN-only -- drops OUT entirely. The implementation must
+                 * remove the surviving EVFILT_WRITE; with the kevent
                  * batched-delete bug it would leak.
                  */
                 ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
@@ -503,8 +503,8 @@ int main(void)
                 drain_to_eagain(sv[0]);
 
                 /* Drain peer to free sv[0] send buffer. If the stale
-                 * EVFILT_WRITE leaked, the writability transition fires
-                 * and we observe a spurious EPOLLOUT.
+                 * EVFILT_WRITE leaked, the writability transition fires and we
+                 * observe a spurious EPOLLOUT.
                  */
                 char rbuf[8 * 1024];
                 ssize_t got = 0;

@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Exercises resource limits: max threads, mmap churn, FD exhaustion,
- * and rapid mprotect cycling. Verifies correct behavior at and beyond
- * capacity boundaries.
+ * Exercises resource limits: max threads, mmap churn, FD exhaustion, and rapid
+ * mprotect cycling. Verifies correct behavior at and beyond capacity
+ * boundaries.
  *
  * Syscalls exercised: clone(220), futex(98), mmap(222), munmap(215),
  *                     mprotect(226), pipe2(59), close(57), exit(93)
@@ -48,8 +48,8 @@ static void test_max_threads(void)
 
     int spawned = 0;
     for (int i = 0; i < STRESS_THREADS; i++) {
-        /* Store the index in a 16-byte aligned slot at the top of the
-         * child's stack. AArch64 requires SP to be 16-byte aligned.
+        /* Store the index in a 16-byte aligned slot at the top of the child's
+         * stack. AArch64 requires SP to be 16-byte aligned.
          */
         char *stack_top = thread_stacks[i] + sizeof(thread_stacks[i]);
         int *slot = (int *) (stack_top - 16);
@@ -216,8 +216,8 @@ static void test_fd_exhaustion(void)
         return;
     }
 
-    /* The test expects to have opened at least 500 FDs and eventually
-     * hit the limit (EMFILE).
+    /* The test expects to have opened at least 500 FDs and eventually hit the
+     * limit (EMFILE).
      */
     EXPECT_TRUE(opened >= 500 && got_emfile,
                 "too few FDs opened before exhaustion");

@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests readv/writev scatter-gather I/O operations including
- * pipe round-trips, file I/O, and edge cases.
+ * Tests readv/writev scatter-gather I/O operations including pipe round-trips,
+ * file I/O, and edge cases.
  *
  * Syscalls exercised: writev(66), readv(65), pipe2(59), openat(56),
  *                     lseek(62), close(57), unlink(35)

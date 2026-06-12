@@ -3,12 +3,11 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Verifies live MAP_SHARED visibility across fork(): both file-backed
- * and anonymous shared mappings must continue to propagate writes
- * between parent and child after the IPC handoff. Without the
- * overlay re-establishment in fork-state, the child sees a stale
- * snapshot of the parent's pre-fork contents and writes from each
- * side stay private.
+ * Verifies live MAP_SHARED visibility across fork(): both file-backed and
+ * anonymous shared mappings must continue to propagate writes between parent
+ * and child after the IPC handoff. Without the overlay re-establishment in
+ * fork-state, the child sees a stale snapshot of the parent's pre-fork contents
+ * and writes from each side stay private.
  *
  * Three scenarios:
  *   1. Regular file: shared mmap of a tmp file; parent writes appear
@@ -52,9 +51,9 @@ static int my_shm_unlink(const char *name)
     return unlink(path);
 }
 
-/* IPC primitives between parent and child: a single byte over a
- * pipe pair signals "go ahead" each direction. Replaces a sleep-based
- * synchronization that the test matrix would race on slow runners.
+/* IPC primitives between parent and child: a single byte over a pipe pair
+ * signals "go ahead" each direction. Replaces a sleep-based synchronization
+ * that the test matrix would race on slow runners.
  */
 typedef struct {
     int parent_to_child[2];
@@ -102,9 +101,9 @@ static void child_close_parent_ends(sync_t *s)
 }
 
 /* Drop the parent's write end so a child blocked in wait_byte() on the
- * parent_to_child read end observes EOF and exits instead of deadlocking
- * with the parent in waitpid(). Must be called on every parent-side
- * failure path that bypasses send_byte(parent_to_child[1]).
+ * parent_to_child read end observes EOF and exits instead of deadlocking with
+ * the parent in waitpid(). Must be called on every parent-side failure path
+ * that bypasses send_byte(parent_to_child[1]).
  */
 static void parent_release_writer(sync_t *s)
 {
@@ -132,8 +131,8 @@ static bool send_byte(int fd)
     return n == 1;
 }
 
-/* Test 1: File-backed MAP_SHARED -- parent and child see each other's
- * writes through the same disk file without msync.
+/* Test 1: File-backed MAP_SHARED -- parent and child see each other's writes
+ * through the same disk file without msync.
  */
 static void test_file_backed_cross_fork(void)
 {
@@ -146,9 +145,9 @@ static void test_file_backed_cross_fork(void)
         return;
     }
     /* Keep the file present so child can re-open via /proc semantics is
-     * unnecessary -- the child inherits fd from CLOEXEC=off and we map
-     * via the inherited fd. Unlink keeps the file on the FS but invisible
-     * via path; both sides hold open references.
+     * unnecessary -- the child inherits fd from CLOEXEC=off and we map via the
+     * inherited fd. Unlink keeps the file on the FS but invisible via path;
+     * both sides hold open references.
      */
     unlink(tmpl);
 
@@ -253,9 +252,9 @@ static void test_file_backed_cross_fork(void)
     close(fd);
 }
 
-/* Test 2: Anonymous MAP_SHARED -- typical parent-child IPC pattern
- * (Postgres, multi-process daemons). elfuse must convert the region
- * to memfd-backed at fork time so both sides observe writes.
+/* Test 2: Anonymous MAP_SHARED -- typical parent-child IPC pattern (Postgres,
+ * multi-process daemons). elfuse must convert the region to memfd-backed at
+ * fork time so both sides observe writes.
  */
 static void test_anon_shared_cross_fork(void)
 {
@@ -315,8 +314,8 @@ static void test_anon_shared_cross_fork(void)
         }
     }
 
-    /* See the file-backed test: drop the writer before waitpid so any
-     * failure above does not deadlock both ends of the pipe.
+    /* See the file-backed test: drop the writer before waitpid so any failure
+     * above does not deadlock both ends of the pipe.
      */
     parent_release_writer(&s);
     int status = 0;
@@ -339,8 +338,8 @@ static void test_anon_shared_cross_fork(void)
     munmap(p, 4096);
 }
 
-/* Test 3: shm-backed MAP_SHARED via /dev/shm -- same as test 1 but
- * exercises the shm path (musl/glibc shm_open emulation in elfuse).
+/* Test 3: shm-backed MAP_SHARED via /dev/shm -- same as test 1 but exercises
+ * the shm path (musl/glibc shm_open emulation in elfuse).
  */
 static void test_shm_cross_fork(void)
 {
@@ -416,8 +415,8 @@ static void test_shm_cross_fork(void)
         }
     }
 
-    /* See the file-backed test: drop the writer before waitpid so any
-     * failure above does not deadlock both ends of the pipe.
+    /* See the file-backed test: drop the writer before waitpid so any failure
+     * above does not deadlock both ends of the pipe.
      */
     parent_release_writer(&s);
     int status = 0;

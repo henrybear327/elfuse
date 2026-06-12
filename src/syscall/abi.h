@@ -14,8 +14,8 @@
 #include "core/elf.h"
 
 /* Linux aarch64 syscall numbers. */
-/* Sorted numerically for easy lookup.
- * Reference: include/uapi/asm-generic/unistd.h in Linux source.
+/* Sorted numerically for easy lookup. Reference:
+ * include/uapi/asm-generic/unistd.h in Linux source.
  */
 #define SYS_io_destroy 1
 #define SYS_getcwd 17
@@ -250,9 +250,9 @@
 #define LINUX_PTRACE_INTERRUPT 0x4207
 #define LINUX_NT_PRSTATUS 1
 
-/* Linux aarch64 user_pt_regs: matches the kernel's struct user_pt_regs.
- * Used by PTRACE_GETREGSET/SETREGSET with NT_PRSTATUS to exchange
- * GPR state between tracer and tracee threads.
+/* Linux aarch64 user_pt_regs: matches the kernel's struct user_pt_regs. Used by
+ * PTRACE_GETREGSET/SETREGSET with NT_PRSTATUS to exchange GPR state between
+ * tracer and tracee threads.
  */
 typedef struct {
     uint64_t regs[31]; /* X0-X30 */
@@ -340,11 +340,10 @@ typedef struct {
 /* Linux FD flags. */
 #define LINUX_FD_CLOEXEC 1
 
-/* Linux ioctl constants.
- * Linux and macOS use different ioctl numbers for the same operations.
- * Linux terminal ioctls use 0x54xx (from asm-generic/ioctls.h).
- * macOS equivalents are in <sys/ioctl.h> and <sys/ttycom.h>.
- * Translation is done in syscall_io.c:sys_ioctl().
+/* Linux ioctl constants. Linux and macOS use different ioctl numbers for the
+ * same operations. Linux terminal ioctls use 0x54xx (from
+ * asm-generic/ioctls.h). macOS equivalents are in <sys/ioctl.h> and
+ * <sys/ttycom.h>. Translation is done in syscall_io.c:sys_ioctl().
  */
 #define LINUX_TCGETS 0x5401     /* -> macOS TIOCGETA (tcgetattr) */
 #define LINUX_TCSETS 0x5402     /* -> macOS TIOCSETA (tcsetattr TCSANOW) */
@@ -378,9 +377,9 @@ typedef struct {
 #define LINUX_O_RDONLY 0x0000
 #define LINUX_O_WRONLY 0x0001
 #define LINUX_O_RDWR 0x0002
-/* O_ACCMODE is the mask covering O_RDONLY, O_WRONLY, O_RDWR. The urandom
- * read fast-path bitmap and the dup-alias metadata both need this mask to
- * isolate the access-mode bits from the other LINUX_O_* flags.
+/* O_ACCMODE is the mask covering O_RDONLY, O_WRONLY, O_RDWR. The urandom read
+ * fast-path bitmap and the dup-alias metadata both need this mask to isolate
+ * the access-mode bits from the other LINUX_O_* flags.
  */
 #define LINUX_O_ACCMODE 0x0003
 #define LINUX_O_CREAT 0x0040
@@ -391,8 +390,8 @@ typedef struct {
 #define LINUX_O_NONBLOCK 0x0800
 #define LINUX_O_DSYNC 0x1000
 #define LINUX_O_ASYNC 0x2000
-/* aarch64-linux open flag values (from asm-generic/fcntl.h).
- * These differ from x86_64-linux values.
+/* aarch64-linux open flag values (from asm-generic/fcntl.h). These differ from
+ * x86_64-linux values.
  */
 #define LINUX_O_DIRECTORY 0x4000  /* 040000 octal */
 #define LINUX_O_NOFOLLOW 0x8000   /* 0100000 octal */
@@ -405,9 +404,9 @@ typedef struct {
 #define LINUX___O_TMPFILE 0x400000
 #define LINUX_O_TMPFILE (LINUX___O_TMPFILE | LINUX_O_DIRECTORY)
 
-/* Linux fallocate(2) mode bits (linux/falloc.h). PUNCH_HOLE requires the
- * caller to also set KEEP_SIZE per the manpage; collapse/insert/zero/unshare
- * range modes are recognised numerically but elsewhere unsupported.
+/* Linux fallocate(2) mode bits (linux/falloc.h). PUNCH_HOLE requires the caller
+ * to also set KEEP_SIZE per the manpage; collapse/insert/zero/unshare range
+ * modes are recognised numerically but elsewhere unsupported.
  */
 #define LINUX_FALLOC_FL_KEEP_SIZE 0x01
 #define LINUX_FALLOC_FL_PUNCH_HOLE 0x02
@@ -426,8 +425,8 @@ typedef struct {
 #define LINUX_UTIME_NOW 0x3fffffff
 #define LINUX_UTIME_OMIT 0x3ffffffe
 
-/* statx() sync mode bits. AT_STATX_SYNC_AS_STAT == 0; the FORCE/DONT
- * variants are accepted and ignored (host fstatat is implicitly synchronous).
+/* statx() sync mode bits. AT_STATX_SYNC_AS_STAT == 0; the FORCE/DONT variants
+ * are accepted and ignored (host fstatat is implicitly synchronous).
  */
 #define LINUX_AT_STATX_FORCE_SYNC 0x2000
 #define LINUX_AT_STATX_DONT_SYNC 0x4000
@@ -448,10 +447,10 @@ typedef struct {
 #define LINUX_CAP_LAST_CAP 40
 #define LINUX_PR_SET_VMA 0x53564d41 /* "SVMA" */
 #define LINUX_PR_SET_VMA_ANON_NAME 0
-/* PR_SET_MEM_MODEL / PR_GET_MEM_MODEL: per-thread memory ordering control.
- * On Apple Silicon, setting model to TSO enables Total Store Ordering via
- * ACTLR_EL1.EnTSO, giving ARM64 loads/stores x86-style memory ordering.
- * From Asahi Linux: include/uapi/linux/prctl.h (not in mainline Linux).
+/* PR_SET_MEM_MODEL / PR_GET_MEM_MODEL: per-thread memory ordering control. On
+ * Apple Silicon, setting model to TSO enables Total Store Ordering via
+ * ACTLR_EL1.EnTSO, giving ARM64 loads/stores x86-style memory ordering. From
+ * Asahi Linux: include/uapi/linux/prctl.h (not in mainline Linux).
  */
 #define LINUX_PR_SET_MEM_MODEL 0x4d4d444c /* "MMDL" in ASCII */
 #define LINUX_PR_GET_MEM_MODEL 0x6d4d444c /* "mMDL" in ASCII */
@@ -557,7 +556,7 @@ typedef struct {
 /* Linux struct sysinfo. */
 typedef struct {
     int64_t uptime;
-    uint64_t loads[3]; /* 1, 5, 15 minute load averages × 65536 */
+    uint64_t loads[3]; /* 1, 5, 15 minute load averages * 65536 */
     uint64_t totalram, freeram, sharedram, bufferram, totalswap, freeswap;
     uint16_t procs, pad;
     uint32_t pad2;
@@ -582,8 +581,8 @@ typedef struct {
 } linux_rlimit64_t;
 
 /* Linux struct utmpx (aarch64 LP64). */
-/* Matches musl's struct utmpx layout. Used for /var/run/utmp synthesis.
- * On LP64: short=2, int=4, long=8, sizeof(struct timeval)=16.
+/* Matches musl's struct utmpx layout. Used for /var/run/utmp synthesis. On
+ * LP64: short=2, int=4, long=8, sizeof(struct timeval)=16.
  * sizeof(linux_utmpx_t) == 400 (396 data + 4 trailing padding).
  */
 #define LINUX_UT_LINESIZE 32
@@ -715,10 +714,10 @@ enum {
     SOCK_OPT_IP_PKTINFO,
     SOCK_OPT_IP_RECVTTL,
     SOCK_OPT_IP_RECVTOS,
-    /* IP_MTU_DISCOVER value stored verbatim so getsockopt round-trips the
-     * Linux PMTUD mode the guest set. The host accepts the value but does
-     * not honour every Linux mode; see sys_setsockopt for the IP_DONTFRAG
-     * translation for the modes macOS supports.
+    /* IP_MTU_DISCOVER value stored verbatim so getsockopt round-trips the Linux
+     * PMTUD mode the guest set. The host accepts the value but does not honour
+     * every Linux mode; see sys_setsockopt for the IP_DONTFRAG translation for
+     * the modes macOS supports.
      */
     SOCK_OPT_IP_MTU_DISCOVER,
     SOCK_OPT_COUNT

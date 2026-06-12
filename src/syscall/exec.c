@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Implements execve: reads path/argv/envp from guest memory, closes
- * CLOEXEC fds, resets the guest VM, reloads the shim and new ELF,
- * rebuilds page tables, and restarts at the new entry point.
+ * Implements execve: reads path/argv/envp from guest memory, closes CLOEXEC
+ * fds, resets the guest VM, reloads the shim and new ELF, rebuilds page tables,
+ * and restarts at the new entry point.
  */
 
 #include <stdbool.h>
@@ -44,12 +44,12 @@
  * entry has been removed from the shared fd table.
  */
 
-/* Force HVF to commit the sysreg/GPR writes that sys_execve performs after
- * a guest_reset before vcpu_run resumes. HVF defers writes until the next
- * register-touch on the owning thread, and a stale read here is harmless.
- * Use the HV_CHECK-wrapped accessors so a real HVF error (HV_BUSY,
- * HV_ERROR) past the point of no return aborts cleanly with a diagnostic
- * instead of silently resuming with undefined register state.
+/* Force HVF to commit the sysreg/GPR writes that sys_execve performs after a
+ * guest_reset before vcpu_run resumes. HVF defers writes until the next
+ * register-touch on the owning thread, and a stale read here is harmless. Use
+ * the HV_CHECK-wrapped accessors so a real HVF error (HV_BUSY, HV_ERROR) past
+ * the point of no return aborts cleanly with a diagnostic instead of silently
+ * resuming with undefined register state.
  */
 static void exec_sync_vcpu_regs(hv_vcpu_t vcpu)
 {
@@ -66,18 +66,18 @@ static void exec_republish_shim_globals_or_die(hv_vcpu_t vcpu,
                                                guest_t *g,
                                                bool verbose)
 {
-    /* guest_reset zeros shim_data. Reinitialize the host-owned fast-path
-     * state before returning to either native aarch64 code or the Rosetta
-     * runtime, otherwise identity and urandom fast paths observe all-zero
-     * cache state after exec.
+    /* guest_reset zeros shim_data. Reinitialize the host-owned fast-path state
+     * before returning to either native aarch64 code or the Rosetta runtime,
+     * otherwise identity and urandom fast paths observe all-zero cache state
+     * after exec.
      */
     shim_globals_init(g);
     shim_globals_publish_stats_gate(g);
     shim_globals_set_trace_enabled(g, verbose);
 
     /* TPIDR_EL1 carries the shim_globals base. Past PNR, failure leaves the
-     * replacement image unable to use the EL1 shim safely, so abort in the
-     * same shape as other post-reset fatal errors.
+     * replacement image unable to use the EL1 shim safely, so abort in the same
+     * shape as other post-reset fatal errors.
      */
     if (shim_globals_install_tpidr(vcpu, g) < 0) {
         log_fatal(
@@ -171,10 +171,10 @@ static int exec_resolve_interp_host_path(const char *sysroot,
                                         interp_host_path_sz, interp_host_temp);
 }
 
-/* Read a NULL-terminated pointer array from guest memory.
- * Each pointer in the array is a 64-bit GVA pointing to a string.
- * Returns the count of entries (excluding the NULL terminator),
- * or -1 on error. Strings are copied into the provided buffer.
+/* Read a NULL-terminated pointer array from guest memory. Each pointer in the
+ * array is a 64-bit GVA pointing to a string.
+ * Returns the count of entries (excluding the NULL terminator), or -1 on error.
+ * Strings are copied into the provided buffer.
  */
 static int read_string_array(guest_t *g,
                              uint64_t array_gva,
@@ -207,9 +207,10 @@ static int read_string_array(guest_t *g,
         count++;
     }
 
-    /* If all max_count slots are consumed, check whether the array
-     * continues (non-NULL next entry). Return -2 to signal E2BIG
-     * rather than silently truncating.
+    /* If all max_count slots are consumed, check whether the array continues
+     * (non-NULL next entry).
+     *
+     * Return -2 to signal E2BIG rather than silently truncating.
      */
     if (count == max_count) {
         uint64_t next;
@@ -230,10 +231,10 @@ int64_t sys_execve(hv_vcpu_t vcpu,
                    bool verbose,
                    const char *host_path)
 {
-    /* Copy guest execve inputs before any state-reset point of no return.
-     * If host_path is provided (from execveat resolution), use it directly
-     * instead of reading from guest memory. This avoids writing host-resolved
-     * paths into guest address space.
+    /* Copy guest execve inputs before any state-reset point of no return. If
+     * host_path is provided (from execveat resolution), use it directly instead
+     * of reading from guest memory. This avoids writing host-resolved paths
+     * into guest address space.
      */
     char path[LINUX_PATH_MAX];
     if (host_path) {
@@ -286,9 +287,9 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     }
     envp[envc] = NULL;
 
-    /* Resolve /proc/self/exe to the actual binary path.  Busybox sh
-     * execs applets via execve("/proc/self/exe", ["applet", ...]) and
-     * macOS has no /proc filesystem.
+    /* Resolve /proc/self/exe to the actual binary path. Busybox sh execs
+     * applets via execve("/proc/self/exe", ["applet", ...]) and macOS has no
+     * /proc filesystem.
      */
     if (!strcmp(path, "/proc/self/exe")) {
         const char *exe = proc_get_elf_path();
@@ -323,13 +324,13 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     }
 
     /* Try loading as ELF; if that fails, emulate Linux binfmt_script for
-     * shebang files.
-     * Linux kernel handles shebangs transparently in binfmt_script.
+     * shebang files. Linux kernel handles shebangs transparently in
+     * binfmt_script.
      */
     elf_info_t elf_info;
     if (elf_load(path_host, &elf_info) < 0) {
-        /* Not a valid ELF. Check if it's a script with a shebang line.
-         * Read the first 256 bytes and look for "#!" at the start.
+        /* Not a valid ELF. Check if it's a script with a shebang line. Read the
+         * first 256 bytes and look for "#!" at the start.
          */
         int script_fd = open(path_host, O_RDONLY);
         if (script_fd < 0) {
@@ -353,8 +354,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         if (eol)
             *eol = '\0';
 
-        /* Parse interpreter path and optional argument.
-         * Format: "#! /path/to/interpreter [optional-arg]"
+        /* Parse interpreter path and optional argument. Format: "#!
+         * /path/to/interpreter [optional-arg]"
          */
         char *interp_start = shebang_buf + 2;
         while (*interp_start == ' ' || *interp_start == '\t')
@@ -470,17 +471,17 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         }
     }
 
-    /* Pre-PNR validation.
-     * All checks that can fail gracefully MUST happen before guest_reset().
-     * After guest_reset(), the old process image is gone. Failures are
-     * unrecoverable, matching the Linux kernel's behavior (SIGKILL).
+    /* Pre-PNR validation. All checks that can fail gracefully MUST happen
+     * before guest_reset(). After guest_reset(), the old process image is gone.
+     * Failures are unrecoverable, matching the Linux kernel's behavior
+     * (SIGKILL).
      */
 
-    /* x86_64 targets dispatch through guest_bootstrap_rosetta_post_reset
-     * once the point-of-no-return work below clears guest state. Reject
-     * here only when Rosetta is disabled via --no-rosetta or
-     * ELFUSE_NO_ROSETTA=1; otherwise mark the transition and skip the
-     * aarch64-specific ELF/interp setup below.
+    /* x86_64 targets dispatch through guest_bootstrap_rosetta_post_reset once
+     * the point-of-no-return work below clears guest state. Reject here only
+     * when Rosetta is disabled via --no-rosetta or ELFUSE_NO_ROSETTA=1;
+     * otherwise mark the transition and skip the aarch64-specific ELF/interp
+     * setup below.
      */
     bool target_is_rosetta = false;
     if (elf_info.e_machine == EM_X86_64) {
@@ -495,9 +496,9 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         target_is_rosetta = true;
     }
 
-    /* Compute load base once (used for size check and later mapping).
-     * PIE (ET_DYN) binaries start near address 0 and would overlap with the
-     * shim; load them at PIE_LOAD_BASE instead.
+    /* Compute load base once (used for size check and later mapping). PIE
+     * (ET_DYN) binaries start near address 0 and would overlap with the shim;
+     * load them at PIE_LOAD_BASE instead.
      */
     uint64_t elf_load_base = (elf_info.e_type == ET_DYN) ? PIE_LOAD_BASE : 0;
 
@@ -513,9 +514,9 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         goto fail;
     }
 
-    /* Pre-load interpreter (headers only) for dynamic binaries.
-     * This validates the interpreter exists and is a valid ELF before exec
-     * crosses the point of no return. elf_map_segments() happens post-PNR.
+    /* Pre-load interpreter (headers only) for dynamic binaries. This validates
+     * the interpreter exists and is a valid ELF before exec crosses the point
+     * of no return. elf_map_segments() happens post-PNR.
      */
     elf_info_t interp_info;
     memset(&interp_info, 0, sizeof(interp_info));
@@ -564,8 +565,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         }
     }
 
-    /* Past pre-PNR validation. Fall through to point of no return.
-     * The fail label below handles all pre-PNR error paths.
+    /* Past pre-PNR validation. Fall through to point of no return. The fail
+     * label below handles all pre-PNR error paths.
      */
     if (0) {
     fail:
@@ -574,11 +575,10 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         return err;
     }
 
-    /* Point of no return.
-     * guest_reset() zeroes all guest memory. The old process image is gone.
-     * All validation that can fail gracefully MUST happen above this line.
-     * Failures below are unrecoverable; elfuse exits fatally, matching the
-     * Linux kernel's behavior (SIGKILL after exec PNR).
+    /* Point of no return. guest_reset() zeroes all guest memory. The old
+     * process image is gone. All validation that can fail gracefully MUST
+     * happen above this line. Failures below are unrecoverable; elfuse exits
+     * fatally, matching the Linux kernel's behavior (SIGKILL after exec PNR).
      */
 
     /* Close CLOEXEC fds by first removing them from the shared table under
@@ -586,8 +586,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
      * Cleanup acquires sfd_lock or inotify_lock, which must NOT be held under
      * fd_lock (lock ordering: fd_lock(3) < sfd_lock(5a) < inotify_lock(7)).
      *
-     * Two passes: count first, then heap-allocate. Avoids placing a ~100KiB
-     * VLA on the stack (FD_TABLE_SIZE * sizeof(fd_entry_t+int)).
+     * Two passes: count first, then heap-allocate. Avoids placing a ~100KiB VLA
+     * on the stack (FD_TABLE_SIZE * sizeof(fd_entry_t+int)).
      */
     int cloexec_count = 0;
     pthread_mutex_lock(&fd_lock);
@@ -665,20 +665,21 @@ int64_t sys_execve(hv_vcpu_t vcpu,
      */
     fork_notify_vfork_exec();
     /* Only clear rosetta state when leaving rosetta. For rosetta-to-rosetta
-     * exec the placement (rosetta_guest_base, rosetta_va_base, kbuf_gpa,
-     * ttbr1) must survive guest_reset so guest_bootstrap_rosetta_post_reset
-     * hits rosetta_prepare's re-entry branch and reuses the existing GPA
-     * instead of picking a fresh one. Keep proc_rosetta_active in sync so
-     * /proc/self/exe readlink reports the right path.
+     * exec the placement (rosetta_guest_base, rosetta_va_base, kbuf_gpa, ttbr1)
+     * must survive guest_reset so guest_bootstrap_rosetta_post_reset hits
+     * rosetta_prepare's re-entry branch and reuses the existing GPA instead of
+     * picking a fresh one. Keep proc_rosetta_active in sync so /proc/self/exe
+     * readlink reports the right path.
      */
     if (g->is_rosetta && !target_is_rosetta) {
         rosettad_clear_binary_path();
         guest_clear_rosetta_state(g);
         proc_set_rosetta_active(false);
     } else if (!g->is_rosetta && target_is_rosetta) {
-        /* aarch64 -> rosetta: enter rosetta mode fresh. guest_clear was
-         * already a no-op in this branch since the parent had no rosetta
-         * state to clear. */
+        /* aarch64 -> rosetta: enter rosetta mode fresh. guest_clear was already
+         * a no-op in this branch since the parent had no rosetta state to
+         * clear.
+         */
         g->is_rosetta = true;
         proc_set_rosetta_active(true);
     }
@@ -690,9 +691,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     proc_clear_exit_group();
     futex_interrupt_clear();
 
-    /* POSIX exec signal semantics:
-     * Handlers set to SIG_DFL (except SIG_IGN stays SIG_IGN), pending signals
-     * preserved, and signal mask preserved.
+    /* POSIX exec signal semantics: Handlers set to SIG_DFL (except SIG_IGN
+     * stays SIG_IGN), pending signals preserved, and signal mask preserved.
      */
     signal_reset_for_exec();
 
@@ -706,17 +706,17 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     }
 
     /* x86_64 re-bootstrap branch: hand off the post-reset work to the
-     * Rosetta-aware helper, then write vCPU sysregs for kernel-VA execution
-     * and return without touching the aarch64-specific block below.
+     * Rosetta-aware helper, then write vCPU sysregs for kernel-VA execution and
+     * return without touching the aarch64-specific block below.
      */
     if (target_is_rosetta) {
-        /* Drain the previous rosettad bridge before rosetta_finalize wires
-         * a fresh one. The detached handler thread only clears its global
-         * client-fd marker on its own EOF/exit. 1 s is enough headroom
-         * for a loaded host; a hung handler past that point will lose
-         * the start_handler CAS later, and the warning here marks the
-         * cause. Soft cap; the install may still succeed on timeout if
-         * the handler's CAS races us favourably.
+        /* Drain the previous rosettad bridge before rosetta_finalize wires a
+         * fresh one. The detached handler thread only clears its global
+         * client-fd marker on its own EOF/exit. 1 s is enough headroom for a
+         * loaded host; a hung handler past that point will lose the
+         * start_handler CAS later, and the warning here marks the cause. Soft
+         * cap; the install may still succeed on timeout if the handler's CAS
+         * races us favourably.
          */
         if (!rosettad_wait_for_idle(1000)) {
             log_warn(
@@ -725,14 +725,13 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         }
 
         /* path_host may point at path_host_buf (normal path) or at
-         * interp_host_buf (shebang resolution landed on a FUSE-backed
-         * x86_64 binary). Ownership of any materialized temp transfers
-         * to rosettad regardless of which buffer holds the path, so
-         * capture that temp path in one place and clear the matching
-         * temp flag here. exec_cleanup_inputs becomes a no-op for the
-         * transferred slot, and the post-PNR rollback below can unlink
-         * via owned_rosetta_temp without re-discriminating which buffer
-         * was selected.
+         * interp_host_buf (shebang resolution landed on a FUSE-backed x86_64
+         * binary). Ownership of any materialized temp transfers to rosettad
+         * regardless of which buffer holds the path, so capture that temp path
+         * in one place and clear the matching temp flag here.
+         * exec_cleanup_inputs becomes a no-op for the transferred slot, and the
+         * post-PNR rollback below can unlink via owned_rosetta_temp without
+         * re-discriminating which buffer was selected.
          */
         const char *owned_rosetta_temp = NULL;
         if (path_host == path_host_buf && path_host_temp) {
@@ -748,11 +747,11 @@ int64_t sys_execve(hv_vcpu_t vcpu,
                 g, path_host, owned_rosetta_temp != NULL, path, argc,
                 (const char **) argv, envp, shim_size, false, &r_entry, &r_sp,
                 &r_ttbr0) < 0) {
-            /* Post-PNR fatal failure. The temp flag was cleared up front
-             * so exec_cleanup_inputs would be a no-op, and rosettad never
-             * reached its ownership-commit point on this failure path.
-             * Best-effort unlink so the materialized temp does not orphan
-             * in /tmp on a path the kernel parallels with SIGKILL.
+            /* Post-PNR fatal failure. The temp flag was cleared up front so
+             * exec_cleanup_inputs would be a no-op, and rosettad never reached
+             * its ownership-commit point on this failure path. Best-effort
+             * unlink so the materialized temp does not orphan in /tmp on a path
+             * the kernel parallels with SIGKILL.
              */
             if (owned_rosetta_temp)
                 unlink(owned_rosetta_temp);
@@ -806,8 +805,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         exit(128);
     }
 
-    /* Track lowest loaded ELF address for the legacy fork IPC path
-     * after exec replaces the previous image (see guest_get_used_regions).
+    /* Track lowest loaded ELF address for the legacy fork IPC path after exec
+     * replaces the previous image (see guest_get_used_regions).
      */
     g->elf_load_min = elf_info.load_min + elf_load_base;
 
@@ -891,9 +890,9 @@ int64_t sys_execve(hv_vcpu_t vcpu,
 
     /* EL1 exception handlers use this block for stack and scratch state.
      * EL1-only so EL0 cannot read or store directly to the identity cache,
-     * urandom ring, or attention word that the shim fast paths consult.
-     * Matches bootstrap.c; if this regresses to plain RW, execve quietly
-     * defeats the protection on every new image.
+     * urandom ring, or attention word that the shim fast paths consult. Matches
+     * bootstrap.c; if this regresses to plain RW, execve quietly defeats the
+     * protection on every new image.
      */
     if (nregions >= MAX_REGIONS)
         goto too_many_regions;
@@ -904,8 +903,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
 
     /* The vDSO sits in the same 2MiB block as the shim. The page-table builder
      * splits the block into 4KiB L3 pages when its regions don't fully cover
-     * it, so the vDSO must appear here to keep the trampoline page valid and
-     * RX after rebuild.
+     * it, so the vDSO must appear here to keep the trampoline page valid and RX
+     * after rebuild.
      */
     if (nregions >= MAX_REGIONS)
         goto too_many_regions;
@@ -914,8 +913,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
                                           .perms = MEM_PERM_RX};
 
     /* Translate ELF p_flags into guest page permissions. Silent drops would
-     * leave the loaded segment unmapped, so treat overflow as fatal (we are
-     * already past the point of no return).
+     * leave the loaded segment unmapped, so treat overflow as fatal (the caller
+     * is already past the point of no return).
      */
     for (int i = 0; i < elf_info.num_segments; i++) {
         if (nregions >= MAX_REGIONS)
@@ -1072,11 +1071,11 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     /* SPSR_EL1: EL0t, AArch64 */
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, 0x0);
 
-    /* Reset TPIDR_EL0 (thread-local storage base). The previous program's
-     * TLS pointer must not leak into the new program because glibc's ld-linux
-     * uses TLS very early (GL() macro accesses static TLS), and a stale
-     * TPIDR_EL0 causes it to read garbage for its internal state (link_map
-     * l_relocated flags, scope lists, etc.), breaking relocation.
+    /* Reset TPIDR_EL0 (thread-local storage base). The previous program's TLS
+     * pointer must not leak into the new program because glibc's ld-linux uses
+     * TLS very early (GL() macro accesses static TLS), and a stale TPIDR_EL0
+     * causes it to read garbage for its internal state (link_map l_relocated
+     * flags, scope lists, etc.), breaking relocation.
      */
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_TPIDR_EL0, 0);
 
@@ -1085,8 +1084,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
      */
     vcpu_zero_gprs(vcpu);
 
-    /* Tell the shim that execve replaced the full guest register state.
-     * X8=2 means: flush TLB, discard the old syscall frame, and return without
+    /* Tell the shim that execve replaced the full guest register state. X8=2
+     * means: flush TLB, discard the old syscall frame, and return without
      * restoring pre-exec registers. This bypasses the normal syscall epilogue,
      * which would otherwise overwrite X8 from cpu_tlbi_req.
      */

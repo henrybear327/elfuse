@@ -28,9 +28,8 @@
 /* Linux SCM_MAX_FD: maximum number of file descriptors in SCM_RIGHTS */
 #define LINUX_SCM_MAX_FD 253
 
-/* Linux only delivers SCM_CREDENTIALS on AF_UNIX sockets even when
- * SO_PASSCRED is set, so PASSCRED toggled on AF_INET / AF_INET6 must
- * stay a no-op.
+/* Linux only delivers SCM_CREDENTIALS on AF_UNIX sockets even when SO_PASSCRED
+ * is set, so PASSCRED toggled on AF_INET / AF_INET6 must stay a no-op.
  */
 static bool host_socket_is_unix(int host_fd)
 {
@@ -186,9 +185,9 @@ int64_t sys_sendmsg(guest_t *g, int fd, uint64_t msg_gva, int linux_flags)
         dest_len = (socklen_t) ml;
     }
 
-    /* msg_iovlen is uint64_t on Linux; bound it against SYSCALL_IOV_MAX
-     * before the int narrowing below so a 64-bit value whose low 32 bits
-     * fall inside [0, SYSCALL_IOV_MAX] cannot slip past the cap.
+    /* msg_iovlen is uint64_t on Linux; bound it against SYSCALL_IOV_MAX before
+     * the int narrowing below so a 64-bit value whose low 32 bits fall inside
+     * [0, SYSCALL_IOV_MAX] cannot slip past the cap.
      */
     if (lmsg.msg_iovlen > SYSCALL_IOV_MAX) {
         host_fd_ref_close(&host_ref);

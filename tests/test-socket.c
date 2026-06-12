@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Verifies socket syscalls work by creating an AF_UNIX socketpair
- * and exchanging data. This avoids needing a network stack.
+ * Verifies socket syscalls work by creating an AF_UNIX socketpair and
+ * exchanging data. This avoids needing a network stack.
  *
  * Tests:
  * 1. socketpair(AF_UNIX, SOCK_STREAM) creates two connected fds
@@ -228,8 +228,8 @@ int main(void)
                 n = recvfrom(dsv[1], recv_buf, sizeof(recv_buf), 0,
                              (struct sockaddr *) &sa, &salen);
                 /* Linux returns salen=0 for unnamed AF_UNIX socketpair
-                 * endpoints (no source address). Accept both salen==0
-                 * and salen with AF_UNIX family filled in.
+                 * endpoints (no source address). Accept both salen==0 and salen
+                 * with AF_UNIX family filled in.
                  */
                 int addr_ok = (salen == 0) || (salen >= sizeof(sa.sun_family) &&
                                                sa.sun_family == AF_UNIX);

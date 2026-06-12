@@ -4,18 +4,17 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * The fork-IPC handoff does NOT serialize per-class side tables for
- * eventfd/signalfd/timerfd/inotify/netlink/pidfd. Restoring the
- * inherited host fd without that state leaves a half-functional slot,
- * so fork-state.c explicitly drops these in the child. This test pins
- * that contract:
+ * eventfd/signalfd/timerfd/inotify/netlink/pidfd. Restoring the inherited host
+ * fd without that state leaves a half-functional slot, so fork-state.c
+ * explicitly drops these in the child. This test pins that contract:
  *   - urandom IS inherited (no per-class state to lose; cache is fresh
  *     in the child and arc4random_buf works)
  *   - eventfd / signalfd / timerfd / inotify are NOT inherited; the
  *     child sees EBADF and can recreate the fd at the same slot
  *   - the inherited host fd does not leak in the child
  *
- * Once a subsystem grows a serialize/restore path, the corresponding
- * EBADF expectation here flips to a positive inheritance check.
+ * Once a subsystem grows a serialize/restore path, the corresponding EBADF
+ * expectation here flips to a positive inheritance check.
  */
 
 #include <errno.h>
@@ -97,8 +96,8 @@ static int child_ebadf_reusable_at_same_fd(int fd)
 
 static int child_eventfd_recreate(int fd)
 {
-    /* The inherited eventfd slot should be FD_CLOSED in the child; we
-     * should be able to create a fresh eventfd that works normally.
+    /* The inherited eventfd slot should be FD_CLOSED in the child; we should be
+     * able to create a fresh eventfd that works normally.
      */
     char buf[8];
     errno = 0;

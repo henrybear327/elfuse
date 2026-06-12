@@ -21,14 +21,14 @@
  * an arbitrary X9 value. A Linux-style seqlock (see the vvar layout block
  * below) keeps concurrent publishers and readers race-free.
  *
- * Anchor-age cap: the time trampolines refuse to interpolate once
- * (cntvct - anchor_cntvct) exceeds 2**31 cycles (~89 s at 24 MHz). That
- * forces an SVC fallback the host can use to re-anchor against fresh
- * macOS clocks, bounding any drift relative to a fresh REALTIME SVC after
- * an NTP step or long sleep. The host SVC path also computes a predicted
- * REALTIME from the anchor and invalidates whenever the delta against a
- * fresh REALTIME sample exceeds VDSO_ANCHOR_MAX_DRIFT_NS, so workloads
- * that do take an SVC for any reason re-anchor immediately.
+ * Anchor-age cap: the time trampolines refuse to interpolate once (cntvct -
+ * anchor_cntvct) exceeds 2**31 cycles (~89 s at 24 MHz). That forces an SVC
+ * fallback the host can use to re-anchor against fresh macOS clocks, bounding
+ * any drift relative to a fresh REALTIME SVC after an NTP step or long sleep.
+ * The host SVC path also computes a predicted REALTIME from the anchor and
+ * invalidates whenever the delta against a fresh REALTIME sample exceeds
+ * VDSO_ANCHOR_MAX_DRIFT_NS, so workloads that do take an SVC for any reason
+ * re-anchor immediately.
  */
 
 #include <stdint.h>
@@ -111,9 +111,9 @@ static uint8_t *vdso_host_page(guest_t *g)
 
 /* Layout.
  *
- * Symbol layout (sizes vary; the time trampolines are CNTVCT-fast paths,
- * getcpu / clock_getres are pure-arithmetic fast paths, rt_sigreturn is a
- * 12-byte SVC trampoline):
+ * Symbol layout (sizes vary; the time trampolines are CNTVCT-fast paths, getcpu
+ * / clock_getres are pure-arithmetic fast paths, rt_sigreturn is a 12-byte SVC
+ * trampoline):
  *   [0] __kernel_rt_sigreturn
  *   [1] __kernel_clock_getres
  *   [2] __kernel_clock_gettime
@@ -131,19 +131,19 @@ static uint8_t *vdso_host_page(guest_t *g)
  *   0x6B0  program header table (3 entries: PT_LOAD, PT_DYNAMIC, PT_NOTE)
  *
  * The PHDR table sits at the bottom of the structural area so that the
- * 4-byte-aligned NT_GNU_ABI_TAG note can occupy the old PHDR window and
- * glibc 2.41's dynamic-linker vDSO probe finds the expected note without
- * any of the trampoline / section offsets shifting.
+ * 4-byte-aligned NT_GNU_ABI_TAG note can occupy the old PHDR window and glibc
+ * 2.41's dynamic-linker vDSO probe finds the expected note without any of the
+ * trampoline / section offsets shifting.
  */
 
 /* Offsets within the 4KiB page.
  *
- * The PHDR table now sits past the SHDR area at 0x6B0 (the EHDR's e_phoff
- * field follows it there). This leaves the old PHDR slot at 0x040 free for
- * the NT_GNU_ABI_TAG note data that glibc 2.41 expects to find via the
- * PT_NOTE entry, without disturbing VVAR (0xB0), SIGRET (0xE0), or any of
- * the trampoline / section offsets. PT_LOAD still maps the whole page so
- * the note is loaded with the rest.
+ * The PHDR table now sits past the SHDR area at 0x6B0 (the EHDR's e_phoff field
+ * follows it there). This leaves the old PHDR slot at 0x040 free for the
+ * NT_GNU_ABI_TAG note data that glibc 2.41 expects to find via the PT_NOTE
+ * entry, without disturbing VVAR (0xB0), SIGRET (0xE0), or any of the
+ * trampoline / section offsets. PT_LOAD still maps the whole page so the note
+ * is loaded with the rest.
  */
 #define VDSO_OFF_EHDR 0x000
 /* NT_GNU_ABI_TAG note data lives at the old PHDR slot; 32 bytes fits
@@ -153,8 +153,8 @@ static uint8_t *vdso_host_page(guest_t *g)
 #define VDSO_NOTE_SIZE 0x20
 
 /* vvar at fixed offset; host writes the wall-clock anchor on first
- * clock_gettime SVC, after the guest trampoline has stored its own
- * CNTVCT_EL0 read into X9. Layout:
+ * clock_gettime SVC, after the guest trampoline has stored its own CNTVCT_EL0
+ * read into X9. Layout:
  *   +0   uint32 seq (Linux-style seqlock counter; see state machine below)
  *   +4   uint32 attention (host mirrors shim attention bits; nonzero -> SVC)
  *   +8   uint64 anchor_cntvct (guest frame, written by host from X9)
@@ -168,26 +168,26 @@ static uint8_t *vdso_host_page(guest_t *g)
  *   odd N >= 1  : writer reserved generation (N+1)/2; anchor fields in flux
  *   even N >= 2 : stable generation N/2; anchor fields readable
  *
- * Writers (vdso_seed_anchor) CAS seq from an even value (0 or 2K) to the
- * next odd, store new anchor fields, and release-store the next even.
- * This handles both initial seeding (0 -> 1 -> 2) and refresh (2K ->
- * 2K+1 -> 2K+2) atomically; no separate invalidate path is needed.
+ * Writers (vdso_seed_anchor) CAS seq from an even value (0 or 2K) to the next
+ * odd, store new anchor fields, and release-store the next even. This handles
+ * both initial seeding (0 -> 1 -> 2) and refresh (2K -> 2K+1 -> 2K+2)
+ * atomically; no separate invalidate path is needed.
  *
- * Trampoline readers LDAR seq into a snapshot register, bail on 0
- * (unseeded) or odd (writer in progress), read anchor fields with plain
- * loads, then LDAR seq again -- any change between the two reads means
- * a writer raced, so fall back to SVC.
+ * Trampoline readers LDAR seq into a snapshot register, bail on 0 (unseeded) or
+ * odd (writer in progress), read anchor fields with plain loads, then LDAR seq
+ * again -- any change between the two reads means a writer raced, so fall back
+ * to SVC.
  *
- * Both MONO and REAL anchor pairs are written together so a fast-path
- * caller for either clockid sees a consistent pair after observing an
- * even seq. The trampoline interpolates either pair from the shared
- * CNTVCT delta; the picking of MONO vs REAL is done by adding
- * VVAR_OFF_ANCHOR_MONO_SEC or VVAR_OFF_ANCHOR_REAL_SEC to the vvar base
- * and LDPing the two-doubleword anchor.
+ * Both MONO and REAL anchor pairs are written together so a fast-path caller
+ * for either clockid sees a consistent pair after observing an even seq. The
+ * trampoline interpolates either pair from the shared CNTVCT delta; the picking
+ * of MONO vs REAL is done by adding VVAR_OFF_ANCHOR_MONO_SEC or
+ * VVAR_OFF_ANCHOR_REAL_SEC to the vvar base and LDPing the two-doubleword
+ * anchor.
  *
- * The trampoline's anchor-age cap (LSR + CBNZ on the CNTVCT delta) and
- * the host's drift detector in sys_clock_gettime together bound drift
- * after a macOS NTP step or a long sleep.
+ * The trampoline's anchor-age cap (LSR + CBNZ on the CNTVCT delta) and the
+ * host's drift detector in sys_clock_gettime together bound drift after a macOS
+ * NTP step or a long sleep.
  */
 #define VDSO_OFF_VVAR 0x0B0
 /* Linux-style seqlock counter; see the state machine above. */
@@ -200,12 +200,11 @@ static uint8_t *vdso_host_page(guest_t *g)
 #define VVAR_OFF_ANCHOR_REAL_NSEC 0x28
 #define VVAR_SIZE 0x30
 
-/* .text trampoline offsets and sizes. rt_sigreturn is a 12-byte SVC
- * trampoline. clock_getres / getcpu are arithmetic fast paths.
- * clock_gettime / gettimeofday are CNTVCT fast paths that implement a
- * seqlock-style read against the vvar above (see the per-emitter
- * comments for instruction-level layout). Sizes are exact; the
- * static_asserts on each emitter catch drift.
+/* .text trampoline offsets and sizes. rt_sigreturn is a 12-byte SVC trampoline.
+ * clock_getres / getcpu are arithmetic fast paths. clock_gettime / gettimeofday
+ * are CNTVCT fast paths that implement a seqlock-style read against the vvar
+ * above (see the per-emitter comments for instruction-level layout). Sizes are
+ * exact; the static_asserts on each emitter catch drift.
  */
 #define TEXT_OFF_SIGRET 0x0E0
 #define TEXT_OFF_GETRES 0x0EC
@@ -218,33 +217,33 @@ static uint8_t *vdso_host_page(guest_t *g)
 #define TEXT_GETCPU_SIZE 0x34
 #define TEXT_END (TEXT_OFF_GETCPU + TEXT_GETCPU_SIZE)
 /* Offset of the SVC instruction inside __kernel_clock_gettime's svc_fallback
- * (svc_fallback opens at instruction 39 of 42, i.e. byte 0x9C; the SVC is
- * the second instruction of the fallback, at byte 0xA0). The host's
+ * (svc_fallback opens at instruction 39 of 42, i.e. byte 0x9C; the SVC is the
+ * second instruction of the fallback, at byte 0xA0). The host's
  * sys_clock_gettime uses this value to gate vvar seeding: only a trap whose
  * ELR_EL1 equals SVC_PC + 4 came from the trampoline and may carry a
  * trustworthy CNTVCT in X9.
  */
 #define VDSO_CLOCK_GETTIME_SVC_PC (TEXT_OFF_GETTIME + 0xA0)
-/* gettimeofday svc_fallback opens at instruction 37 of 40 (byte 0x94);
- * SVC at byte 0x98.
+/* gettimeofday svc_fallback opens at instruction 37 of 40 (byte 0x94); SVC at
+ * byte 0x98.
  */
 #define VDSO_GETTIMEOFDAY_SVC_PC (TEXT_OFF_GETTOD + 0x98)
 
-/* Anchor-age cap. The trampolines refuse to interpolate once
- * (cntvct - anchor_cntvct) exceeds (1ULL << ANCHOR_AGE_SHIFT) cycles,
- * checked via LSR + CBNZ on the delta. With CNTFRQ = 24 MHz, shift 22
- * caps the delta at ~0.175 s (~175e6 ns).
+/* Anchor-age cap. The trampolines refuse to interpolate once (cntvct -
+ * anchor_cntvct) exceeds (1ULL << ANCHOR_AGE_SHIFT) cycles, checked via LSR +
+ * CBNZ on the delta. With CNTFRQ = 24 MHz, shift 22 caps the delta at ~0.175 s
+ * (~175e6 ns).
  *
- * Shift 22 is load-bearing: it keeps delta_ns + anchor_nsec below 2e9,
- * so the sub-1e9 carry collapses to one SUBS + CSEL + CINC instead of a
- * UDIV-by-1e9. Loosening the cap or raising CNTFRQ past that bound
- * requires restoring a real division. The host drift check in
- * sys_clock_gettime must use the same shift to stay coherent.
+ * Shift 22 is load-bearing: it keeps delta_ns + anchor_nsec below 2e9, so the
+ * sub-1e9 carry collapses to one SUBS + CSEL + CINC instead of a UDIV-by-1e9.
+ * Loosening the cap or raising CNTFRQ past that bound requires restoring a real
+ * division. The host drift check in sys_clock_gettime must use the same shift
+ * to stay coherent.
  */
 #define VDSO_ANCHOR_AGE_SHIFT 22
 
-/* dynstr, dynsym, hash, GNU version metadata, dynamic, shdr follow.
- * TEXT_END is 0x2C4 after the dmb-ishld insertion in gettime/gettod.
+/* dynstr, dynsym, hash, GNU version metadata, dynamic, shdr follow. TEXT_END is
+ * 0x2C4 after the dmb-ishld insertion in gettime/gettod.
  */
 #define VDSO_OFF_DYNSTR TEXT_END
 
@@ -270,10 +269,10 @@ static uint8_t *vdso_host_page(guest_t *g)
 
 /* 8 * 64 = 512, 0x4B0 + 512 = 0x6B0 (fits in 4 KiB) */
 
-/* Program header table sits after the section headers so the old PHDR
- * window at 0x040 can host the NT_GNU_ABI_TAG note data. Three entries
- * (PT_LOAD, PT_DYNAMIC, PT_NOTE) at 56 bytes each end at 0x758, leaving
- * the rest of the page reserved for future growth.
+/* Program header table sits after the section headers so the old PHDR window at
+ * 0x040 can host the NT_GNU_ABI_TAG note data. Three entries (PT_LOAD,
+ * PT_DYNAMIC, PT_NOTE) at 56 bytes each end at 0x758, leaving the rest of the
+ * page reserved for future growth.
  */
 #define VDSO_OFF_PHDR 0x6B0
 #define VDSO_OFF_PHDR1 (VDSO_OFF_PHDR + 0x38)
@@ -288,12 +287,12 @@ static uint8_t *vdso_host_page(guest_t *g)
 #define VERDEF_SIZE (sizeof(elf64_verdef_t) + sizeof(elf64_verdaux_t))
 #define VDSO_NUM_DYN 9
 
-/* NT_GNU_ABI_TAG note. glibc 2.41's vDSO setup expects this entry to be
- * present alongside the dynamic symbol table; without it the dynamic
- * linker still maps the page but skips the per-symbol fast-path lookup,
- * forcing the dynamically-linked guest into the SVC tail of every
- * trampoline. The note layout matches what the upstream Linux kernel
- * emits from arch/arm64/kernel/vdso/note.S:
+/* NT_GNU_ABI_TAG note. glibc 2.41's vDSO setup expects this entry to be present
+ * alongside the dynamic symbol table; without it the dynamic linker still maps
+ * the page but skips the per-symbol fast-path lookup, forcing the
+ * dynamically-linked guest into the SVC tail of every trampoline. The note
+ * layout matches what the upstream Linux kernel emits from
+ * arch/arm64/kernel/vdso/note.S:
  *
  *   namesz : 4   (uint32, "GNU\0")
  *   descsz : 16  (uint32, four-word descriptor)
@@ -302,9 +301,9 @@ static uint8_t *vdso_host_page(guest_t *g)
  *   desc   : { 0 (Linux), major, minor, sublevel } as uint32 each
  *
  * The desc declares the minimum supported kernel ABI. 2.6.39 matches the
- * LINUX_2.6.39 symbol version already exposed through DT_VERDEF -- both
- * say "this vDSO speaks the 2.6.39 ABI" -- so a glibc that accepts the
- * symbol version also accepts the note.
+ * LINUX_2.6.39 symbol version already exposed through DT_VERDEF -- both say
+ * "this vDSO speaks the 2.6.39 ABI" -- so a glibc that accepts the symbol
+ * version also accepts the note.
  */
 #define NT_GNU_ABI_TAG 1
 #define ELF_NOTE_OS_LINUX 0
@@ -335,9 +334,9 @@ static const char dynstr_data[] =
 
 /* Symbol name offsets, derived from preceding string-literal lengths so a
  * future edit to dynstr_data shifts them in lockstep instead of silently
- * breaking the version lookup (sizeof("\0X") - 1 == bytes contributed when
- * X is concatenated into dynstr_data; only the very last literal's trailing
- * NUL survives concatenation).
+ * breaking the version lookup (sizeof("\0X") - 1 == bytes contributed when X is
+ * concatenated into dynstr_data; only the very last literal's trailing NUL
+ * survives concatenation).
  */
 #define DYNSTR_BYTES_RT_SIGRETURN (sizeof("\0__kernel_rt_sigreturn") - 1)
 #define DYNSTR_BYTES_CLOCK_GETRES (sizeof("\0__kernel_clock_getres") - 1)
@@ -445,8 +444,9 @@ static uint32_t enc_csel_x(unsigned rd, unsigned rn, unsigned rm, unsigned cond)
            ((rn & 0x1F) << 5) | (rd & 0x1F);
 }
 
-/* CSINC Xd, Xn, Xm, cond: if cond Xd=Xn else Xd=Xm+1.
- * Encodes CINC Xd, Xn, cond as CSINC Xd, Xn, Xn, invert(cond). */
+/* CSINC Xd, Xn, Xm, cond: if cond Xd=Xn else Xd=Xm+1. Encodes CINC Xd, Xn, cond
+ * as CSINC Xd, Xn, Xn, invert(cond).
+ */
 static uint32_t enc_csinc_x(unsigned rd,
                             unsigned rn,
                             unsigned rm,
@@ -560,8 +560,8 @@ static uint32_t enc_cbnz_x(unsigned rt, int32_t pc_rel)
 }
 
 /* TBNZ Rt, #bit, imm14 (byte-relative). When bit < 32 the encoder uses the
- * W-form (sf-bit of bit-number = 0); the seqlock checks only test bit 0 so
- * the W/X distinction is moot for callers here.
+ * W-form (sf-bit of bit-number = 0); the seqlock checks only test bit 0 so the
+ * W/X distinction is moot for callers here.
  */
 static uint32_t enc_tbnz(unsigned rt, unsigned bit, int32_t pc_rel)
 {
@@ -584,16 +584,16 @@ static uint32_t enc_cmp_w_reg(unsigned rn, unsigned rm)
 }
 
 /* DMB ISHLD: inner-shareable load-load barrier. Pairs the seqlock reader's
- * snapshot LDAR (forward acquire) with the plain anchor loads so a
- * subsequent recheck LDAR cannot be reordered before them. ARM ARM B2.3:
- * LDAR orders later memory ops after itself but does NOT order prior ops
- * before itself, so the recheck needs an explicit load barrier.
+ * snapshot LDAR (forward acquire) with the plain anchor loads so a subsequent
+ * recheck LDAR cannot be reordered before them. ARM ARM B2.3: LDAR orders later
+ * memory ops after itself but does NOT order prior ops before itself, so the
+ * recheck needs an explicit load barrier.
  */
 #define VDSO_INSN_DMB_ISHLD 0xD50339BFU
 
-/* Emit the CNTVCT fast-path clock_gettime trampoline at page+pc_off; the
- * vvar lives at page+vvar_off. The trampoline is exactly TEXT_GETTIME_SIZE
- * bytes; the static_assert below catches drift.
+/* Emit the CNTVCT fast-path clock_gettime trampoline at page+pc_off; the vvar
+ * lives at page+vvar_off. The trampoline is exactly TEXT_GETTIME_SIZE bytes;
+ * the static_assert below catches drift.
  *
  * Layout (42 instructions, 0xA8 bytes):
  *
@@ -635,21 +635,20 @@ static uint32_t enc_cmp_w_reg(unsigned rn, unsigned rm)
  *   0xA0  svc  #0                        ; ELR_EL1 + 4 == SVC_PC
  *   0xA4  ret
  *
- * Both clockids share the same CNTVCT delta math; only the anchor pair
- * loaded via LDP changes. Picking via a runtime offset register avoids
- * duplicating the entire math block per clockid. The age check clobbers
- * x7 (which has already been consumed by `add x8, x2, x7`) before the
- * math reloads x7 with the mult+shift constant.
+ * Both clockids share the same CNTVCT delta math; only the anchor pair loaded
+ * via LDP changes. Picking via a runtime offset register avoids duplicating the
+ * entire math block per clockid. The age check clobbers x7 (which has already
+ * been consumed by ADD X8, X2, X7) before the math reloads x7 with the
+ * mult+shift constant.
  *
- * The seqlock recheck runs after all anchor field reads and the math but
- * before the user-visible store. The preceding DMB ISHLD is critical:
- * LDAR-acquire orders later memory ops after itself but NOT prior ops
- * before itself (ARM ARM B2.3.4), so without the barrier the recheck
- * LDAR could be observed by other CPUs before the plain anchor LDR/LDP
- * have committed -- allowing seq == snap to pass while the field loads
- * raced with a host CAS-bump-publish. A mismatch with w11 means a host
- * refresher ran between the two LDARs, so the trampoline falls through
- * to SVC for a fresh sample.
+ * The seqlock recheck runs after all anchor field reads and the math but before
+ * the user-visible store. The preceding DMB ISHLD is critical: LDAR-acquire
+ * orders later memory ops after itself but NOT prior ops before itself (ARM ARM
+ * B2.3.4), so without the barrier the recheck LDAR could be observed by other
+ * CPUs before the plain anchor LDR/LDP have committed -- allowing seq == snap
+ * to pass while the field loads raced with a host CAS-bump-publish. A mismatch
+ * with w11 means a host refresher ran between the two LDARs, so the trampoline
+ * falls through to SVC for a fresh sample.
  */
 static void emit_clock_gettime_trampoline(uint32_t *code,
                                           uint32_t pc_off,
@@ -689,13 +688,12 @@ static void emit_clock_gettime_trampoline(uint32_t *code,
     /* lsr x7, x6, #ANCHOR_AGE_SHIFT */
     code[21] = enc_cbnz_x(7, svc_fallback_off - 0x54);
     /* cbnz x7, svc_fallback (age cap) */
-    /* delta_ns = (delta * 699050666) >> 24. 699050666 is floor((1e9 << 24)
-     * / 24e6), the mult+shift form Linux's arm64 vDSO uses for CNTFRQ =
-     * 24 MHz; an LSR (~1 cycle) in place of any 64-bit UDIV (~10-22 cycles
-     * on Apple Silicon). Rounding down keeps the trampoline tick slightly
-     * slower than the host so the next reseed never steps time backwards.
-     * The age cap bounds delta < 2^22, so delta * 699050666 < 2^52 -- no
-     * overflow.
+    /* delta_ns = (delta * 699050666) >> 24. 699050666 is floor((1e9 << 24) /
+     * 24e6), the mult+shift form Linux's arm64 vDSO uses for CNTFRQ = 24 MHz;
+     * an LSR (~1 cycle) in place of any 64-bit UDIV (~10-22 cycles on Apple
+     * Silicon). Rounding down keeps the trampoline tick slightly slower than
+     * the host so the next reseed never steps time backwards. The age cap
+     * bounds delta < 2^22, so delta * 699050666 < 2^52 -- no overflow.
      */
     code[22] = enc_movz_x(7, 0xAAAA);
     code[23] = enc_movk_x_lsl16(7, 0x29AA); /* w7 = 699050666     */
@@ -704,14 +702,14 @@ static void emit_clock_gettime_trampoline(uint32_t *code,
     code[26] = enc_add_x(5, 5, 6);          /* nsec += delta_ns   */
     code[27] = enc_movz_x(7, 0xCA00);
     code[28] = enc_movk_x_lsl16(7, 0x3B9A); /* x7 = 1e9           */
-    /* sub-1e9 carry: the age cap guarantees nsec < 2e9, so the /1e9
-     * quotient is always 0 or 1 and SUBS + CSEL + CINC suffices in place
-     * of a UDIV. Sequence:
+    /* sub-1e9 carry: the age cap guarantees nsec < 2e9, so the /1e9 quotient is
+     * always 0 or 1 and SUBS + CSEL + CINC suffices in place of a UDIV.
+     * Sequence:
      *   subs x8, x5, x7       ; x8 = nsec - 1e9, C set iff nsec >= 1e9
      *   csel x5, x8, x5, HS   ; if HS, nsec -= 1e9
      *   cinc x4, x4, HS       ; if HS, sec++
-     * CINC has no direct encoder; emit it as CSINC Xd, Xn, Xn with the
-     * inverted condition (HS -> LO).
+     * CINC has no direct encoder; emit it as CSINC Xd, Xn, Xn with the inverted
+     * condition (HS -> LO).
      */
     code[29] = enc_subs_x(8, 5, 7);
     code[30] = enc_csel_x(5, 8, 5, COND_HS);
@@ -733,13 +731,12 @@ static void emit_clock_gettime_trampoline(uint32_t *code,
 _Static_assert(TEXT_GETTIME_SIZE == 42 * sizeof(uint32_t),
                "clock_gettime trampoline size must match emitter");
 
-/* Emit the CNTVCT fast-path gettimeofday trampoline. Mirrors clock_gettime
- * but always uses the REALTIME anchor and converts the nanosecond residue
- * to microseconds for tv->tv_usec. tz, if non-NULL, gets a single 64-bit
- * store of zero (covers both timezone fields). NULL tv / tz are honored.
- * Uses the same seqlock protocol as clock_gettime, including a DMB ISHLD
- * before the recheck LDAR (see the clock_gettime emitter for the memory-
- * model justification).
+/* Emit the CNTVCT fast-path gettimeofday trampoline. Mirrors clock_gettime but
+ * always uses the REALTIME anchor and converts the nanosecond residue to
+ * microseconds for tv->tv_usec. tz, if non-NULL, gets a single 64-bit store of
+ * zero (covers both timezone fields). NULL tv / tz are honored. Uses the same
+ * seqlock protocol as clock_gettime, including a DMB ISHLD before the recheck
+ * LDAR (see the clock_gettime emitter for the memory- model justification).
  *
  * Layout (40 instructions, 0xA0 bytes):
  *
@@ -844,12 +841,13 @@ static void emit_gettimeofday_trampoline(uint32_t *code,
 _Static_assert(TEXT_GETTOD_SIZE == 40 * sizeof(uint32_t),
                "gettimeofday trampoline size must match emitter");
 
-/* Emit the arithmetic fast-path clock_getres trampoline. Returns {tv_sec=0,
- * tv_nsec=1} for the common high-resolution clockids and SVCs the rest.
- * Supported inline: REALTIME (0), MONOTONIC (1), MONOTONIC_RAW (4),
- * BOOTTIME (7). Coarse clocks (5, 6), CPUTIME clocks (2, 3), and dynamic
- * negative clockids fall through to SVC because their resolution differs
- * from the high-resolution constant or depends on host scheduler state.
+/* Emit the arithmetic fast-path clock_getres trampoline.
+ *
+ * Returns {tv_sec=0, tv_nsec=1} for the common high-resolution clockids and
+ * SVCs the rest. Supported inline: REALTIME (0), MONOTONIC (1), MONOTONIC_RAW
+ * (4), BOOTTIME (7). Coarse clocks (5, 6), CPUTIME clocks (2, 3), and dynamic
+ * negative clockids fall through to SVC because their resolution differs from
+ * the high-resolution constant or depends on host scheduler state.
  *
  * Layout (23 instructions, 0x5C bytes):
  *
@@ -914,9 +912,9 @@ static void emit_clock_getres_trampoline(uint32_t *code,
 _Static_assert(TEXT_GETRES_SIZE == 23 * sizeof(uint32_t),
                "clock_getres trampoline size must match emitter");
 
-/* Emit the arithmetic fast-path getcpu trampoline. elfuse models one
- * online CPU and one NUMA node, so cpu = node = 0 unconditionally; the
- * cache argument is ignored (binfmt/glibc both treat it as obsolete).
+/* Emit the arithmetic fast-path getcpu trampoline. elfuse models one online CPU
+ * and one NUMA node, so cpu = node = 0 unconditionally; the cache argument is
+ * ignored (binfmt/glibc both treat it as obsolete).
  *
  * Layout (13 instructions, 0x34 bytes):
  *
@@ -960,9 +958,9 @@ static void emit_getcpu_trampoline(uint32_t *code,
 _Static_assert(TEXT_GETCPU_SIZE == 13 * sizeof(uint32_t),
                "getcpu trampoline size must match emitter");
 
-/* The public sigret offset declared in core/vdso.h must match the
- * internal layout above; signal.c sets X30 to VDSO_BASE + VDSO_OFF_SIGRET
- * as the return-from-handler target.
+/* The public sigret offset declared in core/vdso.h must match the internal
+ * layout above; signal.c sets X30 to VDSO_BASE + VDSO_OFF_SIGRET as the
+ * return-from-handler target.
  */
 _Static_assert(VDSO_OFF_SIGRET == TEXT_OFF_SIGRET,
                "VDSO_OFF_SIGRET in core/vdso.h must equal TEXT_OFF_SIGRET");
@@ -984,11 +982,11 @@ static uint32_t elf_hash(const char *name)
 uint64_t vdso_build(guest_t *g)
 {
     /* The vDSO page is host-built into the guest backing buffer before any
-     * page-table entry covers it, so route through vdso_host_page which
-     * just bounds-checks against guest_size. The earlier guest_ptr walk
-     * worked by coincidence (the slot happened to be reachable) but tied
-     * host construction to whatever EL0 permission walker state existed
-     * at the time -- a fragile coupling for host-owned memory.
+     * page-table entry covers it, so route through vdso_host_page which just
+     * bounds-checks against guest_size. The earlier guest_ptr walk worked by
+     * coincidence (the slot happened to be reachable) but tied host
+     * construction to whatever EL0 permission walker state existed at the time
+     * -- a fragile coupling for host-owned memory.
      */
     uint8_t *page = vdso_host_page(g);
     if (!page) {
@@ -1028,9 +1026,9 @@ uint64_t vdso_build(guest_t *g)
     _Static_assert(VDSO_OFF_NOTE + VDSO_NOTE_SIZE <= VDSO_OFF_VVAR,
                    "GNU ABI tag note must not encroach on vvar");
 
-    /* NT_GNU_ABI_TAG note. PT_LOAD covers the whole page so the note is
-     * already mapped; PT_NOTE simply tags this offset for the dynamic
-     * linker's vDSO probe.
+    /* NT_GNU_ABI_TAG note. PT_LOAD covers the whole page so the note is already
+     * mapped; PT_NOTE simply tags this offset for the dynamic linker's vDSO
+     * probe.
      */
     elf64_note_gnu_abi_tag_t *note =
         (elf64_note_gnu_abi_tag_t *) (page + VDSO_OFF_NOTE);
@@ -1076,10 +1074,9 @@ uint64_t vdso_build(guest_t *g)
     phdr2->p_memsz = VDSO_NOTE_SIZE;
     phdr2->p_align = 4;
 
-    /* Text trampolines. rt_sigreturn keeps the 12-byte SVC pattern; the
-     * other four entries are fast paths (CNTVCT for clock_gettime /
-     * gettimeofday; arithmetic for clock_getres / getcpu) with their own
-     * svc_fallback tails.
+    /* Text trampolines. rt_sigreturn keeps the 12-byte SVC pattern; the other
+     * four entries are fast paths (CNTVCT for clock_gettime / gettimeofday;
+     * arithmetic for clock_getres / getcpu) with their own svc_fallback tails.
      */
     emit_svc_trampoline((uint32_t *) (page + TEXT_OFF_SIGRET), 139);
     emit_clock_getres_trampoline((uint32_t *) (page + TEXT_OFF_GETRES),
@@ -1091,8 +1088,8 @@ uint64_t vdso_build(guest_t *g)
     emit_getcpu_trampoline((uint32_t *) (page + TEXT_OFF_GETCPU),
                            TEXT_OFF_GETCPU, VDSO_OFF_VVAR);
 
-    /* vvar starts zero (initialized==0). The first __kernel_clock_gettime
-     * SVC fallback will let the host populate the anchor.
+    /* vvar starts zero (initialized==0). The first __kernel_clock_gettime SVC
+     * fallback will let the host populate the anchor.
      */
 
     /* Dynamic string table. */
@@ -1237,11 +1234,11 @@ void vdso_seed_anchor(guest_t *g,
                       int64_t real_sec,
                       int64_t real_nsec)
 {
-    /* Match vdso_attention_or: host-owned vvar writes go through the
-     * direct host_base + VDSO_BASE accessor, not the guest permission
-     * walker. The vDSO is RX to EL0 so guest_ptr_w would silently bail
-     * here; guest_ptr happens to work because it only requires read
-     * perm, but that inconsistency is brittle.
+    /* Match vdso_attention_or: host-owned vvar writes go through the direct
+     * host_base + VDSO_BASE accessor, not the guest permission walker. The vDSO
+     * is RX to EL0 so guest_ptr_w would silently bail here; guest_ptr happens
+     * to work because it only requires read perm, but that inconsistency is
+     * brittle.
      */
     uint8_t *page = vdso_host_page(g);
     if (!page)
@@ -1263,9 +1260,8 @@ void vdso_seed_anchor(guest_t *g,
      *      Pairs with the trampoline's recheck LDAR and vdso_anchor_*'s
      *      acquire loads.
      *
-     * MONO and REAL anchor pairs are written together under the same
-     * generation so a fast-path caller for either clockid sees a
-     * consistent pair.
+     * MONO and REAL anchor pairs are written together under the same generation
+     * so a fast-path caller for either clockid sees a consistent pair.
      */
     uint32_t cur = __atomic_load_n(initialized, __ATOMIC_ACQUIRE);
     if (cur & 1u)
@@ -1277,23 +1273,22 @@ void vdso_seed_anchor(guest_t *g,
                                      __ATOMIC_RELAXED))
         return; /* lost the race against another publisher */
 
-    /* Store-store barrier between the CAS-bump (odd publish) and the
-     * RELAXED field stores. ARMv8 is not multi-copy atomic without
-     * barriers: another CPU could otherwise observe a field store before
-     * the odd seq becomes visible, allowing a reader whose snapshot LDAR
-     * still sees the old even to read mid-write fields and then recheck
-     * with the same old even (snapshot == recheck, race undetected).
-     * __atomic_thread_fence(__ATOMIC_RELEASE) lowers to DMB ISH on
-     * AArch64 and orders the CAS odd-publish ahead of every subsequent
-     * field store from every observer's perspective.
+    /* Store-store barrier between the CAS-bump (odd publish) and the RELAXED
+     * field stores. ARMv8 is not multi-copy atomic without barriers: another
+     * CPU could otherwise observe a field store before the odd seq becomes
+     * visible, allowing a reader whose snapshot LDAR still sees the old even to
+     * read mid-write fields and then recheck with the same old even (snapshot
+     * == recheck, race undetected). __atomic_thread_fence(__ATOMIC_RELEASE)
+     * lowers to DMB ISH on AArch64 and orders the CAS odd-publish ahead of
+     * every subsequent field store from every observer's perspective.
      */
     __atomic_thread_fence(__ATOMIC_RELEASE);
 
-    /* RELAXED atomic stores: the trailing release-store on seq orders all
-     * these field stores before any reader's acquire-load of the next even
-     * seq. Using __atomic_store_n (rather than plain assignment) keeps the
-     * accesses well-defined under the C abstract machine even though the
-     * compiler will lower them to ordinary aligned 64-bit stores.
+    /* RELAXED atomic stores: the trailing release-store on seq orders all these
+     * field stores before any reader's acquire-load of the next even seq. Using
+     * __atomic_store_n (rather than plain assignment) keeps the accesses
+     * well-defined under the C abstract machine even though the compiler will
+     * lower them to ordinary aligned 64-bit stores.
      */
     uint64_t *vvar64 = (uint64_t *) vvar;
     __atomic_store_n(vvar64 + VVAR_OFF_ANCHOR_CNTVCT / 8, guest_cntvct,
@@ -1323,8 +1318,8 @@ uint64_t vdso_gettimeofday_svc_pc(void)
     return VDSO_BASE + VDSO_GETTIMEOFDAY_SVC_PC;
 }
 
-/* Acquire-load the seqlock counter. Pairs with the release store at the
- * tail of vdso_seed_anchor.
+/* Acquire-load the seqlock counter. Pairs with the release store at the tail of
+ * vdso_seed_anchor.
  */
 static uint32_t vvar_seq_acquire(const uint8_t *page)
 {
@@ -1337,9 +1332,9 @@ bool vdso_anchor_is_seeded(guest_t *g)
     uint8_t *page = vdso_host_page(g);
     if (!page)
         return false;
-    /* A seeded-and-stable anchor has seq != 0 && (seq & 1) == 0 (see the
-     * vvar layout block for the state machine). Acquire pairs with the
-     * release store at the tail of vdso_seed_anchor.
+    /* A seeded-and-stable anchor has seq != 0 && (seq & 1) == 0 (see the vvar
+     * layout block for the state machine). Acquire pairs with the release store
+     * at the tail of vdso_seed_anchor.
      */
     uint32_t seq = vvar_seq_acquire(page);
     return seq != 0 && (seq & 1u) == 0;
@@ -1352,10 +1347,10 @@ void vdso_attention_or(guest_t *g, uint32_t bits)
         return;
     uint32_t *attention =
         (uint32_t *) (page + VDSO_OFF_VVAR + VVAR_OFF_ATTENTION);
-    /* SEQ_CST mirrors shim_globals_attn_or: the EL0 fast paths read this
-     * word without going through HVC, so a reader that LDARs attn=0 must
-     * not observe later publish_creds stores. Release-acquire alone only
-     * orders the forward direction.
+    /* SEQ_CST mirrors shim_globals_attn_or: the EL0 fast paths read this word
+     * without going through HVC, so a reader that LDARs attn=0 must not observe
+     * later publish_creds stores. Release-acquire alone only orders the forward
+     * direction.
      */
     __atomic_fetch_or(attention, bits, __ATOMIC_SEQ_CST);
 }
@@ -1377,18 +1372,21 @@ typedef struct {
     int64_t real_sec, real_nsec;
 } vvar_anchor_t;
 
-/* Snapshot the anchor fields under the seqlock. Returns false when the
- * read window straddles a host refresh (seq mismatch, odd, or zero),
- * leaving *out untouched; callers must treat false as "no useful data,
- * skip the staleness check". Returns true with the fields filled when
- * the read landed entirely within one stable generation.
+/* Snapshot the anchor fields under the seqlock.
+ *
+ * Returns false when the read window straddles a host refresh (seq mismatch,
+ * odd, or zero), leaving *out untouched; callers must treat false as "no useful
+ * data, skip the staleness check".
+ *
+ * Returns true with the fields filled when the read landed entirely within one
+ * stable generation.
  *
  * Ordering mirrors the trampoline: acquire-load of seq snapshots the
- * generation, RELAXED atomic loads of fields, then a
- * thread-fence(ACQUIRE) before the recheck so the field loads cannot be
- * reordered past the recheck LDAR. Without the fence an acquire load
- * only orders subsequent ops after itself, not prior ops before itself
- * (the same memory-model corner the trampoline's DMB ISHLD addresses).
+ * generation, RELAXED atomic loads of fields, then a thread-fence(ACQUIRE)
+ * before the recheck so the field loads cannot be reordered past the recheck
+ * LDAR. Without the fence an acquire load only orders subsequent ops after
+ * itself, not prior ops before itself (the same memory-model corner the
+ * trampoline's DMB ISHLD addresses).
  */
 static bool vvar_snapshot_anchor(const uint8_t *page, vvar_anchor_t *out)
 {
@@ -1431,9 +1429,9 @@ bool vdso_anchor_age_exceeded(guest_t *g, uint64_t current_cntvct)
 }
 
 /* Drift threshold for REALTIME anchor invalidation. macOS NTP steps are
- * typically O(ms) to a few seconds. 100 ms is large enough to absorb the
- * noise from sampling host MONO/REAL back-to-back yet small enough that a
- * stepped wall clock is caught on the first SVC after the step.
+ * typically O(ms) to a few seconds. 100 ms is large enough to absorb the noise
+ * from sampling host MONO/REAL back-to-back yet small enough that a stepped
+ * wall clock is caught on the first SVC after the step.
  */
 #define VDSO_ANCHOR_MAX_DRIFT_NS 100000000LL
 
@@ -1451,9 +1449,9 @@ bool vdso_realtime_drift_exceeded(guest_t *g,
     if (current_cntvct < a.cntvct)
         return true;
 
-    /* An anchor past the age cap also needs a refresh, so declare drift
-     * up front. Short-circuiting here also keeps the mult below uint64
-     * even if a caller invokes this helper with a multi-decade delta.
+    /* An anchor past the age cap also needs a refresh, so declare drift up
+     * front. Short-circuiting here also keeps the mult below uint64 even if a
+     * caller invokes this helper with a multi-decade delta.
      */
     uint64_t delta_cycles = current_cntvct - a.cntvct;
     if (delta_cycles >> VDSO_ANCHOR_AGE_SHIFT)
@@ -1467,9 +1465,9 @@ bool vdso_realtime_drift_exceeded(guest_t *g,
     int64_t delta_sec = (int64_t) (delta_ns / 1000000000ULL);
     int64_t delta_nsec = (int64_t) (delta_ns % 1000000000ULL);
 
-    /* anchor_sec is read from the vvar and could in principle be
-     * adversarial. Catch signed overflow on every add/subtract that
-     * mixes it with the freshly-sampled real_sec.
+    /* anchor_sec is read from the vvar and could in principle be adversarial.
+     * Catch signed overflow on every add/subtract that mixes it with the
+     * freshly-sampled real_sec.
      */
     int64_t pred_sec;
     if (__builtin_add_overflow(a.real_sec, delta_sec, &pred_sec))
@@ -1487,8 +1485,8 @@ bool vdso_realtime_drift_exceeded(guest_t *g,
         return true;
     int64_t sec_diff = real_sec - pred_sec;
 
-    /* Saturate against the drift threshold before multiplying by 1e9 so
-     * the final diff_ns multiply cannot overflow int64.
+    /* Saturate against the drift threshold before multiplying by 1e9 so the
+     * final diff_ns multiply cannot overflow int64.
      */
     const int64_t sat_sec = (VDSO_ANCHOR_MAX_DRIFT_NS / 1000000000LL) + 2;
     if (sec_diff > sat_sec || sec_diff < -sat_sec)

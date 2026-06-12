@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests: fopen(w), fwrite, fclose, fopen(r), fread, fclose, remove.
- * Verifies data integrity through a complete write->read cycle.
+ * Tests: fopen(w), fwrite, fclose, fopen(r), fread, fclose, remove. Verifies
+ * data integrity through a complete write->read cycle.
  */
 
 #include <stdbool.h>

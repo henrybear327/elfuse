@@ -78,8 +78,8 @@ int fork_child_main(int ipc_fd,
 
     /* The startup syscall histogram captures dynamic-linker bring-up of the
      * top-level guest only; the child resumes from the parent's snapshot, so
-     * its first syscalls would be steady-state traffic that confuses the
-     * dump. Disable before any guest syscall is dispatched.
+     * its first syscalls would be steady-state traffic that confuses the dump.
+     * Disable before any guest syscall is dispatched.
      */
     syscall_hist_disable();
 
@@ -122,20 +122,19 @@ int fork_child_main(int ipc_fd,
     proc_set_session(hdr.sid, hdr.pgid);
 
     /* Validate header layout fields before any size-derived arithmetic.
-     * guest_init / guest_init_from_shm derive interp_base, mmap_limit, and
-     * the high-IPA infra reserve from these inputs; underflow on tiny or
-     * malformed values would place pt_pool_base and friends near UINT64_MAX,
-     * which then feeds unchecked host-buffer offsets in pt_alloc_page and
-     * pt_at. Reject impossible layouts up front.
+     * guest_init / guest_init_from_shm derive interp_base, mmap_limit, and the
+     * high-IPA infra reserve from these inputs; underflow on tiny or malformed
+     * values would place pt_pool_base and friends near UINT64_MAX, which then
+     * feeds unchecked host-buffer offsets in pt_alloc_page and pt_at. Reject
+     * impossible layouts up front.
      *
-     * Lower bound: guest_size must leave room for both mmap_limit
-     * (size - 8 GiB) and interp_base (size - 4 GiB) plus the 16 MiB infra
-     * reserve below it. 8 GiB satisfies all three with margin.
-     * Upper bound: guest_size must fit in the negotiated IPA width.
-     * IPA bits: 36 (M1/M2) and 40 (M3+) for native aarch64; 48 for
-     * Rosetta guests, which need the wider Stage-2 width for high VAs
-     * (image at 128 TiB) even though their primary slab stays under
-     * 40-bit. Reject anything outside [36, 48].
+     * Lower bound: guest_size must leave room for both mmap_limit (size - 8
+     * GiB) and interp_base (size - 4 GiB) plus the 16 MiB infra reserve below
+     * it. 8 GiB satisfies all three with margin. Upper bound: guest_size must
+     * fit in the negotiated IPA width. IPA bits: 36 (M1/M2) and 40 (M3+) for
+     * native aarch64; 48 for Rosetta guests, which need the wider Stage-2 width
+     * for high VAs (image at 128 TiB) even though their primary slab stays
+     * under 40-bit. Reject anything outside [36, 48].
      */
     if (hdr.ipa_bits < 36 || hdr.ipa_bits > 48) {
         log_error("fork-child: invalid ipa_bits %u", (unsigned) hdr.ipa_bits);
@@ -156,10 +155,9 @@ int fork_child_main(int ipc_fd,
     guest_t g;
 
     if (hdr.has_shm) {
-        /* CoW fork: receive shm fd via SCM_RIGHTS, then map MAP_PRIVATE.
-         * This gives the child an instant copy-on-write snapshot of the
-         * parent's entire guest memory, with no region enumeration or byte
-         * copying.
+        /* CoW fork: receive shm fd via SCM_RIGHTS, then map MAP_PRIVATE. This
+         * gives the child an instant copy-on-write snapshot of the parent's
+         * entire guest memory, with no region enumeration or byte copying.
          */
         int shm_fd = -1, shm_count = 0;
         if (fork_ipc_recv_fds(ipc_fd, &shm_fd, 1, &shm_count) < 0 ||
@@ -184,14 +182,14 @@ int fork_child_main(int ipc_fd,
     }
 
     /* Restore allocator/page-table cursors before mmap/brk can run in child.
-     * Validate pt_pool_next and ttbr0 against the child's own page-table
-     * pool, which the child just computed from hdr.guest_size +
-     * hdr.ipa_bits via compute_infra_layout.
+     * Validate pt_pool_next and ttbr0 against the child's own page-table pool,
+     * which the child just computed from hdr.guest_size + hdr.ipa_bits via
+     * compute_infra_layout.
      *
      * Range alone is not enough: pt_alloc_page advances pt_pool_next in
-     * GUEST_PAGE_SIZE quanta, and pt_at converts page-table GPAs straight
-     * into host-buffer pointers. An unaligned value passes the [base, end)
-     * gate but then misaligns the walker. Require:
+     * GUEST_PAGE_SIZE quanta, and pt_at converts page-table GPAs straight into
+     * host-buffer pointers. An unaligned value passes the [base, end) gate but
+     * then misaligns the walker. Require:
      *   - pt_pool_next page-aligned relative to pt_pool_base
      *   - ttbr0 strictly inside the in-use pool [pt_pool_base, pt_pool_next)
      *     (parent must have allocated the L0 page) and page-aligned.
@@ -225,10 +223,10 @@ int fork_child_main(int ipc_fd,
     g.mmap_rx_next = hdr.mmap_rx_next;
     g.mmap_rx_end = hdr.mmap_rx_end;
     /* Restore rosetta placement so the non-identity page-table entries that
-     * came across in the memory transfer continue to resolve. ttbr1 points
-     * at the L0 page the parent's PT pool emitted; that page sits inside
-     * the primary buffer and is copied by the region transfer below, so the
-     * child can reuse it without rebuilding the tree.
+     * came across in the memory transfer continue to resolve. ttbr1 points at
+     * the L0 page the parent's PT pool emitted; that page sits inside the
+     * primary buffer and is copied by the region transfer below, so the child
+     * can reuse it without rebuilding the tree.
      */
     g.is_rosetta = (hdr.is_rosetta != 0);
     proc_set_rosetta_active(g.is_rosetta);
@@ -279,9 +277,9 @@ int fork_child_main(int ipc_fd,
 
     /* POSIX: "Signals pending to the parent shall not be pending to the child."
      * Clear pending bitmask and RT queue before applying state.
-     * signal_set_state() is deferred until after thread_register_main()
-     * so that current_thread is non-NULL and per-thread state (blocked mask,
-     * altstack) is properly restored.
+     * signal_set_state() is deferred until after thread_register_main() so that
+     * current_thread is non-NULL and per-thread state (blocked mask, altstack)
+     * is properly restored.
      */
     sig.pending = 0;
     memset(sig.rt_queue, 0, sizeof(sig.rt_queue));
@@ -319,23 +317,22 @@ int fork_child_main(int ipc_fd,
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, regs.sp_el1));
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_TPIDR_EL0, regs.tpidr_el0));
 
-    /* TPIDR_EL1 is set by the host (never inherited from the parent's
-     * register snapshot) because it must point at the child's own
-     * shim_globals base in the child's IPA; shim_data_base happens to
-     * be the same value in both processes (layout derives from
-     * guest_size + ipa_bits which match across fork), but installing
-     * it explicitly keeps the child consistent with the bootstrap path.
-     * CONTEXTIDR_EL1 holds the per-vCPU tid (== child pid for the
-     * single-threaded child at this point).
+    /* TPIDR_EL1 is set by the host (never inherited from the parent's register
+     * snapshot) because it must point at the child's own shim_globals base in
+     * the child's IPA; shim_data_base happens to be the same value in both
+     * processes (layout derives from guest_size + ipa_bits which match across
+     * fork), but installing it explicitly keeps the child consistent with the
+     * bootstrap path. CONTEXTIDR_EL1 holds the per-vCPU tid (== child pid for
+     * the single-threaded child at this point).
      */
     if (shim_globals_install_per_vcpu(vcpu, &g, hdr.child_pid) < 0) {
         guest_destroy(&g);
         return 1;
     }
 
-    /* Enable MMU directly (page tables already in guest memory from IPC).
-     * SCTLR must include MMU-enable (M), caches (C, I), RES1 bits, and EL0
-     * cache maintenance access (UCI, UCT) for JIT translators.
+    /* Enable MMU directly (page tables already in guest memory from IPC). SCTLR
+     * must include MMU-enable (M), caches (C, I), RES1 bits, and EL0 cache
+     * maintenance access (UCI, UCT) for JIT translators.
      */
     uint64_t sctlr_with_mmu = SCTLR_RES1 | SCTLR_M | SCTLR_C | SCTLR_I |
                               SCTLR_DZE | SCTLR_UCT | SCTLR_UCI;
@@ -351,55 +348,53 @@ int fork_child_main(int ipc_fd,
 
     vcpu_restore_simd(vcpu, &regs.simd_state);
 
-    /* Start at the clone return point in EL0 (not the shim entry).
-     * ELR_EL1 points to the guest's clone return site. SPSR_EL1 has the saved
-     * EL0 state. The child sets PC/CPSR for EL0t execution.
+    /* Start at the clone return point in EL0 (not the shim entry). ELR_EL1
+     * points to the guest's clone return site. SPSR_EL1 has the saved EL0
+     * state. The child sets PC/CPSR for EL0t execution.
      */
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_ELR_EL1, regs.elr_el1));
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, regs.spsr_el1));
     HV_CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, regs.elr_el1));
     HV_CHECK(hv_vcpu_set_reg(vcpu, HV_REG_CPSR, 0)); /* EL0t */
 
-    /* Register the fork child's main thread in the thread table.
-     * Without this, current_thread is NULL and any syscall handler that
-     * accesses per-thread state (signal masks, ptrace, CLONE_THREAD) will
-     * dereference NULL.
+    /* Register the fork child's main thread in the thread table. Without this,
+     * current_thread is NULL and any syscall handler that accesses per-thread
+     * state (signal masks, ptrace, CLONE_THREAD) will dereference NULL.
      */
     thread_register_main(vcpu, vexit, hdr.child_pid, regs.sp_el1);
 
-    /* Re-publish identity into the child's shim-globals cache: the
-     * CoW / region copy inherits the parent's pid/uid values, and the
-     * shim's identity fast path would otherwise return the parent's
-     * pid to the child. Identity is now committed via the same path
-     * the bootstrap uses.
+    /* Re-publish identity into the child's shim-globals cache: the CoW / region
+     * copy inherits the parent's pid/uid values, and the shim's identity fast
+     * path would otherwise return the parent's pid to the child. Identity is
+     * now committed via the same path the bootstrap uses.
      */
     shim_globals_init(&g);
     shim_globals_publish_stats_gate(&g);
     shim_globals_set_trace_enabled(&g, verbose);
     shim_globals_publish_pid(&g, hdr.child_pid, hdr.parent_pid);
     shim_globals_publish_creds(&g, hdr.uid, hdr.euid, hdr.gid, hdr.egid);
-    /* proc_set_session above committed hdr.pgid/sid into proc-identity;
-     * mirror into the shim cache so the child's getpgid(0)/getsid(0)
-     * fast paths see the inherited session state from the first syscall.
-     * Publish via proc-identity to keep parity with the syscall-time
-     * session_lock ordering even though no sibling vCPU exists at this point.
+    /* proc_set_session above committed hdr.pgid/sid into proc-identity; mirror
+     * into the shim cache so the child's getpgid(0)/getsid(0) fast paths see
+     * the inherited session state from the first syscall. Publish via
+     * proc-identity to keep parity with the syscall-time session_lock ordering
+     * even though no sibling vCPU exists at this point.
      */
     proc_publish_pgsid_snapshot(&g);
-    /* Fresh entropy for the child. Linux's vDSO getrandom epoch-bumps
-     * across fork; here we just re-fill the ring from arc4random_buf
-     * which seeds from the host kernel's RNG, so parent and child do
-     * not share future urandom output.
+    /* Fresh entropy for the child. Linux's vDSO getrandom epoch-bumps across
+     * fork; this path re-fills the ring from arc4random_buf which seeds from
+     * the host kernel's RNG, so parent and child do not share future urandom
+     * output.
      */
     shim_globals_refill_urandom_ring(&g);
-    /* Register the singleton for the child's signal.c so its
-     * attention setters know which guest to update.
+    /* Register the singleton for the child's signal.c so its attention setters
+     * know which guest to update.
      */
     signal_set_shim_globals_guest(&g);
-    /* Same for the fd-table hooks. Must precede any fd_alloc the
-     * child performs (the fd-table-restore step has already run
-     * above, but those slots are populated via direct memcpy of the
-     * parent's entries; subsequent open/dup/close in the child rely
-     * on this registration to keep the bitmap in sync).
+    /* Same for the fd-table hooks. Must precede any fd_alloc the child performs
+     * (the fd-table-restore step has already run above, but those slots are
+     * populated via direct memcpy of the parent's entries; subsequent
+     * open/dup/close in the child rely on this registration to keep the bitmap
+     * in sync).
      */
     shim_globals_set_singleton(&g);
     /* shim_globals_init above zeroed the urandom bitmap. Walk the inherited fd
@@ -435,8 +430,8 @@ int fork_child_main(int ipc_fd,
 #define LINUX_CLONE_CHILD_SETTID 0x01000000
 /* LINUX_SIGCHLD defined in syscall_signal.h (included above) */
 
-/* Namespace flags. elfuse implements no namespace isolation. Both
- * sys_clone and sys_clone3 reject them.
+/* Namespace flags. elfuse implements no namespace isolation. Both sys_clone and
+ * sys_clone3 reject them.
  */
 #define LINUX_CLONE_NEWTIME 0x00000080
 #define LINUX_CLONE_NEWNS 0x00020000
@@ -548,9 +543,9 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         return -LINUX_ENOMEM;
     }
 
-    /* Capture parent register state before spawning worker.
-     * HVF binds vCPU to the creating thread, so the worker must call
-     * hv_vcpu_create itself. The parent passes all parent state via the args.
+    /* Capture parent register state before spawning worker. HVF binds vCPU to
+     * the creating thread, so the worker must call hv_vcpu_create itself. The
+     * parent passes all parent state via the args.
      */
     uint64_t parent_elr, parent_spsr, parent_vbar, parent_ttbr0;
     uint64_t parent_sctlr, parent_tcr, parent_mair, parent_cpacr;
@@ -613,8 +608,8 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         t->clear_child_tid = ctid_gva;
     }
 
-    /* CLONE_CHILD_SETTID: write child TID to the child's ctid address.
-     * This writes into shared guest memory (visible to child thread).
+    /* CLONE_CHILD_SETTID: write child TID to the child's ctid address. This
+     * writes into shared guest memory (visible to child thread).
      */
     if (flags & LINUX_CLONE_CHILD_SETTID) {
         int32_t tid32 = (int32_t) child_tid;
@@ -645,8 +640,8 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         pthread_cond_destroy(&startup.cond);
         pthread_mutex_destroy(&startup.lock);
         /* Roll back any SETTID writes done before pthread_create. Same
-         * rationale as the post-handshake failure path: clone(2) does not
-         * leave live-looking TIDs behind for a thread that never started.
+         * rationale as the post-handshake failure path: clone(2) does not leave
+         * live-looking TIDs behind for a thread that never started.
          */
         if (flags & LINUX_CLONE_PARENT_SETTID) {
             int32_t zero = 0;
@@ -668,10 +663,10 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
     pthread_cond_destroy(&startup.cond);
     pthread_mutex_destroy(&startup.lock);
     if (startup.startup_rc < 0) {
-        /* Worker failed during HVF bring-up after the SETTID writes had
-         * already populated the guest TID slots. Linux clone(2) does not
-         * leave a live-looking TID behind for a thread that never started,
-         * so zero the slots before the parent sees the error.
+        /* Worker failed during HVF bring-up after the SETTID writes had already
+         * populated the guest TID slots. Linux clone(2) does not leave a
+         * live-looking TID behind for a thread that never started, so zero the
+         * slots before the parent sees the error.
          */
         pthread_join(host_thread, NULL);
         if (flags & LINUX_CLONE_PARENT_SETTID) {
@@ -744,10 +739,10 @@ static void *thread_create_and_run(void *arg)
     WORKER_HV(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_TTBR0_EL1, tca->ttbr0));
     WORKER_HV(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_CPACR_EL1, tca->cpacr));
 
-    /* All worker vCPUs in the process share the same shim_globals base
-     * (one VM per process); a fresh TPIDR_EL1 set is still required
-     * because HVF created this vCPU empty. CONTEXTIDR_EL1 holds the
-     * per-thread tid that the gettid shim fast path returns.
+    /* All worker vCPUs in the process share the same shim_globals base (one VM
+     * per process); a fresh TPIDR_EL1 set is still required because HVF created
+     * this vCPU empty. CONTEXTIDR_EL1 holds the per-thread tid that the gettid
+     * shim fast path returns.
      */
     if (shim_globals_install_per_vcpu(vcpu, tca->guest, t->guest_tid) < 0)
         goto startup_failed;
@@ -772,11 +767,11 @@ static void *thread_create_and_run(void *arg)
     WORKER_HV(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_ELR_EL1, tca->elr));
     WORKER_HV(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, tca->spsr));
 
-    /* Copy all 31 GPRs from parent, then set X0=0 (child clone return).
-     * The vcpu_restore_gprs / vcpu_restore_simd helpers in hvutil.h abort
-     * the whole process on failure via HV_CHECK, which would defeat the
-     * handshake rollback. Open-code the restore here so transient HVF
-     * failures fall into the same startup_failed path as the sysreg writes.
+    /* Copy all 31 GPRs from parent, then set X0=0 (child clone return). The
+     * vcpu_restore_gprs / vcpu_restore_simd helpers in hvutil.h abort the whole
+     * process on failure via HV_CHECK, which would defeat the handshake
+     * rollback. Open-code the restore here so transient HVF failures fall into
+     * the same startup_failed path as the sysreg writes.
      */
     for (unsigned i = 0; i < 31; i++)
         WORKER_HV(hv_vcpu_set_reg(vcpu, HV_REG_X0 + i, tca->gprs[i]));
@@ -809,13 +804,13 @@ static void *thread_create_and_run(void *arg)
 
 startup_failed:
     /* HVF sysreg/GPR setup failed after vCPU creation. Drop the thread slot
-     * before tearing the vCPU down: thread_interrupt_all() scans the active
-     * set and calls hv_vcpus_exit() on each t->vcpu without a null check, so
+     * before tearing the vCPU down: thread_interrupt_all() scans the active set
+     * and calls hv_vcpus_exit() on each t->vcpu without a null check, so
      * clearing t->vcpu while the slot is still active would let a concurrent
-     * exit_group hand a zero handle to HVF. Deactivating first removes the
-     * slot from iteration. Then destroy the vCPU on its owning thread (the
-     * only thread allowed to do so), free args, and finally signal the
-     * parent so it observes a fully torn-down state.
+     * exit_group hand a zero handle to HVF. Deactivating first removes the slot
+     * from iteration. Then destroy the vCPU on its owning thread (the only
+     * thread allowed to do so), free args, and finally signal the parent so it
+     * observes a fully torn-down state.
      */
     thread_deactivate(t);
     hv_vcpu_destroy(vcpu);
@@ -840,9 +835,9 @@ startup_ok:;
     if (t->robust_list_head != 0)
         robust_list_walk(g, t);
 
-    /* CLONE_CHILD_CLEARTID: write 0 to the address and wake one waiter.
-     * This is how pthread_join works in musl: the joining thread does
-     * FUTEX_WAIT on this address until it becomes 0.
+    /* CLONE_CHILD_CLEARTID: write 0 to the address and wake one waiter. This is
+     * how pthread_join works in musl: the joining thread does FUTEX_WAIT on
+     * this address until it becomes 0.
      *
      * Drain any deferred munmap of this thread's stack before waking the
      * joiner: the parent may reuse the freed VA as soon as it returns from
@@ -873,8 +868,8 @@ startup_ok:;
 
     /* When all CLONE_THREAD workers have exited and only the main thread
      * remains, interrupt its futex_wait. In real Linux, child exit delivers
-     * SIGCHLD which interrupts futex_wait with -EINTR.
-     * elfuse simulates this through the futex interrupt API.
+     * SIGCHLD which interrupts futex_wait with -EINTR. elfuse simulates this
+     * through the futex interrupt API.
      */
     if (thread_active_count() == 1) {
         log_debug(
@@ -1101,8 +1096,8 @@ static void *vm_clone_thread_run(void *arg)
     int exit_code = vcpu_run_loop(vcpu, vexit, g, verbose, 0);
 
     /* CLONE_CHILD_CLEARTID cleanup. Same ordering as thread_entry: drain
-     * deferred stack munmaps before waking the joiner so the parent does
-     * not reuse the VA before it is released.
+     * deferred stack munmaps before waking the joiner so the parent does not
+     * reuse the VA before it is released.
      */
     bool wake_ctid = false;
     if (t->clear_child_tid != 0) {
@@ -1122,8 +1117,8 @@ static void *vm_clone_thread_run(void *arg)
     if (wake_ctid)
         futex_wake_one(g, t->clear_child_tid);
 
-    /* Mark exit status for parent's wait4 to collect.
-     * vm_exit_status uses wait-format: (exit_code << 8) for normal exit.
+    /* Mark exit status for parent's wait4 to collect. vm_exit_status uses
+     * wait-format: (exit_code << 8) for normal exit.
      */
     pthread_mutex_t *lock = thread_get_lock();
     pthread_mutex_lock(lock);
@@ -1156,31 +1151,32 @@ static void *vm_clone_thread_run(void *arg)
     }
 
     hv_vcpu_destroy(vcpu);
-    /* Keep the slot active until the parent collects status with wait4.
-     * The slot is freed when thread_ptrace_wait reads vm_exited.
+    /* Keep the slot active until the parent collects status with wait4. The
+     * slot is freed when thread_ptrace_wait reads vm_exited.
      */
 
     return NULL;
 }
 
 /* Create an APFS block-level CoW clone of src_fd via fclonefileat (O(metadata),
- * independent of the source once either side writes). Returns the clone fd on
- * success, -1 with errno set on failure (non-APFS /tmp, ENOSYS, ENOSPC, ...).
- * Callers that issue this snapshot are documented at the call site; the helper
- * itself only owns the clone-path lifecycle.
+ * independent of the source once either side writes).
+ *
+ * Returns the clone fd on success, -1 with errno set on failure (non-APFS /tmp,
+ * ENOSYS, ENOSPC, ...). Callers that issue this snapshot are documented at the
+ * call site; the helper itself only owns the clone-path lifecycle.
  */
 static int fork_snapshot_shm_via_clonefile(int src_fd)
 {
     /* fclonefileat needs a destination path on the same APFS volume as the
      * source. /tmp is APFS on every shipped macOS Apple Silicon configuration;
-     * if a user has remapped /tmp to a different filesystem the call fails
-     * and the caller drops back to the legacy path.
+     * if a user has remapped /tmp to a different filesystem the call fails and
+     * the caller drops back to the legacy path.
      *
-     * The destination lives inside a fresh mkdtemp directory (mode 0700) so
-     * no other local user can race to claim the destination basename between
-     * path selection and fclonefileat: an earlier mkstemp + unlink +
-     * fclonefileat sequence left a window where /tmp was world-writable for
-     * that name and a concurrent process could DoS the fast path via EEXIST.
+     * The destination lives inside a fresh mkdtemp directory (mode 0700) so no
+     * other local user can race to claim the destination basename between path
+     * selection and fclonefileat: an earlier mkstemp + unlink + fclonefileat
+     * sequence left a window where /tmp was world-writable for that name and a
+     * concurrent process could DoS the fast path via EEXIST.
      */
     char tmpdir[] = "/tmp/elfuse-fork-XXXXXX";
     if (mkdtemp(tmpdir) == NULL)
@@ -1196,8 +1192,8 @@ static int fork_snapshot_shm_via_clonefile(int src_fd)
     int clone_fd = open(clone_path, O_RDWR | O_CLOEXEC);
     int saved_errno = errno;
     /* Best-effort cleanup: the clone fd alone keeps the inode alive, so any
-     * unlink/rmdir failure here is a directory-leak nuisance, not a
-     * correctness issue. Caller still gets the open fd.
+     * unlink/rmdir failure here is a directory-leak nuisance, not a correctness
+     * issue. Caller still gets the open fd.
      */
     (void) unlink(clone_path);
     (void) rmdir(tmpdir);
@@ -1249,10 +1245,10 @@ int64_t sys_clone(hv_vcpu_t vcpu,
     bool is_vfork = (flags & LINUX_CLONE_VFORK) != 0;
 
     /* CLONE_VM without CLONE_THREAD usually creates an in-process VM-clone
-     * child that shares guest memory and is waitable via wait4/ptrace.
-     * However CLONE_VFORK must go through the helper-process path below so the
-     * child's later execve replaces only the child image rather than resetting
-     * the parent's shared guest_t.
+     * child that shares guest memory and is waitable via wait4/ptrace. However
+     * CLONE_VFORK must go through the helper-process path below so the child's
+     * later execve replaces only the child image rather than resetting the
+     * parent's shared guest_t.
      */
     if ((flags & LINUX_CLONE_VM) && !(flags & LINUX_CLONE_THREAD) &&
         !is_vfork) {
@@ -1291,8 +1287,8 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         return -LINUX_ENOMEM;
     }
 
-    /* The child starts in --fork-child mode and receives the inherited state
-     * on the socket fd.
+    /* The child starts in --fork-child mode and receives the inherited state on
+     * the socket fd.
      */
     char fd_str[32];
     snprintf(fd_str, sizeof(fd_str), "%d", sock_fds[1]);
@@ -1304,10 +1300,10 @@ int64_t sys_clone(hv_vcpu_t vcpu,
     child_argv[ci++] = self_path;
     if (verbose)
         child_argv[ci++] = "--verbose";
-    /* Rosetta is on by default; only propagate the opt-out flag when the
-     * parent explicitly disabled it. The child re-reads ELFUSE_NO_ROSETTA
-     * from the environment too, so an env-based opt-out is preserved
-     * across fork without an explicit argv entry.
+    /* Rosetta is on by default; only propagate the opt-out flag when the parent
+     * explicitly disabled it. The child re-reads ELFUSE_NO_ROSETTA from the
+     * environment too, so an env-based opt-out is preserved across fork without
+     * an explicit argv entry.
      */
     if (!proc_rosetta_enabled())
         child_argv[ci++] = "--no-rosetta";
@@ -1331,8 +1327,8 @@ int64_t sys_clone(hv_vcpu_t vcpu,
     posix_spawnattr_init(&spawn_attr);
     posix_spawnattr_setflags(&spawn_attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
 
-    /* Set up file actions: explicitly inherit only needed FDs.
-     * With CLOEXEC_DEFAULT, everything is closed unless elfuse opts in.
+    /* Set up file actions: explicitly inherit only needed FDs. With
+     * CLOEXEC_DEFAULT, everything is closed unless elfuse opts in.
      */
     posix_spawn_file_actions_t file_actions;
     posix_spawn_file_actions_init(&file_actions);
@@ -1365,8 +1361,8 @@ int64_t sys_clone(hv_vcpu_t vcpu,
     /* The parent keeps only its end of the control channel. Reset the closed
      * write end to -1 so the fail_snapshot guarded close at the bottom of the
      * function cannot double-close it. In a multithreaded guest, another vCPU
-     * could open a new fd between the two closes and get the same number,
-     * which the second close would then steal.
+     * could open a new fd between the two closes and get the same number, which
+     * the second close would then steal.
      */
     close(sock_fds[1]);
     if (vfork_notify_fds[1] >= 0) {
@@ -1380,12 +1376,12 @@ int64_t sys_clone(hv_vcpu_t vcpu,
      */
     int64_t child_guest_pid = proc_alloc_pid();
 
-    /* Quiesce sibling vCPUs for snapshot consistency.
-     * In multithreaded guests, sibling vCPUs may be actively mutating guest
-     * memory during the fork snapshot (CoW or legacy IPC copy).
-     * Without quiescing them, the child process can receive a torn snapshot
-     * with partially-updated data structures. This matches POSIX fork semantics
-     * where only the calling thread survives.
+    /* Quiesce sibling vCPUs for snapshot consistency. In multithreaded guests,
+     * sibling vCPUs may be actively mutating guest memory during the fork
+     * snapshot (CoW or legacy IPC copy). Without quiescing them, the child
+     * process can receive a torn snapshot with partially-updated data
+     * structures. This matches POSIX fork semantics where only the calling
+     * thread survives.
      */
     thread_quiesce_siblings();
 
@@ -1397,14 +1393,13 @@ int64_t sys_clone(hv_vcpu_t vcpu,
      */
     int snapshot_shm_fd = -1;
 
-    /* Convert MAP_SHARED|MAP_ANONYMOUS regions that have no backing fd
-     * into memfd-backed overlay regions. The conversion seeds a private
-     * temp file with the current bytes and installs a host
-     * MAP_SHARED|MAP_FIXED overlay on the parent. The child receives the
-     * fd via SCM_RIGHTS and re-installs its own overlay so subsequent
-     * writes from either side flow through the kernel page cache and
-     * reach the other. File-backed MAP_SHARED regions already carry a
-     * backing fd and are unaffected. Misaligned shared regions
+    /* Convert MAP_SHARED|MAP_ANONYMOUS regions that have no backing fd into
+     * memfd-backed overlay regions. The conversion seeds a private temp file
+     * with the current bytes and installs a host MAP_SHARED|MAP_FIXED overlay
+     * on the parent. The child receives the fd via SCM_RIGHTS and re-installs
+     * its own overlay so subsequent writes from either side flow through the
+     * kernel page cache and reach the other. File-backed MAP_SHARED regions
+     * already carry a backing fd and are unaffected. Misaligned shared regions
      * (snapshot-style) remain incoherent across fork by design.
      */
     if (mmap_fork_prepare_anon_shared(g, &anon_shared_txn) < 0)
@@ -1415,9 +1410,9 @@ int64_t sys_clone(hv_vcpu_t vcpu,
      * MAP_PRIVATE; subsequent writes on either side are private.
      *
      * The parent's own mapping cannot be flipped to MAP_PRIVATE here: hv_vm_map
-     * caches the host VA->PA mapping, and a MAP_FIXED remap invalidates it
-     * (the parent then reads stale memory and writev returns EFAULT). So the
-     * parent stays on MAP_SHARED and the snapshot is what isolates the child.
+     * caches the host VA->PA mapping, and a MAP_FIXED remap invalidates it (the
+     * parent then reads stale memory and writev returns EFAULT). So the parent
+     * stays on MAP_SHARED and the snapshot is what isolates the child.
      *
      * Two snapshot sources, in preference order (selected just below):
      *   1. fclonefileat of g->shm_fd to an independent APFS clone. The clone
@@ -1580,11 +1575,11 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         goto fail_snapshot;
     }
 
-    /* Snapshot the semantic region array before resuming siblings.
-     * Siblings may mmap/munmap/mprotect after resume, so the code needs a
-     * stable copy for the IPC send. Heap-allocated because
-     * GUEST_MAX_REGIONS * sizeof(guest_region_t) exceeds safe
-     * stack limits on worker threads (512KiB default).
+    /* Snapshot the semantic region array before resuming siblings. Siblings may
+     * mmap/munmap/mprotect after resume, so the code needs a stable copy for
+     * the IPC send. Heap-allocated because GUEST_MAX_REGIONS *
+     * sizeof(guest_region_t) exceeds safe stack limits on worker threads
+     * (512KiB default).
      */
     int nregions_snapshot = g->nregions;
     bool regions_tracker_stale_snapshot = g->regions_tracker_stale;
@@ -1607,9 +1602,9 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         goto fail_snapshot;
     }
 
-    /* Must follow fork_ipc_send_fd_table because the keepalive payload
-     * carries a guest_fd that the child resolves through its just-installed
-     * fd_table to recover the child-side master host fd.
+    /* Must follow fork_ipc_send_fd_table because the keepalive payload carries
+     * a guest_fd that the child resolves through its just-installed fd_table to
+     * recover the child-side master host fd.
      */
     if (fork_ipc_send_pty_keepalives(ipc_sock) < 0) {
         log_error("clone: failed to send pty keepalives");
@@ -1635,9 +1630,9 @@ int64_t sys_clone(hv_vcpu_t vcpu,
 
     close(ipc_sock);
 
-    /* After CoW fork, parent stays on MAP_SHARED because no remap was done.
-     * The shm fd is kept open so subsequent forks can also use CoW.
-     * The child has its own MAP_PRIVATE view of the same file.
+    /* After CoW fork, parent stays on MAP_SHARED because no remap was done. The
+     * shm fd is kept open so subsequent forks can also use CoW. The child has
+     * its own MAP_PRIVATE view of the same file.
      */
 
     /* Register after successful IPC so wait4/waitid can observe the child. */
@@ -1679,12 +1674,12 @@ fail_snapshot:
     free(regions_snapshot);
     if (snapshot_shm_fd >= 0)
         close(snapshot_shm_fd);
-    /* Roll back the in-place anon-shared overlay conversion while
-     * siblings are still parked. A partial rollback failure (e.g.,
-     * region drift past the quiesce timeout) leaves the parent in a
-     * mixed state: the originating fork-IPC error is the user-visible
-     * one, but log abort failures so post-mortem can spot the
-     * lingering overlay without grepping for behavioral symptoms.
+    /* Roll back the in-place anon-shared overlay conversion while siblings are
+     * still parked. A partial rollback failure (e.g., region drift past the
+     * quiesce timeout) leaves the parent in a mixed state: the originating
+     * fork-IPC error is the user-visible one, but log abort failures so
+     * post-mortem can spot the lingering overlay without grepping for
+     * behavioral symptoms.
      */
     int abort_rc = mmap_fork_abort_anon_shared(g, &anon_shared_txn);
     if (abort_rc < 0)
@@ -1699,14 +1694,13 @@ fail_snapshot:
     if (vfork_notify_fds[1] >= 0)
         close(vfork_notify_fds[1]);
     /* posix_spawn at the top of sys_clone always succeeds before any goto
-     * fail_snapshot fires, so child_host_pid is a live process here. The
-     * IPC socket just closed; the child reads EOF on fork_ipc_read_all and
-     * returns nonzero from fork_child_main. Without an explicit waitpid the
-     * exited child becomes a zombie: proc_register_child only runs on the
-     * success path, so neither proc_reap_finished nor sys_wait4 will ever
-     * pick this PID up, and the guest's fork(2) already reported failure.
-     * Reap it here to keep host PIDs from accumulating across repeated
-     * failures.
+     * fail_snapshot fires, so child_host_pid is a live process here. The IPC
+     * socket just closed; the child reads EOF on fork_ipc_read_all and returns
+     * nonzero from fork_child_main. Without an explicit waitpid the exited
+     * child becomes a zombie: proc_register_child only runs on the success
+     * path, so neither proc_reap_finished nor sys_wait4 will ever pick this PID
+     * up, and the guest's fork(2) already reported failure. Reap it here to
+     * keep host PIDs from accumulating across repeated failures.
      */
     pid_t reaped;
     do {
@@ -1720,8 +1714,8 @@ fail_snapshot:
 
 /* clone3: extended clone with clone_args struct. */
 
-/* Linux clone_args layout (kernel v5.3+, extensible).
- * Fields beyond the caller-provided size are treated as zero.
+/* Linux clone_args layout (kernel v5.3+, extensible). Fields beyond the
+ * caller-provided size are treated as zero.
  */
 struct linux_clone_args {
     uint64_t flags, pidfd;
@@ -1786,8 +1780,8 @@ int64_t sys_clone3(hv_vcpu_t vcpu,
     if (ca.set_tid_size != 0)
         return -LINUX_EINVAL; /* set_tid not implemented */
 
-    /* Validate exit_signal range (0-64 on Linux).
-     * CLONE_THREAD requires exit_signal == 0 (threads do not signal on exit).
+    /* Validate exit_signal range (0-64 on Linux). CLONE_THREAD requires
+     * exit_signal == 0 (threads do not signal on exit).
      */
     if (ca.exit_signal > 64)
         return -LINUX_EINVAL;
@@ -1800,22 +1794,20 @@ int64_t sys_clone3(hv_vcpu_t vcpu,
     if ((ca.stack == 0) != (ca.stack_size == 0))
         return -LINUX_EINVAL;
 
-    /* Merge exit_signal into flags for sys_clone compatibility.
-     * clone3 moved exit_signal out of the flags field; sys_clone expects
-     * it in the low byte. Safe because validation confirmed ca.flags low byte
-     * is zero.
+    /* Merge exit_signal into flags for sys_clone compatibility. clone3 moved
+     * exit_signal out of the flags field; sys_clone expects it in the low byte.
+     * Safe because validation confirmed ca.flags low byte is zero.
      */
-    /* Strip CLONE_PIDFD before passing to sys_clone (which does not
-     * understand it). Pidfd creation happens after the clone returns.
+    /* Strip CLONE_PIDFD before passing to sys_clone (which does not understand
+     * it). Pidfd creation happens after the clone returns.
      */
     bool want_pidfd = (ca.flags & LINUX_CLONE_PIDFD) != 0;
     uint64_t flags =
         (ca.flags & ~(uint64_t) LINUX_CLONE_PIDFD) | ca.exit_signal;
 
-    /* Compute child stack pointer.
-     * clone: child_stack is the TOP of the stack (SP value).
-     * clone3: stack is the BOTTOM, stack_size is the length.
-     * SP = stack + stack_size (grows downward on aarch64).
+    /* Compute child stack pointer. clone: child_stack is the TOP of the stack
+     * (SP value). clone3: stack is the BOTTOM, stack_size is the length. SP =
+     * stack + stack_size (grows downward on aarch64).
      */
     uint64_t child_stack = 0;
     if (ca.stack != 0) {
@@ -1836,8 +1828,8 @@ int64_t sys_clone3(hv_vcpu_t vcpu,
                             ca.stack + ca.stack_size, ca.parent_tid, ca.tls,
                             ca.child_tid, verbose);
 
-    /* If clone succeeded and CLONE_PIDFD was requested, create a pidfd
-     * for the child and write the guest FD number to ca.pidfd.
+    /* If clone succeeded and CLONE_PIDFD was requested, create a pidfd for the
+     * child and write the guest FD number to ca.pidfd.
      */
     if (ret > 0 && want_pidfd && ca.pidfd != 0) {
         int pfd = pidfd_create(g, ret);

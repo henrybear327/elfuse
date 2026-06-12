@@ -64,8 +64,8 @@ int main(void)
     flags = 0x00000100 | 0x00010000 | 0x00000800 | 0x00000200 |
             0x00000400; /* VM|THREAD|SIGHAND|FS|FILES */
 
-    /* aarch64 clone ABI: x0=flags, x1=child_stack, x2=parent_tid,
-     * x3=tls, x4=child_tid. The child returns at the same site.
+    /* aarch64 clone ABI: x0=flags, x1=child_stack, x2=parent_tid, x3=tls,
+     * x4=child_tid. The child returns at the same site.
      */
     long rc = raw_clone((unsigned long) flags, stack_top, NULL, 0, &ctid);
     if (rc == 0) {

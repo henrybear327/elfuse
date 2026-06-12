@@ -3,12 +3,12 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * The infrastructure reserve at the top of guest IPA holds page tables,
- * the EL1 shim's code, and the shim's data block. None of these are
- * legal targets for guest memory management. sys_mmap MAP_FIXED,
- * sys_munmap and sys_mprotect already enforce this via
- * guest_range_hits_infra; sys_mremap and sys_madvise did not, leaving a
- * spoofing/corruption vector for code that knows the infra GVA.
+ * The infrastructure reserve at the top of guest IPA holds page tables, the EL1
+ * shim's code, and the shim's data block. None of these are legal targets for
+ * guest memory management. sys_mmap MAP_FIXED, sys_munmap and sys_mprotect
+ * already enforce this via guest_range_hits_infra; sys_mremap and sys_madvise
+ * did not, leaving a spoofing/corruption vector for code that knows the infra
+ * GVA.
  *
  * This test exercises the four guarded variants:
  *   1. mremap source range hits infra
@@ -16,9 +16,9 @@
  *   3. mremap grow-in-place tail spills into infra
  *   4. madvise(MADV_DONTNEED) on an infra range
  *
- * All four must fail with EINVAL. The infra base is read at runtime
- * from /proc/self/maps so the test stays portable across the 36-bit
- * and 40-bit IPA configurations.
+ * All four must fail with EINVAL. The infra base is read at runtime from
+ * /proc/self/maps so the test stays portable across the 36-bit and 40-bit IPA
+ * configurations.
  */
 
 #include <errno.h>
@@ -77,8 +77,8 @@ int main(void)
 {
     printf("test-mremap-infra: mremap/madvise reject infra-range targets\n");
 
-    /* Locate [shim-data]; if absent, [shim] is also acceptable as the
-     * infra reserve covers both. The test only needs ANY infra GVA.
+    /* Locate [shim-data]; if absent, [shim] is also acceptable as the infra
+     * reserve covers both. The test only needs ANY infra GVA.
      */
     uint64_t infra = find_region_base("[shim-data]");
     if (!infra)
@@ -98,9 +98,9 @@ int main(void)
         return 1;
     }
 
-    /* Case 1: mremap source range hits infra. The source must be a
-     * legal VMA for mremap to consider it, but pointing the call
-     * directly at the infra base is enough to make the kernel try.
+    /* Case 1: mremap source range hits infra. The source must be a legal VMA
+     * for mremap to consider it, but pointing the call directly at the infra
+     * base is enough to make the kernel try.
      */
     errno = 0;
     void *r = mremap((void *) (uintptr_t) infra, PAGE_SIZE, PAGE_SIZE,
@@ -115,10 +115,9 @@ int main(void)
     EXPECT(r == MAP_FAILED && errno == EINVAL,
            "mremap MREMAP_FIXED dest==infra rejected with EINVAL");
 
-    /* Case 3: grow-in-place tail spills into infra. Map a one-page
-     * region immediately below the infra base (assumes nothing
-     * else sits in that hole; if it does, the test is inconclusive
-     * but still safe).
+    /* Case 3: grow-in-place tail spills into infra. Map a one-page region
+     * immediately below the infra base (assumes nothing else sits in that hole;
+     * if it does, the test is inconclusive but still safe).
      */
     void *base = (void *) (uintptr_t) (infra - PAGE_SIZE);
     void *p = mmap(base, PAGE_SIZE, PROT_READ | PROT_WRITE,

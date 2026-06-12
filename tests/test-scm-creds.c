@@ -3,8 +3,8 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests: SO_PASSCRED setsockopt/getsockopt, SO_PEERCRED getsockopt,
- * and SCM_CREDENTIALS ancillary data injection on recvmsg.
+ * Tests: SO_PASSCRED setsockopt/getsockopt, SO_PEERCRED getsockopt, and
+ * SCM_CREDENTIALS ancillary data injection on recvmsg.
  */
 
 #include <stdio.h>

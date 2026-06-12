@@ -42,8 +42,8 @@ int64_t sys_clone(hv_vcpu_t vcpu,
                   uint64_t ctid_gva,
                   bool verbose);
 
-/* clone3 syscall: extended clone with clone_args struct.
- * Translates clone_args to sys_clone parameters and delegates.
+/* clone3 syscall: extended clone with clone_args struct. Translates clone_args
+ * to sys_clone parameters and delegates.
  * Returns child guest PID to parent, or negative Linux errno.
  */
 int64_t sys_clone3(hv_vcpu_t vcpu,

@@ -127,14 +127,16 @@ static void cleanup_main_resources(guest_t *g,
  * few x the current blob) so the rest of the reserve goes to the page-table
  * pool. If the shim ever outgrows the slot it would overlap the shim-data
  * block; fail the build loudly rather than corrupt memory at boot. Enlarge
- * INFRA_SHIM_SLOT (and shrink the pool to match) if this fires. */
+ * INFRA_SHIM_SLOT (and shrink the pool to match) if this fires.
+ */
 _Static_assert(sizeof(shim_bin) <= INFRA_SHIM_SLOT,
                "shim blob exceeds its infra slot; bump INFRA_SHIM_SLOT");
 
 /* The infra-reserve layout invariants documented in guest.h are derived from
  * raw offset constants, so a future edit that grows the pool by shifting one
- * offset without the others would silently overlap two regions. Enforce them
- * at build time rather than trusting the comment. */
+ * offset without the others would silently overlap two regions. Enforce them at
+ * build time rather than trusting the comment.
+ */
 _Static_assert(INFRA_PT_POOL_END_OFF == INFRA_SHIM_OFF,
                "PT pool must end exactly where the shim slot begins");
 _Static_assert(INFRA_SHIM_DATA_OFF + BLOCK_2MIB == INFRA_RESERVE,
@@ -151,12 +153,12 @@ _Static_assert((INFRA_PT_POOL_OFF & 0xFFF) == 0 &&
 /* Verify the host CPU's DC ZVA granule matches the shim's hardcoded value.
  *
  * DCZID_EL0 is readable from EL0 without trapping, so guest libc reads the
- * host's value directly and uses it as the stride for memset(0) loops. The
- * shim emulates each trapped DC ZVA by zeroing exactly 64 bytes
- * (src/core/shim.S). Apple Silicon M1..M4 report DCZID_EL0.BS=4 (64 bytes);
- * any future host that advertises a different granule would cause silent
- * partial-zero corruption of guest memory. Abort here so the mismatch
- * surfaces at startup instead of as data corruption later.
+ * host's value directly and uses it as the stride for memset(0) loops. The shim
+ * emulates each trapped DC ZVA by zeroing exactly 64 bytes (src/core/shim.S).
+ * Apple Silicon M1..M4 report DCZID_EL0.BS=4 (64 bytes); any future host that
+ * advertises a different granule would cause silent partial-zero corruption of
+ * guest memory. Abort here so the mismatch surfaces at startup instead of as
+ * data corruption later.
  */
 static int host_dc_zva_assert(void)
 {
@@ -188,10 +190,10 @@ int main(int argc, char **argv)
     syscall_hist_init();
 
     bool verbose = false;
-    /* x86_64-via-Rosetta is on by default; --no-rosetta or
-     * ELFUSE_NO_ROSETTA=1 disables it. Architecture is auto-detected from
-     * the ELF header in guest_bootstrap_prepare; the access() probe in
-     * rosetta_prepare surfaces an install hint if Rosetta is not present.
+    /* x86_64-via-Rosetta is on by default; --no-rosetta or ELFUSE_NO_ROSETTA=1
+     * disables it. Architecture is auto-detected from the ELF header in
+     * guest_bootstrap_prepare; the access() probe in rosetta_prepare surfaces
+     * an install hint if Rosetta is not present.
      */
     bool rosetta_enabled = true;
     int timeout_sec = 10, fork_child_fd = -1, vfork_notify_fd = -1;
@@ -330,11 +332,11 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* ELFUSE_NO_ROSETTA=1 mirrors --no-rosetta for environments where
-     * passing flags is awkward (test harnesses, wrapper scripts). Unset or
-     * any other value leaves the default on. Commit the result before the
-     * --fork-child early-return so helper processes inherit the parent's
-     * opt-out semantics exactly.
+    /* ELFUSE_NO_ROSETTA=1 mirrors --no-rosetta for environments where passing
+     * flags is awkward (test harnesses, wrapper scripts). Unset or any other
+     * value leaves the default on. Commit the result before the --fork-child
+     * early-return so helper processes inherit the parent's opt-out semantics
+     * exactly.
      */
     if (rosetta_enabled) {
         const char *no_rosetta_env = getenv("ELFUSE_NO_ROSETTA");
@@ -536,16 +538,16 @@ int main(int argc, char **argv)
     gdb_stub_shutdown();
 
     /* Diagnostic counter dump runs before guest_destroy so the shim_data
-     * mapping is still valid. ELFUSE_SHIM_STATS is the gate; an unset
-     * variable produces no output.
+     * mapping is still valid. ELFUSE_SHIM_STATS is the gate; an unset variable
+     * produces no output.
      */
     if (shim_globals_stats_enabled())
         shim_globals_counters_dump(&g);
 
     /* Dump the startup histogram before guest_destroy so any cleanup-path
      * syscalls (closing host fds, unmapping the slab) do not appear in the
-     * captured set. The dump is a no-op when ELFUSE_STARTUP_TRACE=syscalls
-     * was not requested.
+     * captured set. The dump is a no-op when ELFUSE_STARTUP_TRACE=syscalls was
+     * not requested.
      */
     syscall_hist_dump();
     cleanup_main_resources(&g, guest_initialized, &sysroot_mount,

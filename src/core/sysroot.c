@@ -342,10 +342,10 @@ int sysroot_probe_case_sensitivity(const char *path,
                                               case_preserving);
 }
 
-/* Returns 1 if both sentinel paths exist under sysroot, 0 if at least one
- * is absent, -1 on error (e.g. path truncation). Truncation must fail
- * closed: returning 0 would silently admit a case-insensitive sysroot
- * that should be rejected for colliding Linux pathnames.
+/* Returns 1 if both sentinel paths exist under sysroot, 0 if at least one is
+ * absent, -1 on error (e.g. path truncation). Truncation must fail closed:
+ * returning 0 would silently admit a case-insensitive sysroot that should be
+ * rejected for colliding Linux pathnames.
  */
 static int collision_pair_exists(const char *sysroot,
                                  const char *rel_a,

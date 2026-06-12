@@ -634,10 +634,9 @@ int main(void)
     }
     close(fd);
 
-    /* Canonicalization: ./ and intermediate-up traversals must collapse to
-     * the same file rather than be forwarded as literal FUSE_LOOKUP names.
-     * Without canonicalization the daemon would receive LOOKUP for "." and
-     * fail.
+    /* Canonicalization: ./ and intermediate-up traversals must collapse to the
+     * same file rather than be forwarded as literal FUSE_LOOKUP names. Without
+     * canonicalization the daemon would receive LOOKUP for "." and fail.
      */
     char dot_path[256];
     snprintf(dot_path, sizeof(dot_path), "%s/./%s", mount_dir, hello_name);
@@ -647,9 +646,9 @@ int main(void)
     expect_hello_fd(dotfd);
     close(dotfd);
 
-    /* sub/../hello must canonicalize to hello before the FUSE walk; the
-     * daemon does not implement sub or "..", so this would fail with
-     * ENOENT if the path were forwarded literally.
+    /* sub/../hello must canonicalize to hello before the FUSE walk; the daemon
+     * does not implement sub or "..", so this would fail with ENOENT if the
+     * path were forwarded literally.
      */
     char up_path[256];
     snprintf(up_path, sizeof(up_path), "%s/sub/../%s", mount_dir, hello_name);
@@ -723,18 +722,18 @@ int main(void)
 
     /* Daemon-death + post-tombstone routing test.
      *
-     * Set the virtual cwd to the FUSE mount via fchdir(dfd) so the consumer
-     * has a FUSE-rooted relative-path baseline. Close /dev/fuse from the
-     * consumer side to simulate daemon death: fuse_fd_cleanup tombstones
-     * the mount (mount->session = NULL but the slot path/source/fstype/
-     * mount_id stay intact), wakes any blocked requests, and the daemon
-     * thread's next read returns ENOTCONN and the thread exits.
+     * Set the virtual cwd to the FUSE mount via fchdir(dfd) so the consumer has
+     * a FUSE-rooted relative-path baseline. Close /dev/fuse from the consumer
+     * side to simulate daemon death: fuse_fd_cleanup tombstones the mount
+     * (mount->session = NULL but the slot path/source/fstype/ mount_id stay
+     * intact), wakes any blocked requests, and the daemon thread's next read
+     * returns ENOTCONN and the thread exits.
      *
      * After the daemon is gone, a relative open from the still-FUSE-rooted
      * virtual cwd MUST return -LINUX_ENOTCONN rather than silently falling
-     * through to host-relative open against the host cwd. The tombstoned
-     * mount keeps the path matching FUSE, and fuse_open_path detects
-     * session==NULL and returns ENOTCONN.
+     * through to host-relative open against the host cwd. The tombstoned mount
+     * keeps the path matching FUSE, and fuse_open_path detects session==NULL
+     * and returns ENOTCONN.
      */
     if (fchdir(dfd) < 0)
         die("fchdir(dfd) before daemon death");

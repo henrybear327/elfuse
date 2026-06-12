@@ -6,9 +6,9 @@
  *
  * Usage: elfuse test-exec <path-to-echo-test> exec-works
  *
- * This test calls execve() to replace itself with echo-test, which
- * prints its arguments. If execve works correctly, "exec-works" is
- * printed and the process exits 0.
+ * This test calls execve() to replace itself with echo-test, which prints its
+ * arguments. If execve works correctly, "exec-works" is printed and the process
+ * exits 0.
  */
 
 #include <unistd.h>
@@ -22,8 +22,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* argv[1] = path to binary to exec
-     * argv[2..] = arguments to pass to it
+    /* argv[1] = path to binary to exec argv[2..] = arguments to pass to it
      */
     char *new_argv[64];
     int n = 0;

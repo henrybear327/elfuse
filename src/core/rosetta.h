@@ -34,25 +34,24 @@
 
 /* Apple Rosetta Linux translator path. The OS ships the binary inside the
  * platform image; users who have not run 'softwareupdate --install-rosetta'
- * will not have this file and elfuse must refuse the load with a helpful
- * error.
+ * will not have this file and elfuse must refuse the load with a helpful error.
  */
 #define ROSETTA_PATH "/Library/Apple/usr/libexec/oah/RosettaLinux/rosetta"
 
-/* Path of Apple's standalone translator daemon. The 'elfuse rosettad
- * translate' subcommand re-execs into this binary inside an aarch64-linux
- * guest to materialise an AOT translation on cache miss.
+/* Path of Apple's standalone translator daemon. The 'elfuse rosettad translate'
+ * subcommand re-execs into this binary inside an aarch64-linux guest to
+ * materialise an AOT translation on cache miss.
  */
 #define ROSETTAD_TRANSLATOR_PATH \
     "/Library/Apple/usr/libexec/oah/RosettaLinux/rosettad"
 
-/* Rosetta's Virtualization.framework probe ioctls. Rosetta issues these on
- * an open fd very early at startup to verify that it is running inside a
- * supported VZ environment. Without affirmative responses, rosetta prints
- * "Rosetta is only intended to run on Apple Silicon ..." and exits.
+/* Rosetta's Virtualization.framework probe ioctls. Rosetta issues these on an
+ * open fd very early at startup to verify that it is running inside a supported
+ * VZ environment. Without affirmative responses, rosetta prints "Rosetta is
+ * only intended to run on Apple Silicon ..." and exits.
  *
- * Reverse-engineered from the rosetta binary; values match what the
- * Lima-on-VZ Linux VM observes via strace.
+ * Reverse-engineered from the rosetta binary; values match what the Lima-on-VZ
+ * Linux VM observes via strace.
  */
 #define ROSETTA_VZ_CHECK 0x80456125 /* Returns 69-byte signature */
 #define ROSETTA_VZ_CAPS 0x80806123  /* Returns 128-byte capability blob */
@@ -73,17 +72,18 @@
  * - VZ_CAPS exposes a 42-byte inline path field to rosetta itself. When the
  *   original host path is longer, publish a short runtime alias instead of a
  *   truncated string.
- * - The host-side translate subprocess needs the full original path.
- * Subsequent calls overwrite the previous value (execve into a different
- * x86_64 binary).
+ * - The host-side translate subprocess needs the full original path. Subsequent
+ * calls overwrite the previous value (execve into a different x86_64 binary).
  */
 void rosettad_set_binary_path(const char *path, bool take_ownership);
 void rosettad_clear_binary_path(void);
 
-/* Snapshot the published paths into caller-supplied buffers under the
- * setter's mutex. Returns the byte count written (excluding NUL). The
- * lock keeps the VZ_CAPS reader (any vCPU) and the execve writer from
- * racing on the static buffer contents.
+/* Snapshot the published paths into caller-supplied buffers under the setter's
+ * mutex.
+ *
+ * Returns the byte count written (excluding NUL). The lock keeps the VZ_CAPS
+ * reader (any vCPU) and the execve writer from racing on the static buffer
+ * contents.
  *
  * Caller buffers:
  *   rosettad_snapshot_binary_path        - PATH_MAX wide for full host path
@@ -94,10 +94,10 @@ size_t rosettad_snapshot_caps_binary_path(char *out_buf, size_t out_size);
 
 /* rosettad wire protocol.
  *
- * Rosetta opens AF_UNIX SOCK_SEQPACKET and connects to a socket; macOS
- * lacks SOCK_SEQPACKET for AF_UNIX so elfuse intercepts socket(SEQPACKET)
- * with socketpair(SOCK_STREAM) and runs a handler thread on the other
- * end. The thread implements the single-byte command protocol below.
+ * Rosetta opens AF_UNIX SOCK_SEQPACKET and connects to a socket; macOS lacks
+ * SOCK_SEQPACKET for AF_UNIX so elfuse intercepts socket(SEQPACKET) with
+ * socketpair(SOCK_STREAM) and runs a handler thread on the other end. The
+ * thread implements the single-byte command protocol below.
  *
  * Wire sequence (rosetta is the client, handler is the daemon):
  *   '?' (HANDSHAKE): handler replies one byte HIT (0x01) when ready.
@@ -122,37 +122,37 @@ size_t rosettad_snapshot_caps_binary_path(char *out_buf, size_t out_size);
 #define ROSETTAD_DIGEST_HEX_LEN (ROSETTAD_DIGEST_SIZE * 2 + 1)
 
 /* Persistent AOT cache directory, relative to $HOME. Real rosettad uses
- * ~/.cache/rosetta/ for its own .flu cache; elfuse's intercept runs in
- * parallel under a separate subdirectory to keep the two from colliding.
+ * ~/.cache/rosetta/ for its own .flu cache; elfuse's intercept runs in parallel
+ * under a separate subdirectory to keep the two from colliding.
  */
 #define ROSETTAD_CACHE_SUBDIR ".cache/elfuse-rosettad"
 
-/* Spawn the rosettad handler thread on the elfuse-side end of the
- * socketpair. handler_fd is the host fd the thread reads/writes; client_fd
- * is the rosetta-visible side, recorded so rosettad_is_socket can later
- * identify it (sys_recvmsg / sys_sendmsg paths use this to decide whether
- * to take the rosettad-aware code branch).
+/* Spawn the rosettad handler thread on the elfuse-side end of the socketpair.
+ * handler_fd is the host fd the thread reads/writes; client_fd is the
+ * rosetta-visible side, recorded so rosettad_is_socket can later identify it
+ * (sys_recvmsg / sys_sendmsg paths use this to decide whether to take the
+ * rosettad-aware code branch).
  *
- * Returns 0 on success, -1 on pthread_create failure. The thread runs
- * detached; its lifetime is bounded by the client closing its fd (read
- * returns 0) or by an explicit ROSETTAD_CMD_QUIT.
+ * Returns 0 on success, -1 on pthread_create failure. The thread runs detached;
+ * its lifetime is bounded by the client closing its fd (read returns 0) or by
+ * an explicit ROSETTAD_CMD_QUIT.
  */
 int rosettad_start_handler(int handler_fd, int client_fd);
 
-/* True when host_fd is the rosetta-visible end of a socketpair installed
- * by rosettad_start_handler. Used by sys_connect to short-circuit the
- * connect (the socketpair is pre-wired) and by sendmsg/recvmsg to pick
- * the rosettad-aware code paths.
+/* True when host_fd is the rosetta-visible end of a socketpair installed by
+ * rosettad_start_handler. Used by sys_connect to short-circuit the connect (the
+ * socketpair is pre-wired) and by sendmsg/recvmsg to pick the rosettad-aware
+ * code paths.
  */
 bool rosettad_is_socket(int host_fd);
 
-/* Block (with a short poll loop) until the rosettad bridge handler thread
- * has cleared its process-global client-fd marker, OR the timeout elapses.
- * Used by sys_execve before installing a fresh bridge so a stale handler
- * winding down does not collide with the new rosettad_start_handler CAS.
+/* Block (with a short poll loop) until the rosettad bridge handler thread has
+ * cleared its process-global client-fd marker, OR the timeout elapses. Used by
+ * sys_execve before installing a fresh bridge so a stale handler winding down
+ * does not collide with the new rosettad_start_handler CAS.
  *
- * Returns true if the bridge is idle on return, false if the timeout
- * expired with the bridge still claimed.
+ * Returns true if the bridge is idle on return, false if the timeout expired
+ * with the bridge still claimed.
  */
 bool rosettad_wait_for_idle(unsigned int max_ms);
 
@@ -167,16 +167,17 @@ typedef struct {
     uint64_t entry_point; /* High-VA entry from rosetta ELF */
 } rosetta_result_t;
 
-/* First-pass rosetta setup, runs before guest_build_page_tables(): parse
- * the rosetta binary, place its segments in the primary buffer (or reload
- * into the existing placement on execve), initialize the TTBR1 kbuf, and
- * append page-table regions for the builder. A single non-identity
- * mem_region_t covers the rosetta image, mapping its statically-linked high
- * VA to the chosen low GPA via mem_region_t.va_base.
+/* First-pass rosetta setup, runs before guest_build_page_tables(): parse the
+ * rosetta binary, place its segments in the primary buffer (or reload into the
+ * existing placement on execve), initialize the TTBR1 kbuf, and append
+ * page-table regions for the builder. A single non-identity mem_region_t covers
+ * the rosetta image, mapping its statically-linked high VA to the chosen low
+ * GPA via mem_region_t.va_base.
  *
- * The caller's regions array and *nregions cursor are updated. Returns 0 on
- * success, -1 on any failure; on failure g->rosetta_* state is left in the
- * configuration it had on entry (so a retry can succeed).
+ * The caller's regions array and *nregions cursor are updated.
+ *
+ * Returns 0 on success, -1 on any failure; on failure g->rosetta_* state is
+ * left in the configuration it had on entry (so a retry can succeed).
  */
 int rosetta_prepare(guest_t *g,
                     const char *binary_path,
@@ -186,12 +187,12 @@ int rosetta_prepare(guest_t *g,
                     bool verbose,
                     rosetta_result_t *result);
 
-/* Second-pass rosetta setup, runs after guest_build_page_tables(): install
- * the TTBR0 user-VA alias for the kbuf, pre-open the x86_64 binary at fd 3,
- * build the binfmt_misc argv ([ROSETTA_PATH, binary, original argv[1..]])
- * for build_linux_stack to consume, and refresh proc state. The remaining
- * runtime blocker after this stage is high-VA mmap support for Rosetta's
- * own internal fixed-address allocations.
+/* Second-pass rosetta setup, runs after guest_build_page_tables(): install the
+ * TTBR0 user-VA alias for the kbuf, pre-open the x86_64 binary at fd 3, build
+ * the binfmt_misc argv ([ROSETTA_PATH, binary, original argv[1..]]) for
+ * build_linux_stack to consume, and refresh proc state. The remaining runtime
+ * blocker after this stage is high-VA mmap support for Rosetta's own internal
+ * fixed-address allocations.
  */
 int rosetta_finalize(guest_t *g,
                      hv_vcpu_t vcpu,

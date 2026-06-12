@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Uname, getrandom, getcwd, sched_getaffinity, getgroups, getrusage,
- * sysinfo, and prlimit64. System queries that do not fit neatly into
- * filesystem, I/O, or time categories.
+ * Uname, getrandom, getcwd, sched_getaffinity, getgroups, getrusage, sysinfo,
+ * and prlimit64. System queries that do not fit neatly into filesystem, I/O, or
+ * time categories.
  */
 
 #pragma once
@@ -49,7 +49,8 @@ int64_t sys_prlimit64(guest_t *g,
                       uint64_t new_gva,
                       uint64_t old_gva);
 
-/* Format /proc/self/limits content into buf.  Returns bytes written
- * (excluding NUL) or -1 on error.
+/* Format /proc/self/limits content into buf.
+ *
+ * Returns bytes written (excluding NUL) or -1 on error.
  */
 int sys_format_limits(char *buf, size_t bufsz);

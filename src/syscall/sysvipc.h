@@ -4,11 +4,10 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * shmget, shmat, shmdt, shmctl, semget, semop, semctl,
- * msgget, msgsnd, msgrcv, msgctl.
- * Translates Linux SysV IPC calls to macOS equivalents.
- * shmat copies data between host shm and guest memory (HVF
- * cannot map host shm directly into guest address space).
+ * shmget, shmat, shmdt, shmctl, semget, semop, semctl, msgget, msgsnd, msgrcv,
+ * msgctl. Translates Linux SysV IPC calls to macOS equivalents. shmat copies
+ * data between host shm and guest memory (HVF cannot map host shm directly into
+ * guest address space).
  */
 
 #pragma once

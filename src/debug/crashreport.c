@@ -5,8 +5,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Prints a structured diagnostic to stderr when elfuse encounters a fatal
- * error. Sections: environment, crash type, binary info, registers,
- * memory layout, and instructions for filing a GitHub issue.
+ * error. Sections: environment, crash type, binary info, registers, memory
+ * layout, and instructions for filing a GitHub issue.
  */
 
 #include <stdio.h>
@@ -66,8 +66,8 @@ static const char *crash_type_name(crash_type_t type)
     return "UNKNOWN";
 }
 
-/* Decode ESR_EL1 exception class (bits [31:26]) to a short label.
- * Values per ARM DDI 0487 (ARMv8-A Architecture Reference Manual).
+/* Decode ESR_EL1 exception class (bits [31:26]) to a short label. Values per
+ * ARM DDI 0487 (ARMv8-A Architecture Reference Manual).
  */
 static const char *esr_ec_name(uint64_t esr)
 {
@@ -130,14 +130,14 @@ static bool esr_is_data_abort(uint64_t esr)
     return ec == 0x24 || ec == 0x25;
 }
 
-/* Walk the guest stage-1 page tables for `va` and print L0/L1/L2/L3 entries
- * in raw form so the crash report localises an "unmapped" claim either to the
- * guest PT (entry is 0 or PT_VALID clear) or to a downstream stage-2 hole.
- * The walker mirrors gva_translate_perm in src/core/guest.c but accepts any
- * PT_VALID descriptor instead of enforcing requested permissions, so a
+/* Walk the guest stage-1 page tables for the supplied VA and print L0/L1/L2/L3
+ * entries in raw form so the crash report localises an "unmapped" claim either
+ * to the guest PT (entry is 0 or PT_VALID clear) or to a downstream stage-2
+ * hole. The walker mirrors gva_translate_perm in src/core/guest.c but accepts
+ * any PT_VALID descriptor instead of enforcing requested permissions, so a
  * non-executable or EL1-only page still prints with its actual contents.
- * Silently skips when g, host_base, or ttbr0 are missing -- the data needed
- * for the dump is gone before the walker can stage anything useful.
+ * Silently skips when g, host_base, or ttbr0 are missing -- the data needed for
+ * the dump is gone before the walker can stage anything useful.
  */
 static bool dump_pt_walk_for_va(const guest_t *g,
                                 uint64_t va,
@@ -237,11 +237,11 @@ static bool dump_pt_walk_for_va(const guest_t *g,
     return true;
 }
 
-/* Print the HVF stage-2 backing range covering `ipa` plus the region-tracker
- * entry whose VA range includes the same address. A missing stage-2 backing is
- * the downstream analogue of an INVALID L3 entry above; a missing region
- * tracker is normal for non-tracked ranges (vDSO, shim) but useful for "is
- * this VA in a known ELF segment" reasoning.
+/* Print the HVF stage-2 backing range covering the supplied IPA plus the
+ * region-tracker entry whose VA range includes the same address. A missing
+ * stage-2 backing is the downstream analogue of an INVALID L3 entry above; a
+ * missing region tracker is normal for non-tracked ranges (vDSO, shim) but
+ * useful for "is this VA in a known ELF segment" reasoning.
  */
 static void dump_segment_and_region_for(const guest_t *g,
                                         uint64_t va,
@@ -363,8 +363,8 @@ void crash_report(hv_vcpu_t vcpu,
     if (sysroot)
         fprintf(stderr, "- sysroot: %s\n", sysroot);
 
-    /* proc_get_cmdline() stores the guest argv vector as a NUL-separated
-     * blob. Re-expand it into shell-like spacing for the human report.
+    /* proc_get_cmdline() stores the guest argv vector as a NUL-separated blob.
+     * Re-expand it into shell-like spacing for the human report.
      */
     if (cmdline && cmdline_len > 0) {
         fprintf(stderr, "- cmdline:");
@@ -392,10 +392,10 @@ void crash_report(hv_vcpu_t vcpu,
         hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SP_EL0, &sp_el0);
         hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_TPIDR_EL0, &tpidr);
 
-        /* The Rosetta breadcrumb has its own section header so
-         * downstream parsers can keep treating "## Registers" as the
-         * first line of the register section. Emitting the banner
-         * inline above that header used to break that assumption.
+        /* The Rosetta breadcrumb has its own section header so downstream
+         * parsers can keep treating "## Registers" as the first line of the
+         * register section. Emitting the banner inline above that header used
+         * to break that assumption.
          */
         if ((g && g->is_rosetta) || proc_rosetta_active()) {
             fprintf(stderr, "## Rosetta\n");
@@ -460,12 +460,12 @@ void crash_report(hv_vcpu_t vcpu,
         fprintf(stderr, "ttbr0       = 0x%llx\n\n",
                 (unsigned long long) g->ttbr0);
 
-        /* Translation diagnostics for the faulting PC. Helps decide whether
-         * an inst-abort or data-abort came from a stage-1 PT entry that went
-         * away (L3 INVALID after an unrelated mprotect / munmap) or from a
-         * stage-2 backing hole (for example, an hvf_segment_split that left no
-         * covering entry). Data aborts also dump FAR when it differs from PC
-         * because FAR is the actual load/store fault address.
+        /* Translation diagnostics for the faulting PC. Helps decide whether an
+         * inst-abort or data-abort came from a stage-1 PT entry that went away
+         * (L3 INVALID after an unrelated mprotect / munmap) or from a stage-2
+         * backing hole (for example, an hvf_segment_split that left no covering
+         * entry). Data aborts also dump FAR when it differs from PC because FAR
+         * is the actual load/store fault address.
          */
         if (vcpu) {
             uint64_t pc = 0, esr = 0, far_reg = 0;

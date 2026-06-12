@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Standalone native macOS test program (NOT a guest binary). Uses HVF
- * directly to create a VM and test whether simultaneous read+write+execute
- * page table entries work at stage-1 when SCTLR_EL1.WXN=0.
+ * Standalone native macOS test program (NOT a guest binary). Uses HVF directly
+ * to create a VM and test whether simultaneous read+write+execute page table
+ * entries work at stage-1 when SCTLR_EL1.WXN=0.
  *
  * Tests:
  *   1. RWX 2MiB block: L2 block descriptor with AP=RW_EL0, UXN=0, PXN=0
@@ -19,12 +19,12 @@
  *   b. BR to that address to execute the written code
  *   c. The SVC forwards via HVC #5 with x0=42
  *
- * If RWX works: host receives x0=42 via HVC #5 (success).
- * If W^X is enforced: either the STR faults (data abort) or the BR faults
- * (instruction abort permission fault), causing HVC #2 (bad exception).
+ * If RWX works: host receives x0=42 via HVC #5 (success). If W^X is enforced:
+ * either the STR faults (data abort) or the BR faults (instruction abort
+ * permission fault), causing HVC #2 (bad exception).
  *
- * Build: clang -O2 -framework Hypervisor -arch arm64 -Ibuild -o $@ $<
- * Run:   codesign --entitlements entitlements.plist -f -s - $@ && ./$@
+ * Build: clang -O2 -framework Hypervisor -arch arm64 -Ibuild -o $@ $< Run:
+ * codesign --entitlements entitlements.plist -f -s - $@ && ./$@
  */
 
 #include <Hypervisor/Hypervisor.h>
@@ -229,9 +229,9 @@ static uint64_t build_page_tables(vm_state_t *vm)
     /* L2[3]: RWX block (Test 1 subject) */
     l2[3] = make_block_rwx(0x600000);
 
-    /* L2[4]: Table descriptor -> L3 page table for Test 2.
-     * the code splits this 2MiB block into 512 x 4KiB pages. The first page
-     * at 0x800000 is RWX, the rest are RW (non-executable).
+    /* L2[4]: Table descriptor -> L3 page table for Test 2. The code splits this
+     * 2 MiB block into 512 x 4 KiB pages. The first page at 0x800000 is RWX,
+     * the rest are RW (non-executable).
      */
     {
         uint64_t l3_off = pt_alloc(vm);
@@ -355,8 +355,8 @@ static const char *fsc_name(uint32_t fsc)
 }
 
 /* Run the vCPU until exit. Handles HVC #4 (sysreg set) internally.
- * Returns 0 on clean exit (HVC #0, #5, or #2), -1 on error.
- * For HVC #9 (W^X toggle), returns immediately so caller can decide.
+ * Returns 0 on clean exit (HVC #0, #5, or #2), -1 on error. For HVC #9 (W^X
+ * toggle), returns immediately so caller can decide.
  */
 static int run_vcpu_once(hv_vcpu_t vcpu,
                          hv_vcpu_exit_t *vexit,
@@ -378,8 +378,8 @@ static int run_vcpu_once(hv_vcpu_t vcpu,
                 uint16_t imm = vexit->exception.syndrome & 0xFFFF;
 
                 if (imm == 4) {
-                    /* HVC #4: set sysreg (from shim _start). Same encoding
-                     * as elfuse's run loop: X0 = index into hvc4_sysregs.
+                    /* HVC #4: set sysreg (from shim _start). Same encoding as
+                     * elfuse's run loop: X0 = index into hvc4_sysregs.
                      */
                     static const hv_sys_reg_t hvc4_sysregs[] = {
                         HV_SYS_REG_VBAR_EL1,  /* 0 */
@@ -475,8 +475,8 @@ static int vm_create(vm_state_t *vm)
         return -1;
     }
 
-    /* Map guest memory with full RWX at stage-2 (HVF level).
-     * Stage-1 (page table) permissions are what the test is checking.
+    /* Map guest memory with full RWX at stage-2 (HVF level). Stage-1 (page
+     * table) permissions are what the test is checking.
      */
     ret = hv_vm_map(vm->host_base, 0, GUEST_SIZE,
                     HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC);
@@ -530,9 +530,9 @@ static void print_bad_exception(const vcpu_exit_t *ex)
  *   2. DSB ISH + ISB for data/instruction cache coherence
  *   3. BR to 0x600000
  *
- * If successful: HVC #5 with x0=42
- * If W^X enforced on write: data abort permission fault on STR
- * If W^X enforced on exec: instruction abort permission fault on BR
+ * If successful: HVC #5 with x0=42 If W^X enforced on write: data abort
+ * permission fault on STR If W^X enforced on exec: instruction abort permission
+ * fault on BR
  */
 
 static int test1_rwx_block(void)
@@ -625,9 +625,9 @@ static int test1_rwx_block(void)
     int result = -1;
 
     if (ex.reason == HVF_EXIT_HVC9) {
-        /* W^X toggle request: the shim detected a permission fault
-         * and is asking host to flip permissions. This means HVF DOES
-         * enforce W^X even with WXN=0 in SCTLR_EL1.
+        /* W^X toggle request: the shim detected a permission fault and is
+         * asking host to flip permissions. This means HVF DOES enforce W^X even
+         * with WXN=0 in SCTLR_EL1.
          */
         printf("\n");
         printf("    W^X toggle requested: FAR=0x%llx type=%llu (%s)\n",
@@ -680,9 +680,9 @@ static int test1_rwx_block(void)
 
 /* TEST 2: RWX 4KiB Page (L3 descriptor)
  *
- * Same as test 1, but using a 4KiB L3 page descriptor at 0x800000
- * instead of a 2MiB L2 block descriptor. Tests whether the
- * granularity matters for W^X enforcement.
+ * Same as test 1, but using a 4KiB L3 page descriptor at 0x800000 instead of a
+ * 2MiB L2 block descriptor. Tests whether the granularity matters for W^X
+ * enforcement.
  */
 
 static int test2_rwx_page(void)
@@ -789,9 +789,9 @@ static int test2_rwx_page(void)
 
 /* TEST 3: Baseline RX (execution on read-only page)
  *
- * Verify that normal RX execution works. Guest code at 0x400000
- * (GUEST_CODE) is on an RX page; executing "mov x0, #99; svc #0"
- * confirms the baseline setup before RWX-specific checks.
+ * Verify that normal RX execution works. Guest code at 0x400000 (GUEST_CODE) is
+ * on an RX page; executing "mov x0, #99; svc #0" confirms the baseline setup
+ * before RWX-specific checks.
  */
 
 static int test3_baseline_rx(void)
@@ -854,8 +854,8 @@ static int test3_baseline_rx(void)
 
 /* TEST 4: Baseline RW (write to writable page)
  *
- * Verify that normal RW writes work. Guest writes a value to the
- * RW data page at 0xA00000, then reports it via SVC.
+ * Verify that normal RW writes work. Guest writes a value to the RW data page
+ * at 0xA00000, then reports it via SVC.
  */
 
 static int test4_baseline_rw(void)

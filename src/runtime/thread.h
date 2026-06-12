@@ -66,17 +66,16 @@ typedef struct {
      */
     uint64_t robust_list_head;
 
-    /* rseq (restartable sequences) per-thread registration state.
-     * When rseq_gva != 0, the thread has a registered struct rseq.
-     * Signal delivery and preemption must abort active critical sections.
+    /* rseq (restartable sequences) per-thread registration state. When rseq_gva
+     * != 0, the thread has a registered struct rseq. Signal delivery and
+     * preemption must abort active critical sections.
      */
     uint64_t rseq_gva;       /* Guest VA of struct rseq (0 = not registered) */
     uint32_t rseq_len;       /* Length from registration */
     uint32_t rseq_signature; /* Abort signature from registration */
 
-    /* ptrace state.
-     * Used by two-process JIT architectures: the tracer attaches via
-     * PTRACE_SEIZE, then uses BRK-triggered SIGTRAP + wait4 to discover
+    /* ptrace state. Used by two-process JIT architectures: the tracer attaches
+     * via PTRACE_SEIZE, then uses BRK-triggered SIGTRAP + wait4 to discover
      * untranslated code on-demand. The tracee snapshots its own vCPU registers
      * before stopping and applies any tracer-written changes on resume,
      * avoiding cross-thread HVF register access (which may not be supported).
@@ -94,10 +93,9 @@ typedef struct {
     linux_user_pt_regs_t ptrace_regs; /* snapshot for cross-thread access */
     bool ptrace_regs_dirty;           /* Tracer modified registers */
 
-    /* GDB stub state.
-     * Per-thread stop state for the GDB remote stub. When GDB requests a stop
-     * (breakpoint, Ctrl+C, step), the thread records its stop reason here so
-     * the stub can report it to GDB.
+    /* GDB stub state. Per-thread stop state for the GDB remote stub. When GDB
+     * requests a stop (breakpoint, Ctrl+C, step), the thread records its stop
+     * reason here so the stub can report it to GDB.
      *
      * Register access: HVF requires vCPU register reads/writes on the owning
      * thread. When stopped, the vCPU thread snapshots registers into
@@ -110,10 +108,9 @@ typedef struct {
                                     */
     bool gdb_regs_dirty;           /* GDB handler modified snapshot */
 
-    /* VM-clone child state.
-     * For clone(CLONE_VM) without CLONE_THREAD: shares guest memory but has a
-     * separate TID, is waitable via wait4, and can be ptraced.
-     * Used by clone(CLONE_VM) two-process architecture.
+    /* VM-clone child state. For clone(CLONE_VM) without CLONE_THREAD: shares
+     * guest memory but has a separate TID, is waitable via wait4, and can be
+     * ptraced. Used by clone(CLONE_VM) two-process architecture.
      */
     bool is_vm_clone;   /* Waitable via wait4 */
     int64_t parent_tid; /* Parent TID for wait4 matching */
@@ -121,10 +118,10 @@ typedef struct {
     bool vm_exited;     /* Child has exited */
     int vm_exit_status; /* Wait-format exit status */
 
-    /* Guest stack range supplied by clone3(stack, stack_size).
-     * elfuse uses this to avoid tearing down a still-active child stack when
-     * another thread munmaps the backing range before the child is done with
-     * its bootstrap stack.
+    /* Guest stack range supplied by clone3(stack, stack_size). elfuse uses this
+     * to avoid tearing down a still-active child stack when another thread
+     * munmaps the backing range before the child is done with its bootstrap
+     * stack.
      */
     uint64_t stack_map_start;
     uint64_t stack_map_end;
@@ -144,8 +141,8 @@ typedef struct {
     int deferred_count;
 } thread_deferred_stack_unmap_txn_t;
 
-/* Current thread pointer, set once per host pthread at thread start.
- * All syscall handlers can access per-thread state through this.
+/* Current thread pointer, set once per host pthread at thread start. All
+ * syscall handlers can access per-thread state through this.
  */
 extern _Thread_local thread_entry_t *current_thread;
 
@@ -161,8 +158,8 @@ void thread_register_main(hv_vcpu_t vcpu,
                           uint64_t sp_el1);
 
 /* Allocate a new thread table slot for the given TID.
- * Returns a pointer to the entry, or NULL if the table is full.
- * The caller must fill in vcpu, vexit, host_thread, sp_el1.
+ * Returns a pointer to the entry, or NULL if the table is full. The caller must
+ * fill in vcpu, vexit, host_thread, sp_el1.
  */
 thread_entry_t *thread_alloc(int64_t tid,
                              uint64_t stack_start,
@@ -177,8 +174,8 @@ thread_entry_t *thread_find(int64_t tid);
 /* Lock-free check: is there an active thread with this TID?
  * Returns 1 if found, 0 if not. Safe to call without holding any lock (used
  * from futex_lock_pi to avoid lock order inversion with bucket locks). May
- * return a stale true if the thread is being deactivated concurrently;
- * callers must tolerate this.
+ * return a stale true if the thread is being deactivated concurrently; callers
+ * must tolerate this.
  */
 int thread_tid_alive(int64_t tid);
 
@@ -188,70 +185,69 @@ int thread_active_count(void);
 /* Fast path: return non-zero when exactly one guest thread is active. */
 int thread_is_single_active(void);
 
-/* Allocate a per-thread SP_EL1 stack and record both the IPA and the slot
- * index into t. Thread N gets the Nth 4KiB slot counting down from the top
- * of the shim data block (g->shim_data_base + 2MiB). The shim block lives
- * at high IPA computed by guest_init, so callers must pass g; the slot
- * index is stored in t->sp_el1_slot so the free path (which is reached
- * from teardown contexts that lack g) can clear the bitmask directly.
+/* Allocate a per-thread SP_EL1 stack and record both the IPA and the slot index
+ * into t. Thread N gets the Nth 4KiB slot counting down from the top of the
+ * shim data block (g->shim_data_base + 2MiB). The shim block lives at high IPA
+ * computed by guest_init, so callers must pass g; the slot index is stored in
+ * t->sp_el1_slot so the free path (which is reached from teardown contexts that
+ * lack g) can clear the bitmask directly.
  * Returns the SP_EL1 IPA, or 0 on slot exhaustion.
  */
 uint64_t thread_alloc_sp_el1(const guest_t *g, thread_entry_t *t);
 
-/* Iterate over all active threads, calling fn(entry, ctx) for each.
- * Holds the thread table lock during iteration.
+/* Iterate over all active threads, calling fn(entry, ctx) for each. Holds the
+ * thread table lock during iteration.
  */
 void thread_for_each(void (*fn)(thread_entry_t *t, void *ctx), void *ctx);
 
-/* Count active VM-clone threads (is_vm_clone && !vm_exited).
- * Used to detect when the last VM-clone child exits.
+/* Count active VM-clone threads (is_vm_clone && !vm_exited). Used to detect
+ * when the last VM-clone child exits.
  */
 int thread_count_active_vm_clones(void);
 
-/* Join worker threads (all active threads except the caller).
- * Collects thread handles under the lock, then polls/joins OUTSIDE
- * the lock so workers can call thread_deactivate() to set active=0.
- * Threads still alive after ~50ms are detached (process is exiting).
+/* Join worker threads (all active threads except the caller). Collects thread
+ * handles under the lock, then polls/joins OUTSIDE the lock so workers can call
+ * thread_deactivate() to set active=0. Threads still alive after ~50ms are
+ * detached (process is exiting).
  */
 void thread_join_workers(void);
 
-/* Destroy all active worker vCPUs. Called during guest_destroy to
- * ensure no vCPUs remain active before hv_vm_destroy().
+/* Destroy all active worker vCPUs. Called during guest_destroy to ensure no
+ * vCPUs remain active before hv_vm_destroy().
  */
 void thread_destroy_all_vcpus(void);
 
-/* Interrupt all active vCPUs by calling hv_vcpus_exit().
- * Used for signal preemption: when a signal is queued while a vCPU
- * is running in a tight loop (no syscalls), this forces it to break
- * out of hv_vcpu_run so the signal can be delivered.
+/* Interrupt all active vCPUs by calling hv_vcpus_exit(). Used for signal
+ * preemption: when a signal is queued while a vCPU is running in a tight loop
+ * (no syscalls), this forces it to break out of hv_vcpu_run so the signal can
+ * be delivered.
  */
 void thread_interrupt_all(void);
 
-/* Check if any active thread has sigbit unblocked in its signal mask.
- * Uses relaxed reads on per-thread blocked fields; false positives
- * (stale blocked=0) cause a harmless spurious interrupt; false negatives
- * (stale blocked=1) are corrected by rt_sigprocmask re-checking pending
- * signals after unblock.  Does NOT acquire thread_lock.
+/* Check if any active thread has sigbit unblocked in its signal mask. Uses
+ * relaxed reads on per-thread blocked fields; false positives (stale blocked=0)
+ * cause a harmless spurious interrupt; false negatives (stale blocked=1) are
+ * corrected by rt_sigprocmask re-checking pending signals after unblock. Does
+ * NOT acquire thread_lock.
  */
 int thread_signal_deliverable(uint64_t sigbit);
 
 /* Fork quiesce helpers. */
 
-/* Quiesce all sibling vCPUs for fork snapshot consistency.
- * Calls hv_vcpus_exit on all active threads except the caller,
- * then waits until they are all blocked on the fork barrier.
- * Caller must NOT hold thread_lock.
+/* Quiesce all sibling vCPUs for fork snapshot consistency. Calls hv_vcpus_exit
+ * on all active threads except the caller, then waits until they are all
+ * blocked on the fork barrier. Caller must NOT hold thread_lock.
  */
 void thread_quiesce_siblings(void);
 
-/* Resume sibling vCPUs after fork snapshot is complete.
- * Clears the quiesce flag and broadcasts the fork condvar.
+/* Resume sibling vCPUs after fork snapshot is complete. Clears the quiesce flag
+ * and broadcasts the fork condvar.
  */
 void thread_resume_siblings(void);
 
-/* Check if a fork quiesce is in progress. Called from the vCPU run
- * loop's HV_EXIT_REASON_CANCELED handler. If active, increments the
- * quiesced counter, blocks until the fork completes, then returns 1.
+/* Check if a fork quiesce is in progress. Called from the vCPU run loop's
+ * HV_EXIT_REASON_CANCELED handler. If active, increments the quiesced counter,
+ * blocks until the fork completes, then returns 1.
  * Returns 0 if no quiesce is active.
  */
 int thread_fork_barrier_check(void);
@@ -267,8 +263,8 @@ int thread_ptrace_stop(thread_entry_t *t, int sig);
 void thread_ptrace_cont(thread_entry_t *t, int sig);
 
 /* Tracer: wait for a ptraced or vm-clone child to stop or exit.
- * Returns child TID on success, 0 on WNOHANG with none ready,
- * or negative Linux errno. Writes wait-format status to *out_status.
+ * Returns child TID on success, 0 on WNOHANG with none ready, or negative Linux
+ * errno. Writes wait-format status to *out_status.
  */
 int64_t thread_ptrace_wait(int64_t tracer_tid,
                            int pid,
@@ -278,14 +274,14 @@ int64_t thread_ptrace_wait(int64_t tracer_tid,
 /* Get the thread table mutex (needed for ptrace wait blocking). */
 pthread_mutex_t *thread_get_lock(void);
 
-/* Snapshot every active guest stack range overlapping [start, end), then
- * record a deferred-unmap entry on each one. While the transaction is live,
- * cleanup of the affected thread's deferred stack entries will block so a
- * later rollback cannot race with thread exit.
- * On success, txns[0..nranges) contains both the overlapping ranges and the
- * pre-update deferred-unmap state needed for rollback.
- * Returns the number of overlapping stack ranges, or -1 if the caller's
- * buffer is too small or any thread's deferred-unmap budget is exhausted.
+/* Snapshot every active guest stack range overlapping [start, end), then record
+ * a deferred-unmap entry on each one. While the transaction is live, cleanup of
+ * the affected thread's deferred stack entries will block so a later rollback
+ * cannot race with thread exit. On success, txns[0..nranges) contains both the
+ * overlapping ranges and the pre-update deferred-unmap state needed for
+ * rollback.
+ * Returns the number of overlapping stack ranges, or -1 if the caller's buffer
+ * is too small or any thread's deferred-unmap budget is exhausted.
  */
 int thread_collect_and_defer_stack_ranges(
     uint64_t start,
@@ -309,8 +305,9 @@ void thread_rollback_deferred_stack_ranges(
 
 /* For thread exit cleanup: wait for any in-flight deferred-stack munmap
  * transaction affecting this thread to finish, then clear the live stack map
- * and snapshot the current deferred unmaps. Returns the number of entries
- * copied (capped at max_ranges).
+ * and snapshot the current deferred unmaps.
+ *
+ * Returns the number of entries copied (capped at max_ranges).
  */
 int thread_prepare_deferred_stack_unmaps_for_cleanup(thread_entry_t *t,
                                                      uint64_t *starts,

@@ -3,13 +3,12 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Exercises sched_setparam (118), sched_setscheduler (119),
- * sched_getscheduler (120), sched_getparam (121),
- * sched_get_priority_min (125), sched_get_priority_max (126),
- * sched_rr_get_interval (127). The implementation is a stub: getters
- * report SCHED_OTHER and a zero priority, RT priority elevation is
- * refused with -EPERM, SCHED_DEADLINE through the legacy entry point
- * is -EINVAL, and all entries validate guest pointers (-EFAULT).
+ * Exercises sched_setparam (118), sched_setscheduler (119), sched_getscheduler
+ * (120), sched_getparam (121), sched_get_priority_min (125),
+ * sched_get_priority_max (126), sched_rr_get_interval (127). The implementation
+ * is a stub: getters report SCHED_OTHER and a zero priority, RT priority
+ * elevation is refused with -EPERM, SCHED_DEADLINE through the legacy entry
+ * point is -EINVAL, and all entries validate guest pointers (-EFAULT).
  */
 
 #include <pthread.h>

@@ -29,13 +29,12 @@ static void sigusr1_handler(int sig)
     handler_signum = sig;
 }
 
-/* Test that callee-saved registers survive signal delivery.
- * The inline asm loads known values into callee-saved registers,
- * sends SIGUSR1 (which triggers delivery + rt_sigreturn), then
- * verifies the registers are unchanged.
+/* Test that callee-saved registers survive signal delivery. The inline asm
+ * loads known values into callee-saved registers, sends SIGUSR1 (which triggers
+ * delivery + rt_sigreturn), then verifies the registers are unchanged.
  *
- * aarch64 callee-saved: X19-X28 (10 registers)
- * x86_64 callee-saved:  rbx, r12-r15 (5 registers; rbp excluded
+ * aarch64 callee-saved: X19-X28 (10 registers) x86_64 callee-saved: rbx,
+ * r12-r15 (5 registers; rbp excluded
  *   because GCC needs it as frame pointer in functions with calls)
  */
 static int test_callee_saved(void)
@@ -173,10 +172,9 @@ int main(void)
         printf("FAIL (handler not called)\n");
         failures++;
     } else {
-        /* Handler should have been reset to SIG_DFL.
-         * Sending SIGUSR1 again should terminate the process,
-         * but the test cannot observe that directly. Instead, check that
-         * the old action is SIG_DFL now.
+        /* Handler should have been reset to SIG_DFL. Sending SIGUSR1 again
+         * should terminate the process, but the test cannot observe that
+         * directly. Instead, check that the old action is SIG_DFL now.
          */
         struct sigaction old;
         sigaction(SIGUSR1, NULL, &old);

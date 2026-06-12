@@ -53,8 +53,8 @@ static int verify_pattern(const unsigned char *buf, size_t len)
     return 0;
 }
 
-/* Verify a repeating 4KiB seed pattern across a large buffer.
- * The seed is: seed[i] = (i * 131 + 17) for i in [0, 4096).
+/* Verify a repeating 4KiB seed pattern across a large buffer. The seed is:
+ * seed[i] = (i * 131 + 17) for i in [0, 4096).
  */
 static int verify_repeating_seed(const unsigned char *buf, size_t len)
 {
@@ -96,8 +96,8 @@ static void test_large_write(void)
     if (ok && lseek(fd, 0, SEEK_SET) != 0)
         ok = 0;
 
-    /* Read back the entire write and verify all bytes, including those
-     * spanning the 2MiB page table boundary.
+    /* Read back the entire write and verify all bytes, including those spanning
+     * the 2MiB page table boundary.
      */
     unsigned char *readback = mmap(NULL, IO_SIZE, PROT_READ | PROT_WRITE,
                                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -170,8 +170,8 @@ static void test_large_read_from_split_block(void)
         ssize_t ret = read(fd, buf, IO_SIZE);
         ok = (ret == (ssize_t) IO_SIZE);
     }
-    /* Verify the entire read buffer, including the 2MiB boundary
-     * crossing where L3-to-L2 page table transitions happen.
+    /* Verify the entire read buffer, including the 2MiB boundary crossing where
+     * L3-to-L2 page table transitions happen.
      */
     if (ok && verify_repeating_seed(buf, IO_SIZE) != 0)
         ok = false;

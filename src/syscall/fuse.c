@@ -206,11 +206,11 @@ typedef struct {
 #define FUSE_FAKE_DEV 0xF00D
 
 /* Implementation ceiling for a single FUSE frame (header + payload). The kernel
- * FUSE protocol caps a READ or WRITE payload at FUSE_MAX_PAGES * page_size =
- * ~1 MiB by default and up to 4 MiB under recent kernels. The 8 MiB hard cap
- * below leaves headroom for the FUSE header, in-band sub-headers, and any
- * future readahead growth while still bounding the largest single malloc the
- * daemon can force. Daemon-negotiated max_write is clamped to (FUSE_FRAME_CAP
+ * FUSE protocol caps a READ or WRITE payload at FUSE_MAX_PAGES * page_size = ~1
+ * MiB by default and up to 4 MiB under recent kernels. The 8 MiB hard cap below
+ * leaves headroom for the FUSE header, in-band sub-headers, and any future
+ * readahead growth while still bounding the largest single malloc the daemon
+ * can force. Daemon-negotiated max_write is clamped to (FUSE_FRAME_CAP
  * - sizeof(fuse_in_header_t) - sizeof(fuse_write_in)) at FUSE_INIT time so the
  * read-reply path cannot negotiate a size larger than fuse_dev_write will
  * accept.
@@ -266,8 +266,8 @@ typedef struct {
     /* session is the live transport for this mount; NULL once the owning
      * /dev/fuse fd is closed (the slot is tombstoned, keeping path/source/
      * fstype/mount_id intact so consumers stuck on this mount path can be
-     * routed to a deterministic -LINUX_ENOTCONN instead of leaking through
-     * to host-filesystem resolution). Re-binding the slot requires
+     * routed to a deterministic -LINUX_ENOTCONN instead of leaking through to
+     * host-filesystem resolution). Re-binding the slot requires
      * fuse_alloc_mount_locked or sys_mount replacing a tombstoned entry.
      */
     fuse_session_t *session;
@@ -289,17 +289,17 @@ typedef struct {
     uint64_t offset;
     int linux_flags;
     bool path_only;
-    /* session is pinned by the file's own session ref taken at open time.
-     * The mount slot the file came from may be reassigned independently;
-     * mount_id is the stable identifier used to detect that case without
-     * dereferencing a possibly-recycled fuse_mount_t.
+    /* session is pinned by the file's own session ref taken at open time. The
+     * mount slot the file came from may be reassigned independently; mount_id
+     * is the stable identifier used to detect that case without dereferencing a
+     * possibly-recycled fuse_mount_t.
      */
     fuse_session_t *session;
     int mount_id;
     char path[LINUX_PATH_MAX];
     fuse_attr_t attr;
-    /* Serialize stream read() / readdir() against the offset field. lseek
-     * also waits on io_in_progress to avoid clobbering an in-flight read's
+    /* Serialize stream read() / readdir() against the offset field. lseek also
+     * waits on io_in_progress to avoid clobbering an in-flight read's
      * post-update.
      */
     bool io_in_progress;
@@ -360,9 +360,9 @@ static int fuse_join_virtual_path(const char *base,
 
     size_t depth = 0;
     /* marks[i] stores the output index at which the i-th surviving component
-     * begins. Each value is bounded by outsz (capped at LINUX_PATH_MAX =
-     * 4096), so uint16_t is sufficient and shrinks the host-stack footprint
-     * from 16 KiB to 4 KiB per call.
+     * begins. Each value is bounded by outsz (capped at LINUX_PATH_MAX = 4096),
+     * so uint16_t is sufficient and shrinks the host-stack footprint from 16
+     * KiB to 4 KiB per call.
      */
     uint16_t marks[LINUX_PATH_MAX / 2];
     out[0] = '/';
@@ -422,12 +422,13 @@ static int fuse_join_virtual_path(const char *base,
 }
 
 /* Canonicalize an absolute guest path, collapsing "." and ".." against the
- * filesystem root. Returns 0 on success with the canonical form written to
- * out, or -1 (errno set) on overflow. Always overwrites out on success.
- * Callers use this before mount-prefix matching so paths like
- * "/mnt/fuse/./foo" and "/mnt/fuse/sub/../foo" route consistently with
- * "/mnt/fuse/foo" and paths like "/mnt/fuse/../etc" escape FUSE land
- * deterministically.
+ * filesystem root.
+ *
+ * Returns 0 on success with the canonical form written to out, or -1 (errno
+ * set) on overflow. Always overwrites out on success. Callers use this before
+ * mount-prefix matching so paths like "/mnt/fuse/./foo" and
+ * "/mnt/fuse/sub/../foo" route consistently with "/mnt/fuse/foo" and paths like
+ * "/mnt/fuse/../etc" escape FUSE land deterministically.
  */
 static int fuse_canonical_abs(const char *in, char *out, size_t outsz)
 {
@@ -484,30 +485,29 @@ static int fuse_dev_alias_count_locked(fuse_session_t *session)
 
 /* Bump session reference under fuse_lock. Each live mount, each FUSE-backed
  * file fd, and the /dev/fuse fd itself hold one ref. Destruction is deferred
- * until refcount drops to zero so a slow read/write on a mount-backed fd
- * cannot race with the daemon closing /dev/fuse and tearing down the lock.
+ * until refcount drops to zero so a slow read/write on a mount-backed fd cannot
+ * race with the daemon closing /dev/fuse and tearing down the lock.
  */
 static void fuse_session_get_locked(fuse_session_t *session)
 {
     session->refcount++;
 }
 
-/* Drop a session reference under fuse_lock. When the last reference is
- * dropped and the session has been closed, destroy the synchronization
- * primitives and clear the slot. Callers must not hold session->lock.
+/* Drop a session reference under fuse_lock. When the last reference is dropped
+ * and the session has been closed, destroy the synchronization primitives and
+ * clear the slot. Callers must not hold session->lock.
  *
- * The /dev/fuse fd is itself one of the session's refs (taken when the
- * fd is allocated, dropped in fuse_fd_cleanup), so the only path that
- * can drive refcount to zero runs through fuse_fd_cleanup setting
- * session->closed = true and session->daemon_dead = true before its
- * matching put. Any residual node_refs entries at this point therefore
- * cannot reach the daemon -- fuse_emit_forget_multi_locked short-
- * circuits on daemon_dead -- so no terminal FUSE_FORGET sweep is
- * emitted here. The compensating FORGET paths elsewhere in this file
- * (fuse_lookup_locked overflow, fuse_walk_path_locked mid-walk drop
- * failure, fuse_open_path error exits) keep the daemon's nlookup view
- * balanced while the daemon is still alive; teardown after the
- * daemon's exit needs no further reconciliation.
+ * The /dev/fuse fd is itself one of the session's refs (taken when the fd is
+ * allocated, dropped in fuse_fd_cleanup), so the only path that can drive
+ * refcount to zero runs through fuse_fd_cleanup setting session->closed = true
+ * and session->daemon_dead = true before its matching put. Any residual
+ * node_refs entries at this point therefore cannot reach the daemon --
+ * fuse_emit_forget_multi_locked short- circuits on daemon_dead -- so no
+ * terminal FUSE_FORGET sweep is emitted here. The compensating FORGET paths
+ * elsewhere in this file (fuse_lookup_locked overflow, fuse_walk_path_locked
+ * mid-walk drop failure, fuse_open_path error exits) keep the daemon's nlookup
+ * view balanced while the daemon is still alive; teardown after the daemon's
+ * exit needs no further reconciliation.
  */
 static void fuse_session_put_locked(fuse_session_t *session)
 {
@@ -543,10 +543,10 @@ static fuse_mount_t *fuse_mount_for_path_locked(const char *path,
     return best;
 }
 
-/* Fully free a mount slot. Drops any live session ref (tombstoned slots
- * have NULL session and have already dropped their ref via fuse_fd_cleanup).
- * Used by sys_mount error paths and by fuse_alloc_mount_locked when
- * reclaiming a tombstoned slot.
+/* Fully free a mount slot. Drops any live session ref (tombstoned slots have
+ * NULL session and have already dropped their ref via fuse_fd_cleanup). Used by
+ * sys_mount error paths and by fuse_alloc_mount_locked when reclaiming a
+ * tombstoned slot.
  */
 static void fuse_uninstall_mount_locked(fuse_mount_t *mount)
 {
@@ -788,14 +788,16 @@ static int fuse_send_init_locked(fuse_session_t *session)
                                sizeof(init), NULL, NULL);
 }
 
-/* Issue one FUSE request and wait for the reply. Returns 0 on success, or a
- * negative Linux errno on failure. The caller must hold session->lock.
+/* Issue one FUSE request and wait for the reply.
+ *
+ * Returns 0 on success, or a negative Linux errno on failure. The caller must
+ * hold session->lock.
  *
  * Known limitation: the wait uses a plain pthread_cond_wait, so a signal
- * delivered to a blocked consumer does not return -EINTR and does not emit
- * a FUSE_INTERRUPT frame to the daemon. Honoring SA_RESTART and emitting
- * FUSE_INTERRUPT requires integrating with the per-thread signal eventfd
- * and remains a deferred Tier B item. Until then, daemon death or session
+ * delivered to a blocked consumer does not return -EINTR and does not emit a
+ * FUSE_INTERRUPT frame to the daemon. Honoring SA_RESTART and emitting
+ * FUSE_INTERRUPT requires integrating with the per-thread signal eventfd and
+ * remains a deferred compatibility item. Until then, daemon death or session
  * close are the only paths that wake a blocked consumer.
  */
 static int fuse_request_locked(fuse_session_t *session,
@@ -891,8 +893,8 @@ static int fuse_lookup_locked(fuse_session_t *session,
     int hold_rc = fuse_node_ref_hold_locked(session, out->nodeid, 1);
     if (hold_rc < 0) {
         /* Daemon already accepted the lookup and bumped its nlookup. The
-         * per-session ref table is full, so emit a compensating FORGET to
-         * keep the daemon's view balanced rather than leaking a reference.
+         * per-session ref table is full, so emit a compensating FORGET to keep
+         * the daemon's view balanced rather than leaking a reference.
          */
         fuse_forget_one_t one = {.nodeid = out->nodeid, .nlookup = 1};
         (void) fuse_emit_forget_multi_locked(session, &one, 1);
@@ -950,13 +952,13 @@ static int fuse_walk_path_locked(fuse_session_t *session,
             return -LINUX_ENOENT;
         memcpy(name, p, len);
         name[len] = '\0';
-        /* The path is canonicalized before reaching the walk, so "." and
-         * ".." should never appear as a real component. Defend against
-         * accidental forwarding to the daemon (which has no notion of the
-         * mount root's containment) just in case a future caller skips
-         * canonicalization. The advance-then-continue order matters: a
-         * bare "continue" without advancing p would spin on the same
-         * component forever if a non-canonical path ever reached here.
+        /* The path is canonicalized before reaching the walk, so "." and ".."
+         * should never appear as a real component. Defend against accidental
+         * forwarding to the daemon (which has no notion of the mount root's
+         * containment) just in case a future caller skips canonicalization. The
+         * advance-then-continue order matters: a bare "continue" without
+         * advancing p would spin on the same component forever if a
+         * non-canonical path ever reached here.
          */
         if (len == 1 && name[0] == '.') {
             if (!slash)
@@ -972,8 +974,8 @@ static int fuse_walk_path_locked(fuse_session_t *session,
         if (rc < 0) {
             /* Release the lookup hold from the previous component before
              * propagating the error: every successful lookup along the way
-             * incremented nlookup on the daemon side, and bailing out without
-             * a matching FORGET would leak that reference.
+             * incremented nlookup on the daemon side, and bailing out without a
+             * matching FORGET would leak that reference.
              */
             if (held_lookup != 0)
                 (void) fuse_node_ref_drop_locked(session, held_lookup, 1, true);
@@ -982,15 +984,14 @@ static int fuse_walk_path_locked(fuse_session_t *session,
         if (held_lookup != 0) {
             rc = fuse_node_ref_drop_locked(session, held_lookup, 1, true);
             if (rc < 0) {
-                /* The previous component's drop already updated the local
-                 * ref table but failed to queue its FUSE_FORGET. The
-                 * just-acquired entry.nodeid hold would otherwise be
-                 * stranded in the local table on this error path and the
-                 * daemon would never see a matching FORGET for it. Drop
-                 * the new hold best-effort before propagating; if this
-                 * second drop also fails to emit, the caller still gets
-                 * the original error and the session teardown FORGET
-                 * sweep will reconcile any residual daemon-side count.
+                /* The previous component's drop already updated the local ref
+                 * table but failed to queue its FUSE_FORGET. The just-acquired
+                 * entry.nodeid hold would otherwise be stranded in the local
+                 * table on this error path and the daemon would never see a
+                 * matching FORGET for it. Drop the new hold best-effort before
+                 * propagating; if this second drop also fails to emit, the
+                 * caller still gets the original error and the session teardown
+                 * FORGET sweep will reconcile any residual daemon-side count.
                  */
                 (void) fuse_node_ref_drop_locked(session, entry.nodeid, 1,
                                                  true);
@@ -1070,10 +1071,9 @@ static void fuse_file_get_locked(fuse_file_t *file)
     file->refcount++;
 }
 
-/* Drop a file slot refcount under fuse_lock. The slot is destroyed and
- * cleared only when no one else holds a reference, so a concurrent close
- * cannot tear down io_cond out from under a thread that has already
- * snapshotted this slot.
+/* Drop a file slot refcount under fuse_lock. The slot is destroyed and cleared
+ * only when no one else holds a reference, so a concurrent close cannot tear
+ * down io_cond out from under a thread that has already snapshotted this slot.
  */
 static void fuse_file_put_locked(fuse_file_t *file)
 {
@@ -1088,10 +1088,9 @@ static void fuse_file_put_locked(fuse_file_t *file)
 static fuse_file_t *fuse_alloc_file_locked(void)
 {
     for (int i = 0; i < FUSE_MAX_OPEN_FILES; i++) {
-        /* A slot with refcount > 0 is still owned by an in-flight op even
-         * if its underlying fd has been closed; skip it until that op
-         * releases. used==false && refcount==0 is the only fully-free
-         * state.
+        /* A slot with refcount > 0 is still owned by an in-flight op even if
+         * its underlying fd has been closed; skip it until that op releases.
+         * used==false && refcount==0 is the only fully-free state.
          */
         if (!fuse_files[i].used && fuse_files[i].refcount == 0) {
             memset(&fuse_files[i], 0, sizeof(fuse_files[i]));
@@ -1138,9 +1137,9 @@ static int fuse_release_common_locked(fuse_session_t *session,
 {
     if (!session || session->daemon_dead || session->closed)
         return 0;
-    /* O_PATH opens skip FUSE_OPEN, so there is no fh to release. The path
-     * walk still incremented the daemon's nlookup, so emit FORGET to balance
-     * it. Without this, every successful O_PATH close leaks one reference.
+    /* O_PATH opens skip FUSE_OPEN, so there is no fh to release. The path walk
+     * still incremented the daemon's nlookup, so emit FORGET to balance it.
+     * Without this, every successful O_PATH close leaks one reference.
      */
     if (linux_flags & LINUX_O_PATH)
         return fuse_node_ref_drop_locked(session, nodeid, 1, true);
@@ -1159,10 +1158,10 @@ static int fuse_release_common_locked(fuse_session_t *session,
 
 static void fuse_fd_cleanup(int guest_fd)
 {
-    /* Step 1: snapshot the file slot's release-relevant fields and detach
-     * the slot from the fd. The slot itself stays alive (refcount > 0)
-     * until any in-flight op releases its ref; only then is io_cond
-     * destroyed and the slot zeroed.
+    /* Step 1: snapshot the file slot's release-relevant fields and detach the
+     * slot from the fd. The slot itself stays alive (refcount > 0) until any
+     * in-flight op releases its ref; only then is io_cond destroyed and the
+     * slot zeroed.
      */
     fuse_session_t *file_session = NULL;
     bool have_file = false;
@@ -1219,8 +1218,8 @@ static void fuse_fd_cleanup(int guest_fd)
     }
 
     /* Mark dead and wake every blocked waiter under the session lock so they
-     * see daemon_dead=true and exit with -LINUX_ENOTCONN before the lock
-     * itself goes away.
+     * see daemon_dead=true and exit with -LINUX_ENOTCONN before the lock itself
+     * goes away.
      */
     pthread_mutex_lock(&session->lock);
     session->closed = true;
@@ -1241,21 +1240,21 @@ static void fuse_fd_cleanup(int guest_fd)
     }
     pthread_mutex_unlock(&session->lock);
 
-    /* Wake any file slots blocked on io_in_progress; their owners will see
-     * the session's daemon_dead flag and exit with -LINUX_ENOTCONN.
+    /* Wake any file slots blocked on io_in_progress; their owners will see the
+     * session's daemon_dead flag and exit with -LINUX_ENOTCONN.
      */
     for (int i = 0; i < FUSE_MAX_OPEN_FILES; i++) {
         if (fuse_files[i].used && fuse_files[i].session == session)
             pthread_cond_broadcast(&fuse_files[i].io_cond);
     }
 
-    /* Tombstone each mount whose transport has just died: drop the
-     * per-mount session ref but keep the slot's path/source/fstype/
-     * mount_id intact so a process whose virtual cwd is on this mount
-     * still routes to a deterministic -LINUX_ENOTCONN instead of falling
-     * through to host-filesystem resolution. session is cleared to NULL
-     * as the tombstone marker; the slot is reclaimed by a later
-     * sys_mount at the same path or by fuse_alloc_mount_locked.
+    /* Tombstone each mount whose transport has just died: drop the per-mount
+     * session ref but keep the slot's path/source/fstype/ mount_id intact so a
+     * process whose virtual cwd is on this mount still routes to a
+     * deterministic -LINUX_ENOTCONN instead of falling through to
+     * host-filesystem resolution. session is cleared to NULL as the tombstone
+     * marker; the slot is reclaimed by a later sys_mount at the same path or by
+     * fuse_alloc_mount_locked.
      */
     for (int i = 0; i < FUSE_MAX_MOUNTS; i++) {
         if (fuse_mounts[i].used && fuse_mounts[i].session == session) {
@@ -1427,8 +1426,8 @@ int64_t sys_mount(guest_t *g,
     for (int i = 0; i < FUSE_MAX_MOUNTS; i++) {
         if (fuse_mounts[i].used && fuse_mounts[i].session != NULL &&
             !strcmp(fuse_mounts[i].path, target_canon)) {
-            /* Live mount at this path already; reject as EBUSY. A
-             * tombstoned slot at the same path is reclaimed below.
+            /* Live mount at this path already; reject as EBUSY. A tombstoned
+             * slot at the same path is reclaimed below.
              */
             pthread_mutex_unlock(&fuse_lock);
             return -LINUX_EBUSY;
@@ -1482,9 +1481,9 @@ bool fuse_path_matches_mount(const char *path)
     if (fuse_canonical_abs(path, canon, sizeof(canon)) < 0)
         return false;
     pthread_mutex_lock(&fuse_lock);
-    /* Matches both live and tombstoned mounts so post-daemon-death
-     * operations get routed to a deterministic -LINUX_ENOTCONN instead of
-     * silently falling through to host-filesystem resolution.
+    /* Matches both live and tombstoned mounts so post-daemon-death operations
+     * get routed to a deterministic -LINUX_ENOTCONN instead of silently falling
+     * through to host-filesystem resolution.
      */
     bool matched = fuse_mount_for_path_locked(canon, NULL) != NULL;
     pthread_mutex_unlock(&fuse_lock);
@@ -1511,8 +1510,8 @@ int fuse_path_mount_id(const char *path)
  * stat-like callers.
  *
  * Returns 0 on success, or a negative Linux errno. The session refcount is
- * bumped on success; callers must drop it via fuse_session_put_locked when
- * done with the resolution.
+ * bumped on success; callers must drop it via fuse_session_put_locked when done
+ * with the resolution.
  */
 static int fuse_path_lookup(const char *path,
                             bool retain_final_lookup,
@@ -1566,9 +1565,11 @@ static int fuse_path_lookup(const char *path,
     return 0;
 }
 
-/* Stat a FUSE-mounted path. Returns 0 on success, or a negative Linux errno
- * (LINUX_E*). Errno-via-globals is intentionally avoided: callers in
- * src/syscall/fs-stat.c return this value directly to the guest.
+/* Stat a FUSE-mounted path.
+ *
+ * Returns 0 on success, or a negative Linux errno (LINUX_E*). Errno-via-globals
+ * is intentionally avoided: callers in src/syscall/fs-stat.c return this value
+ * directly to the guest.
  *
  * at_flags is the LINUX_AT_* mask from the caller. Today only
  * LINUX_AT_SYMLINK_NOFOLLOW is honored: when the daemon's final LOOKUP returns
@@ -1719,9 +1720,12 @@ int fuse_materialize_path(const char *path, char *out_path, size_t outsz)
     return rc;
 }
 
-/* fstat against a FUSE-backed fd. Returns 0 on success, negative Linux errno
- * otherwise. Returns -LINUX_EBADF when the fd does not refer to a live FUSE
- * file so callers can distinguish "not ours" from "ours but failed".
+/* fstat against a FUSE-backed fd.
+ *
+ * Returns 0 on success, negative Linux errno otherwise.
+ *
+ * Returns -LINUX_EBADF when the fd does not refer to a live FUSE file so
+ * callers can distinguish "not ours" from "ours but failed".
  */
 int fuse_fstat_fd(int fd, struct stat *st)
 {
@@ -1813,11 +1817,10 @@ int64_t fuse_open_path(guest_t *g, const char *path, int linux_flags, int mode)
         pthread_mutex_unlock(&fuse_lock);
         return -LINUX_ENOTDIR;
     }
-    /* Linux open(2): when O_PATH is set, access-mode bits (O_RDONLY /
-     * O_WRONLY / O_RDWR) are ignored. The descriptor is opaque to
-     * read/write but usable for fstat, fchdir, *at() dirfd, etc. Reject
-     * non-RDONLY only for ordinary file opens until FUSE write support
-     * exists for FD_FUSE_FILE.
+    /* Linux open(2): when O_PATH is set, access-mode bits (O_RDONLY / O_WRONLY
+     * / O_RDWR) are ignored. The descriptor is opaque to read/write but usable
+     * for fstat, fchdir, *at() dirfd, etc. Reject non-RDONLY only for ordinary
+     * file opens until FUSE write support exists for FD_FUSE_FILE.
      */
     if (!want_dir && !path_only && (linux_flags & 3) != LINUX_O_RDONLY) {
         (void) fuse_node_ref_drop_locked(session, nodeid, 1, true);
@@ -1877,10 +1880,9 @@ int64_t fuse_open_path(guest_t *g, const char *path, int linux_flags, int mode)
     file->fh = out.fh;
     file->linux_flags = linux_flags;
     file->path_only = path_only;
-    /* Donate the session ref taken above to the file's own ref slot. The
-     * mount pointer itself is not cached; mount_id is enough to detect
-     * stale mount-slot reassignment without dereferencing a recycled
-     * fuse_mount_t.
+    /* Donate the session ref taken above to the file's own ref slot. The mount
+     * pointer itself is not cached; mount_id is enough to detect stale
+     * mount-slot reassignment without dereferencing a recycled fuse_mount_t.
      */
     file->session = session;
     file->mount_id = mount_id;
@@ -1901,18 +1903,18 @@ int64_t fuse_open_path(guest_t *g, const char *path, int linux_flags, int mode)
         return -LINUX_EMFILE;
     }
     pthread_mutex_unlock(&fuse_lock);
-    /* Publish under fd_lock so the open's flags land on the same lock
-     * domain that sys_fcntl(F_SETFL/F_SETFD) uses.
+    /* Publish under fd_lock so the open's flags land on the same lock domain
+     * that sys_fcntl(F_SETFL/F_SETFD) uses.
      */
     fd_publish_linux_flags(guest_fd, linux_flags);
     return guest_fd;
 }
 
-/* Snapshot of fuse_file_t fields needed for a single read/readdir request.
- * The snapshot pins both the session (via session_get_locked) and the file
- * slot (via file_get_locked) for the duration of the operation. file is the
- * actual fuse_file_t pointer so io_in_progress / io_cond can be touched on
- * release without re-looking-up by guest_fd.
+/* Snapshot of fuse_file_t fields needed for a single read/readdir request. The
+ * snapshot pins both the session (via session_get_locked) and the file slot
+ * (via file_get_locked) for the duration of the operation. file is the actual
+ * fuse_file_t pointer so io_in_progress / io_cond can be touched on release
+ * without re-looking-up by guest_fd.
  */
 typedef struct {
     fuse_file_t *file;
@@ -1926,13 +1928,14 @@ typedef struct {
     bool serialize; /* true for stream reads/readdir; false for pread */
 } fuse_file_snap_t;
 
-/* Acquire exclusive offset-affecting access to a FUSE file, bump the file
- * and session refcounts, and snapshot the identity into snap. Stream reads
- * (and readdir) pass serialize=true so concurrent read() calls on the same
- * fd are serialized via io_in_progress, matching Linux f_pos_lock
- * semantics. pread/getattr-style operations that do not touch the stream
- * offset pass serialize=false. Returns 0 on success or a negative Linux
- * errno.
+/* Acquire exclusive offset-affecting access to a FUSE file, bump the file and
+ * session refcounts, and snapshot the identity into snap. Stream reads (and
+ * readdir) pass serialize=true so concurrent read() calls on the same fd are
+ * serialized via io_in_progress, matching Linux f_pos_lock semantics.
+ * pread/getattr-style operations that do not touch the stream offset pass
+ * serialize=false.
+ *
+ * Returns 0 on success or a negative Linux errno.
  */
 static int fuse_file_acquire(int guest_fd,
                              bool want_dir,
@@ -1980,9 +1983,9 @@ static void fuse_file_release(fuse_file_snap_t *snap)
 {
     pthread_mutex_lock(&fuse_lock);
     if (snap->serialize) {
-        /* Clearing io_in_progress on the pinned slot is safe even if the
-         * slot has been logically closed; in that case the broadcast goes
-         * to no live waiter and the slot will be zeroed on the final put.
+        /* Clearing io_in_progress on the pinned slot is safe even if the slot
+         * has been logically closed; in that case the broadcast goes to no live
+         * waiter and the slot will be zeroed on the final put.
          */
         snap->file->io_in_progress = false;
         pthread_cond_broadcast(&snap->file->io_cond);
@@ -2014,11 +2017,11 @@ int fuse_materialize_fd(int fd, char *out_path, size_t outsz)
     return rc;
 }
 
-/* Read up to count bytes from a FUSE-backed file or directory at offset.
- * Writes the daemon's reply into the guest buffer at buf_gva. Updates the
- * stream offset on success when advance_offset is true and the fd still
- * references the same (session, mount_id, nodeid) identity (post-close
- * races leave offsets untouched).
+/* Read up to count bytes from a FUSE-backed file or directory at offset. Writes
+ * the daemon's reply into the guest buffer at buf_gva. Updates the stream
+ * offset on success when advance_offset is true and the fd still references the
+ * same (session, mount_id, nodeid) identity (post-close races leave offsets
+ * untouched).
  */
 static int64_t fuse_read_common(guest_t *g,
                                 int guest_fd,
@@ -2128,9 +2131,9 @@ int64_t fuse_getdents64(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
     while (src + FUSE_NAME_OFFSET <= (size_t) raw) {
         fuse_dirent_t *fde = (fuse_dirent_t *) (tmp + src);
         /* The daemon supplies fde->namelen; bound it to Linux NAME_MAX before
-         * any further arithmetic so a malicious daemon cannot make
-         * lreclen overflow the fixed entry[] buffer below or exceed the
-         * remaining frame body.
+         * any further arithmetic so a malicious daemon cannot make lreclen
+         * overflow the fixed entry[] buffer below or exceed the remaining frame
+         * body.
          */
         if (fde->namelen > 255) {
             free(tmp);
@@ -2144,9 +2147,9 @@ int64_t fuse_getdents64(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
             break;
 
         size_t lreclen = (19 + fde->namelen + 1 + 7) & ~7ULL;
-        /* d_ino(8) + d_off(8) + d_reclen(2) + d_type(1) + name(<=255) +
-         * NUL(1) + padding(<=7) <= 280. Defense in depth against an
-         * arithmetic error -- never trust the daemon's record length.
+        /* d_ino(8) + d_off(8) + d_reclen(2) + d_type(1) + name(<=255) + NUL(1)
+         * + padding(<=7) <= 280. Defense in depth against an arithmetic error
+         * -- never trust the daemon's record length.
          */
         uint8_t entry[280];
         if (lreclen > sizeof(entry))
@@ -2265,10 +2268,10 @@ int64_t fuse_dev_write(guest_t *g,
 {
     if (count < sizeof(fuse_out_header_t))
         return -LINUX_EINVAL;
-    /* Reject any daemon write that exceeds the implementation hard ceiling.
-     * The same ceiling is applied at FUSE_INIT negotiation, so a daemon
-     * cannot advertise max_write larger than this and then have its reply
-     * payload silently rejected here.
+    /* Reject any daemon write that exceeds the implementation hard ceiling. The
+     * same ceiling is applied at FUSE_INIT negotiation, so a daemon cannot
+     * advertise max_write larger than this and then have its reply payload
+     * silently rejected here.
      */
     if (count > FUSE_FRAME_CAP)
         return -LINUX_EINVAL;
@@ -2334,9 +2337,9 @@ int64_t fuse_dev_write(guest_t *g,
     if (req->frame && ((fuse_in_header_t *) req->frame)->opcode == FUSE_INIT) {
         /* fuse(4): the daemon may return a fuse_init_out_t shorter than the
          * current struct size (older libfuse), and may negotiate a minor
-         * version different from ours. Accept any reply whose major matches
-         * and that is large enough to carry max_write. Reject only on an
-         * actual major-version mismatch or daemon-reported error.
+         * version different from ours. Accept any reply whose major matches and
+         * that is large enough to carry max_write. Reject only on an actual
+         * major-version mismatch or daemon-reported error.
          */
         const size_t init_min_len = offsetof(fuse_init_out_t, max_write) +
                                     sizeof(((fuse_init_out_t *) 0)->max_write);
@@ -2440,8 +2443,8 @@ int64_t fuse_lseek_fd(int fd, int64_t offset, int whence)
     if (snap.type != FD_FUSE_FILE && snap.type != FD_FUSE_DIR)
         return INT64_MIN;
 
-    /* Fast-reject O_PATH fds before the wait loop, then re-lookup under
-     * the lock for the seek itself.
+    /* Fast-reject O_PATH fds before the wait loop, then re-lookup under the
+     * lock for the seek itself.
      */
     pthread_mutex_lock(&fuse_lock);
     fuse_file_t *probe = fuse_file_by_fd_locked(fd);
@@ -2563,10 +2566,10 @@ int fuse_dup_fd(int src_fd,
         return -1;
     }
 
-    /* Install cleanup atomically with the type. Without this, a racing
-     * close between fd_alloc_*_relaxed publishing the slot and the later
-     * fd_table[guest_fd].cleanup assignment would skip fuse_fd_cleanup
-     * and leak the session or file ref.
+    /* Install cleanup atomically with the type. Without this, a racing close
+     * between fd_alloc_*_relaxed publishing the slot and the later
+     * fd_table[guest_fd].cleanup assignment would skip fuse_fd_cleanup and leak
+     * the session or file ref.
      */
     int guest_fd = fixed_slot ? fd_alloc_at_relaxed(fixed_guest_fd, snap.type,
                                                     -1, fuse_fd_cleanup)
@@ -2615,14 +2618,14 @@ int fuse_dup_fd(int src_fd,
 
     pthread_mutex_unlock(&fuse_lock);
 
-    /* O_NONBLOCK is a file-status flag preserved by dup(2)/dup2(2); without
-     * it a duplicated non-blocking FUSE fd would silently become blocking
-     * because nothing else carries the flag forward.
+    /* O_NONBLOCK is a file-status flag preserved by dup(2)/dup2(2); without it
+     * a duplicated non-blocking FUSE fd would silently become blocking because
+     * nothing else carries the flag forward.
      *
-     * Take fd_lock once for both the source read and the destination write
-     * so the dup snapshot is consistent with any concurrent F_SETFL on the
-     * source and so the destination publish cannot be overwritten by an
-     * early racing F_SETFL on the new slot.
+     * Take fd_lock once for both the source read and the destination write so
+     * the dup snapshot is consistent with any concurrent F_SETFL on the source
+     * and so the destination publish cannot be overwritten by an early racing
+     * F_SETFL on the new slot.
      */
     pthread_mutex_lock(&fd_lock);
     int preserved_flags =

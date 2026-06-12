@@ -20,17 +20,17 @@ int fuse_proc_stat(struct stat *st);
 
 int64_t fuse_open_path(guest_t *g, const char *path, int linux_flags, int mode);
 bool fuse_path_matches_mount(const char *path);
-/* Returns the mount_id of the FUSE mount containing path, or -1 if path is
- * not inside any live or tombstoned FUSE mount. Distinct FUSE mounts have
- * distinct mount_ids; used by RESOLVE_NO_XDEV to detect cross-mount paths.
+/* Returns the mount_id of the FUSE mount containing path, or -1 if path is not
+ * inside any live or tombstoned FUSE mount. Distinct FUSE mounts have distinct
+ * mount_ids; used by RESOLVE_NO_XDEV to detect cross-mount paths.
  */
 int fuse_path_mount_id(const char *path);
 /* Stat a FUSE-mounted path. at_flags carries the Linux AT_* mask from the
- * caller; only LINUX_AT_SYMLINK_NOFOLLOW is consulted today. When the
- * daemon returns S_IFLNK for the final component and the caller did not
- * request NOFOLLOW, the call surfaces -LINUX_ENOSYS because symlink
- * target resolution is not implemented yet. With NOFOLLOW the symlink's
- * own attrs are returned unchanged.
+ * caller; only LINUX_AT_SYMLINK_NOFOLLOW is consulted today. When the daemon
+ * returns S_IFLNK for the final component and the caller did not request
+ * NOFOLLOW, the call surfaces -LINUX_ENOSYS because symlink target resolution
+ * is not implemented yet. With NOFOLLOW the symlink's own attrs are returned
+ * unchanged.
  */
 int fuse_stat_path(const char *path, struct stat *st, int at_flags);
 int fuse_access_path(const char *path, int mode, int flags);
@@ -58,10 +58,11 @@ bool fuse_is_file_fd(int fd);
 bool fuse_is_dir_fd(int fd);
 bool fuse_fd_refuse_mmap(int fd);
 
-/* Move the per-fd offset for a FUSE-backed regular file. Returns the new offset
- * on success or a negative Linux errno. /dev/fuse and FUSE-backed directories
- * return -ESPIPE/-EINVAL to match Linux semantics for fds that do not support
- * absolute seeking.
+/* Move the per-fd offset for a FUSE-backed regular file.
+ *
+ * Returns the new offset on success or a negative Linux errno. /dev/fuse and
+ * FUSE-backed directories return -ESPIPE/-EINVAL to match Linux semantics for
+ * fds that do not support absolute seeking.
  */
 int64_t fuse_lseek_fd(int fd, int64_t offset, int whence);
 int64_t fuse_fchdir(int fd);

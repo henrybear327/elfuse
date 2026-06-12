@@ -3,32 +3,31 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * x86-64 reads thread-local storage through the FS segment register;
- * Rosetta has to translate those accesses into TPIDR_EL0-relative
- * loads when it lowers x86 to aarch64. The hello/dlopen probes never
- * touch FS-relative addressing, so this is the first elfuse probe
- * that actually exercises that translation. Two __thread variables
- * cover both the integer and pointer access shapes the compiler
- * emits; a value-mismatch failure here typically points at a broken
- * FS-to-TPIDR_EL0 plumbing inside the translator path, not at glibc
- * or elfuse mmap.
+ * x86-64 reads thread-local storage through the FS segment register; Rosetta
+ * has to translate those accesses into TPIDR_EL0-relative loads when it lowers
+ * x86 to aarch64. The hello/dlopen probes never touch FS-relative addressing,
+ * so this is the first elfuse probe that actually exercises that translation.
+ * Two __thread variables cover both the integer and pointer access shapes the
+ * compiler emits; a value-mismatch failure here typically points at a broken
+ * FS-to-TPIDR_EL0 plumbing inside the translator path, not at glibc or elfuse
+ * mmap.
  */
 
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 
-/* Initial-exec model: the variables live in the main executable, so
- * the compiler emits direct fs:offset loads. No libpthread needed.
+/* Initial-exec model: the variables live in the main executable, so the
+ * compiler emits direct fs:offset loads. No libpthread needed.
  */
 static __thread uint32_t tls_int = 0xdeadbeef;
 static __thread const char *tls_ptr = "tls-pointer-ok";
 
 static void emit(int fd, const char *s)
 {
-    /* warn_unused_result on glibc's write() prototype is not suppressed
-     * by (void) cast, so route the return through a sink variable that
-     * gets read once at function exit.
+    /* warn_unused_result on glibc's write() prototype is not suppressed by
+     * (void) cast, so route the return through a sink variable that gets read
+     * once at function exit.
      */
     ssize_t n = write(fd, s, strlen(s));
     if (n > 0)

@@ -58,8 +58,8 @@ int main(void)
         socklen_t got_len = sizeof(got);
         memset(&got, 0, sizeof(got));
         if (getsockname(srv, (struct sockaddr *) &got, &got_len) == 0) {
-            /* Expect: family=AF_UNIX, sun_path[0]='\0',
-             * rest = "elfuse-test-abstract"
+            /* Expect: family=AF_UNIX, sun_path[0]='\0', rest =
+             * "elfuse-test-abstract"
              */
             if (got.sun_family == AF_UNIX && got.sun_path[0] == '\0' &&
                 !memcmp(got.sun_path + 1, "elfuse-test-abstract", 20))

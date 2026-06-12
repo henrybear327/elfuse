@@ -48,8 +48,8 @@ int passes = 0, fails = 0;
 #define FUTEX_TRYLOCK_PI 8
 #define FUTEX_PRIVATE 128
 
-/* PI lock word: shared between parent and child thread.
- * Must be aligned to 4 bytes (futex requirement).
+/* PI lock word: shared between parent and child thread. Must be aligned to 4
+ * bytes (futex requirement).
  */
 static volatile uint32_t pi_lock __attribute__((aligned(4))) = 0;
 
@@ -75,8 +75,8 @@ static long raw_futex_unlock_pi(uint32_t *addr)
 /* Stack for child thread (8KiB, 16-byte aligned) */
 static char child_stack_buf[8192] __attribute__((aligned(16)));
 
-/* Child: acquire PI lock, signal parent, exit WITHOUT releasing.
- * This tests elfuse's dead-owner detection in futex_lock_pi().
+/* Child: acquire PI lock, signal parent, exit WITHOUT releasing. This tests
+ * elfuse's dead-owner detection in futex_lock_pi().
  */
 static void child_acquire_and_die(void)
 {
@@ -93,8 +93,8 @@ static void child_acquire_and_die(void)
     child_ready = 1;
     raw_futex_wake((int *) &child_ready, 1);
 
-    /* Exit WITHOUT calling FUTEX_UNLOCK_PI. This is the bug scenario:
-     * elfuse's futex_lock_pi must detect the current TID is dead and recover.
+    /* Exit WITHOUT calling FUTEX_UNLOCK_PI. This is the bug scenario: elfuse's
+     * futex_lock_pi must detect the current TID is dead and recover.
      */
     raw_exit(0);
 }
@@ -177,8 +177,8 @@ static void test_pi_dead_owner(void)
         return;
     }
 
-    /* Wait for child thread to actually exit (CLONE_CHILD_CLEARTID
-     * clears child_tid_val and does futex_wake). Give it 500ms.
+    /* Wait for child thread to actually exit (CLONE_CHILD_CLEARTID clears
+     * child_tid_val and does futex_wake). Give it 500ms.
      */
     for (int i = 0; i < 50; i++) {
         if (__atomic_load_n(&child_tid_val, __ATOMIC_SEQ_CST) == 0)
@@ -186,9 +186,9 @@ static void test_pi_dead_owner(void)
         usleep(10000); /* 10ms */
     }
 
-    /* Now try to acquire the PI lock. The child exited without
-     * releasing it, so elfuse's futex_lock_pi must detect the dead
-     * owner and let the waiter acquire.
+    /* Now try to acquire the PI lock. The child exited without releasing it, so
+     * elfuse's futex_lock_pi must detect the dead owner and let the waiter
+     * acquire.
      */
     long r = raw_futex_lock_pi((uint32_t *) &pi_lock);
     if (r != 0) {
@@ -203,9 +203,9 @@ static void test_pi_dead_owner(void)
 
 /* Test 3: futex_wait without a signal blocks until woken */
 
-/* Sibling that waits ~1.2 s, flips the futex word, and issues FUTEX_WAKE on
- * the parent's address. Used to drive the parent out of an indefinite
- * futex_wait via a real wake (not synthetic EINTR).
+/* Sibling that waits ~1.2 s, flips the futex word, and issues FUTEX_WAKE on the
+ * parent's address. Used to drive the parent out of an indefinite futex_wait
+ * via a real wake (not synthetic EINTR).
  */
 static volatile int waker_word __attribute__((aligned(4))) = 0;
 static char waker_stack_buf[8192] __attribute__((aligned(16)));

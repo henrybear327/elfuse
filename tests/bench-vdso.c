@@ -3,13 +3,12 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Compares each elfuse vDSO trampoline against the equivalent raw SVC
- * for clock_gettime, clock_getres, gettimeofday, and getcpu. Reports
- * ns/op and the vDSO/SVC speedup ratio so the seqlock + DMB ISHLD
- * overhead introduced this cycle can be measured against the prior
- * baseline. Resolves symbol addresses by walking the vDSO ELF via
- * AT_SYSINFO_EHDR, the same path glibc uses, so the numbers reflect
- * what real workloads see.
+ * Compares each elfuse vDSO trampoline against the equivalent raw SVC for
+ * clock_gettime, clock_getres, gettimeofday, and getcpu. Reports ns/op and the
+ * vDSO/SVC speedup ratio so the seqlock + DMB ISHLD overhead introduced this
+ * cycle can be measured against the prior baseline. Resolves symbol addresses
+ * by walking the vDSO ELF via AT_SYSINFO_EHDR, the same path glibc uses, so the
+ * numbers reflect what real workloads see.
  */
 
 #include <elf.h>
@@ -79,8 +78,8 @@ typedef long (*bench_fn_t)(void *ctx);
 
 static double time_loop(bench_fn_t fn, void *ctx, unsigned long iters)
 {
-    /* Warm-up: ensure the vDSO anchor is seeded so the first loop
-     * iteration is not artificially slow.
+    /* Warm-up: ensure the vDSO anchor is seeded so the first loop iteration is
+     * not artificially slow.
      */
     for (unsigned long i = 0; i < 1000; i++)
         (void) fn(ctx);
@@ -185,8 +184,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Resolve vDSO trampolines via the same dynsym + ELF hash path glibc
-     * uses. The trampolines are inside the 4 KiB page at AT_SYSINFO_EHDR.
+    /* Resolve vDSO trampolines via the same dynsym + ELF hash path glibc uses.
+     * The trampolines are inside the 4 KiB page at AT_SYSINFO_EHDR.
      */
     const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *) base;
     const Elf64_Phdr *phdr =

@@ -4,18 +4,18 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Regression for the epoll_ctl host-fd-reference bug: in a multi-threaded
- * guest, host_fd_ref_open() hands back a *dup* of the target fd that is
- * closed when the syscall returns. sys_epoll_ctl() used that transient dup
- * as the kqueue knote ident, so the kernel dropped the registration the
- * moment epoll_ctl() returned -- and epoll_pwait() never reported readiness
- * again. Single-threaded guests borrow the raw fd (no dup, no close) and so
- * never hit it; this only reproduces with at least one CLONE_THREAD sibling
- * active. Node's libuv DelayedTaskScheduler relied on exactly this path
- * (eventfd + epoll for uv_async_send) and hung forever at process exit.
+ * guest, host_fd_ref_open() hands back a *dup* of the target fd that is closed
+ * when the syscall returns. sys_epoll_ctl() used that transient dup as the
+ * kqueue knote ident, so the kernel dropped the registration the moment
+ * epoll_ctl() returned -- and epoll_pwait() never reported readiness again.
+ * Single-threaded guests borrow the raw fd (no dup, no close) and so never hit
+ * it; this only reproduces with at least one CLONE_THREAD sibling active.
+ * Node's libuv DelayedTaskScheduler relied on exactly this path (eventfd +
+ * epoll for uv_async_send) and hung forever at process exit.
  *
  * The test keeps a sibling thread alive across the epoll_ctl() call, then
- * checks that both a pipe and an eventfd registered while multi-threaded
- * still deliver an EPOLLIN edge.
+ * checks that both a pipe and an eventfd registered while multi-threaded still
+ * deliver an EPOLLIN edge.
  *
  * Syscalls exercised: clone(220), epoll_create1(20), epoll_ctl(21),
  *                     epoll_pwait(22), eventfd2(19), pipe2(59), write(64),
@@ -37,8 +37,8 @@ static volatile int child_should_exit = 0;
 static char sibling_stack[16384] __attribute__((aligned(16)));
 
 /* Sibling thread: stays alive (raw nanosleep loop) so the guest is
- * multi-threaded for the duration of the parent's epoll_ctl() calls, then
- * exits via the raw exit syscall. Uses only raw syscalls because a
+ * multi-threaded for the duration of the parent's epoll_ctl() calls, then exits
+ * via the raw exit syscall. Uses only raw syscalls because a
  * clone(CLONE_THREAD) child has no libc TLS set up.
  */
 static int sibling_fn(void *arg)
@@ -53,9 +53,11 @@ static int sibling_fn(void *arg)
     return 0;
 }
 
-/* Register host_fd for EPOLLIN on epfd, make it readable via make_ready(),
- * and assert epoll_pwait() observes the edge within the timeout. Returns 1
- * on success. */
+/* Register host_fd for EPOLLIN on epfd, make it readable via make_ready(), and
+ * assert epoll_pwait() observes the edge within the timeout.
+ *
+ * Returns 1 on success.
+ */
 static int expect_ready_edge(int epfd, int fd, void (*make_ready)(int), int arg)
 {
     struct epoll_event ev = {.events = EPOLLIN, .data.fd = fd};
@@ -66,7 +68,8 @@ static int expect_ready_edge(int epfd, int fd, void (*make_ready)(int), int arg)
 
     struct epoll_event out[4];
     /* 2s budget: the bug manifests as an indefinite miss, so any generous
-     * finite timeout distinguishes pass from fail without flaking. */
+     * finite timeout distinguishes pass from fail without flaking.
+     */
     int n = epoll_wait(epfd, out, 4, 2000);
     return n == 1 && out[0].data.fd == fd;
 }

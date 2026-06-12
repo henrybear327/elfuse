@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Implements a minimal GDB RSP server over TCP. When the guest hits a
- * hardware breakpoint/watchpoint or receives Ctrl+C from GDB, all vCPUs stop
- * (all-stop mode) and the stub services register/memory queries.
+ * Implements a minimal GDB RSP server over TCP. When the guest hits a hardware
+ * breakpoint/watchpoint or receives Ctrl+C from GDB, all vCPUs stop (all-stop
+ * mode) and the stub services register/memory queries.
  *
  * Architecture:
  *   - A listener thread accepts one GDB connection at a time
@@ -75,8 +75,8 @@
 #define DBGWCR_LSC_LOAD (0x1 << 3)  /* Read watchpoint */
 #define DBGWCR_LSC_BOTH (0x3 << 3)  /* Access watchpoint */
 
-/* HVF debug register ID lookup tables.
- * The HVF enum values use stride 8 per index:
+/* HVF debug register ID lookup tables. The HVF enum values use stride 8 per
+ * index:
  *   BVR0=0x8004, BCR0=0x8005, BVR1=0x800c, BCR1=0x800d, etc.
  *   WVR0=0x8006, WCR0=0x8007, WVR1=0x800e, WCR1=0x800f, etc.
  */
@@ -193,23 +193,23 @@ static int rsp_reply_error(int errnum)
     return rsp_reply(buf);
 }
 
-/* Read one RSP packet from the client. Strips $...# framing and
- * verifies checksum. Sends + acknowledgment on success.
- * Returns packet length, 0 on EOF, -1 on error.
- * Also handles bare 0x03 (Ctrl+C) by returning "\x03" as a 1-byte packet.
+/* Read one RSP packet from the client. Strips $...# framing and verifies
+ * checksum. Sends + acknowledgment on success.
+ * Returns packet length, 0 on EOF, -1 on error. Also handles bare 0x03 (Ctrl+C)
+ * by returning "\x03" as a 1-byte packet.
  *
- * Uses a static read buffer to batch socket reads instead of reading
- * one byte at a time. Packets exceeding bufsz are rejected with E00.
+ * Uses a static read buffer to batch socket reads instead of reading one byte
+ * at a time. Packets exceeding bufsz are rejected with E00.
  */
 /* Breakpoint / watchpoint management. */
 
-/* BAS (Byte Address Select) for a watchpoint of given length aligned
- * to the watch address modulo 8.
+/* BAS (Byte Address Select) for a watchpoint of given length aligned to the
+ * watch address modulo 8.
  */
 static uint32_t wp_bas_for_len(uint64_t addr, uint64_t len)
 {
-    /* Watchpoint address must be doubleword-aligned in DBGWVR;
-     * BAS selects which bytes within the doubleword to watch.
+    /* Watchpoint address must be doubleword-aligned in DBGWVR; BAS selects
+     * which bytes within the doubleword to watch.
      */
     unsigned offset = (unsigned) (addr & 7);
     uint32_t mask = 0;
@@ -287,9 +287,8 @@ void gdb_stub_sync_debug_regs(hv_vcpu_t vcpu)
     /* Enable debug exceptions to trap to EL2 (host) */
     HV_CHECK(hv_vcpu_set_trap_debug_exceptions(vcpu, true));
 
-    /* MDSCR_EL1: enable monitor debug (MDE, bit 15).
-     * MDE is required for hardware breakpoint/watchpoint exceptions
-     * to fire at EL0.
+    /* MDSCR_EL1: enable monitor debug (MDE, bit 15). MDE is required for
+     * hardware breakpoint/watchpoint exceptions to fire at EL0.
      */
     uint64_t mdscr;
     HV_CHECK(hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_MDSCR_EL1, &mdscr));
@@ -308,8 +307,8 @@ void gdb_stub_sync_debug_regs(hv_vcpu_t vcpu)
                 gdb.breakpoints[i].used = false;
             }
         } else {
-            /* Disable this breakpoint slot (ignore errors for
-             * unsupported hardware indices)
+            /* Disable this breakpoint slot (ignore errors for unsupported
+             * hardware indices)
              */
             (void) hv_vcpu_set_sys_reg(vcpu, dbgbcr_regs[i], 0);
         }
@@ -352,9 +351,11 @@ void gdb_stub_sync_debug_regs(hv_vcpu_t vcpu)
 
 /* Thread helpers. */
 
-/* Find the thread entry for a given guest TID. Returns NULL if not found.
- * This returns thread_entry_t * rather than hv_vcpu_t because a valid HVF
- * vCPU handle can be 0 for the first created vCPU.
+/* Find the thread entry for a given guest TID.
+ *
+ * Returns NULL if not found. This returns thread_entry_t * rather than
+ * hv_vcpu_t because a valid HVF vCPU handle can be 0 for the first created
+ * vCPU.
  */
 static thread_entry_t *find_thread_for_tid(int64_t tid)
 {
@@ -650,8 +651,8 @@ static void handle_thread_alive(const char *pkt)
         rsp_reply_error(1);
 }
 
-/* Handle 'Z'/'z': insert/remove breakpoint or watchpoint.
- * Format: Z/z TYPE,ADDR,KIND
+/* Handle 'Z'/'z': insert/remove breakpoint or watchpoint. Format: Z/z
+ * TYPE,ADDR,KIND
  */
 static void handle_breakpoint(const char *pkt, int insert)
 {
@@ -667,8 +668,8 @@ static void handle_breakpoint(const char *pkt, int insert)
     int rc;
     switch (type) {
     case 0:
-        /* Software breakpoint: for MVP, treat as hardware breakpoint
-         * since hardware support is available and this avoids I-cache issues
+        /* Software breakpoint: for MVP, treat as hardware breakpoint since
+         * hardware support is available and this avoids I-cache issues
          */
         /* fallthrough */
     case 1:
@@ -756,8 +757,8 @@ static void handle_thread_info(int first)
         return;
     }
 
-    /* Build comma-separated hex thread ID list.
-     * Worst case: MAX_THREADS(64) x 17 chars (16 hex + comma) + 1 prefix + NUL.
+    /* Build comma-separated hex thread ID list. Worst case: MAX_THREADS(64) x
+     * 17 chars (16 hex + comma) + 1 prefix + NUL.
      */
     char reply[2048];
     int pos = 0;
@@ -821,8 +822,8 @@ static void handle_vcont(const char *pkt)
 
     /* Set up single-step by placing a temporary hardware breakpoint at PC+4.
      * This covers straight-line instructions; branch-accurate stepping would
-     * require an instruction decoder. GDB can still set explicit breakpoints
-     * at branch targets when it needs that precision.
+     * require an instruction decoder. GDB can still set explicit breakpoints at
+     * branch targets when it needs that precision.
      */
     if (do_step && step_tid > 0) {
         const thread_entry_t *step_t = find_thread_for_tid(step_tid);
@@ -1086,9 +1087,10 @@ static void handle_packet(const char *pkt, int pkt_len)
 
 /* GDB client session. */
 
-/* Main loop for servicing a connected GDB client. Runs on the listener
- * thread. Reads packets and dispatches them. Returns when the client
- * disconnects.
+/* Main loop for servicing a connected GDB client. Runs on the listener thread.
+ * Reads packets and dispatches them.
+ *
+ * Returns when the client disconnects.
  */
 static void gdb_client_session(void)
 {
@@ -1103,8 +1105,8 @@ static void gdb_client_session(void)
     gdb.rsp_ctx = &rsp_ctx;
 
     while (gdb.client_fd >= 0) {
-        /* Wait for either a packet from GDB or a stop event from a vCPU.
-         * Use poll() so the GDB stub can wake up when a thread stops.
+        /* Wait for either a packet from GDB or a stop event from a vCPU. Use
+         * poll() so the GDB stub can wake up when a thread stops.
          */
         struct pollfd pfd = {
             .fd = gdb.client_fd,
@@ -1171,8 +1173,8 @@ static void *listener_thread_fn(void *arg)
         gdb.client_fd = fd;
 
         /* If the GDB stub is in stop-on-entry mode, the main thread is already
-         * blocked in gdb_stub_wait_for_attach(). Wake it up now that
-         * the GDB stub has a client.
+         * blocked in gdb_stub_wait_for_attach(). Wake it up now that the GDB
+         * stub has a client.
          */
         pthread_mutex_lock(&gdb.lock);
         pthread_cond_broadcast(&gdb.stop_cond);
@@ -1282,8 +1284,8 @@ void gdb_stub_wait_for_attach(void)
 
     log_info("Waiting for GDB to attach...");
 
-    /* Snapshot registers before blocking. Runs on the vCPU owner thread
-     * This lets GDB inspect initial register state at entry.
+    /* Snapshot registers before blocking. Runs on the vCPU owner thread This
+     * lets GDB inspect initial register state at entry.
      */
     if (current_thread)
         gdb_snap_vcpu(current_thread);
@@ -1308,15 +1310,15 @@ void gdb_stub_wait_for_attach(void)
 
     pthread_mutex_unlock(&gdb.lock);
 
-    /* Apply any register changes GDB made.
-     * Stop-on-entry is shim-mediated (not TDE), so tde_stop=0.
+    /* Apply any register changes GDB made. Stop-on-entry is shim-mediated (not
+     * TDE), so tde_stop=0.
      */
     if (current_thread && current_thread->gdb_regs_dirty)
         gdb_restore_vcpu(current_thread, 0);
 
-    /* Re-sync debug registers because breakpoints/watchpoints may have been
-     * set by GDB during the initial attach (e.g., step sets a temp bp).
-     * The initial sync in main.c ran before any breakpoints existed.
+    /* Re-sync debug registers because breakpoints/watchpoints may have been set
+     * by GDB during the initial attach (e.g., step sets a temp bp). The initial
+     * sync in main.c ran before any breakpoints existed.
      */
     if (current_thread)
         gdb_stub_sync_debug_regs(current_thread->vcpu);
@@ -1336,23 +1338,23 @@ int gdb_stub_handle_stop(int stop_reason, uint64_t stop_addr)
 
     int64_t my_tid = current_thread ? current_thread->guest_tid : 1;
 
-    /* Snapshot vCPU registers into thread entry. Must happen on the
-     * vCPU's owning thread (HVF requirement). The GDB handler thread
-     * reads/writes this snapshot while the vCPU thread is blocked.
+    /* Snapshot vCPU registers into thread entry. Must happen on the vCPU's
+     * owning thread (HVF requirement). The GDB handler thread reads/writes this
+     * snapshot while the vCPU thread is blocked.
      */
     if (current_thread)
         gdb_snap_vcpu(current_thread);
 
     pthread_mutex_lock(&gdb.lock);
 
-    /* In all-stop mode, only the first stopped thread reports to GDB.
-     * Other stopped threads wait here until GDB resumes the inferior.
+    /* In all-stop mode, only the first stopped thread reports to GDB. Other
+     * stopped threads wait here until GDB resumes the inferior.
      */
     int first_to_stop = !gdb.all_stopped;
 
     if (first_to_stop) {
-        /* Remove temporary breakpoints (must be under lock to avoid
-         * concurrent modification of the breakpoint table).
+        /* Remove temporary breakpoints (must be under lock to avoid concurrent
+         * modification of the breakpoint table).
          */
         bp_remove_temps();
 
@@ -1390,10 +1392,10 @@ int gdb_stub_handle_stop(int stop_reason, uint64_t stop_addr)
     int do_step = gdb.resume_action;
     pthread_mutex_unlock(&gdb.lock);
 
-    /* Apply any register changes GDB made to the snapshot.
-     * TDE debug stops (breakpoint, step, watchpoint) bypassed EL1,
-     * so HV_REG_PC must also be written for the resume to work.
-     * Shim-mediated stops (signals, Ctrl+C) only need ELR_EL1.
+    /* Apply any register changes GDB made to the snapshot. TDE debug stops
+     * (breakpoint, step, watchpoint) bypassed EL1, so HV_REG_PC must also be
+     * written for the resume to work. Shim-mediated stops (signals, Ctrl+C)
+     * only need ELR_EL1.
      */
     int tde =
         (stop_reason == GDB_STOP_BREAKPOINT || stop_reason == GDB_STOP_STEP ||

@@ -4,20 +4,20 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Lightweight per-step wall-time tracer for VM bring-up. Gated by the
- * ELFUSE_STARTUP_TRACE environment variable so a release-build run pays
- * exactly one getenv + one branch per step when disabled. The helpers are
- * static inline so each translation unit can use them without pulling in a
- * separate object; the getenv check resolves once per translation unit but
- * the resolution itself is idempotent.
+ * ELFUSE_STARTUP_TRACE environment variable so a release-build run pays exactly
+ * one getenv + one branch per step when disabled. The helpers are static inline
+ * so each translation unit can use them without pulling in a separate object;
+ * the getenv check resolves once per translation unit but the resolution itself
+ * is idempotent.
  *
  * Accepted env values:
  *   unset, "", "0"  -> all tracing off
  *   "1", "steps"    -> per-step VM bring-up timings (this header)
  *   "syscalls"      -> per-syscall histogram (debug/syscall-hist.c)
  *   "all"           -> both, comma-separated tokens also accepted
- * "1" is preserved as a legacy alias for "steps" so old scripts keep
- * working. The histogram mode never enables the step tracer and vice
- * versa, so a user can ask for one without paying for the other.
+ * "1" is preserved as a legacy alias for "steps" so old scripts keep working.
+ * The histogram mode never enables the step tracer and vice versa, so a user
+ * can ask for one without paying for the other.
  */
 
 #ifndef ELFUSE_STARTUP_TRACE_H

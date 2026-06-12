@@ -4,8 +4,8 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Constructs the initial stack layout expected by the Linux ABI:
- * argc, argv pointers, envp pointers, auxiliary vector, and string data.
+ * Constructs the initial stack layout expected by the Linux ABI: argc, argv
+ * pointers, envp pointers, auxiliary vector, and string data.
  */
 
 #pragma once
@@ -47,8 +47,8 @@ typedef struct {
     size_t nwords;
 } linux_stack_auxv_t;
 
-/* Build a Linux-compatible initial stack at the given stack_top.
- * Passes argc/argv and envp (NULL-terminated array of "KEY=val" strings).
+/* Build a Linux-compatible initial stack at the given stack_top. Passes
+ * argc/argv and envp (NULL-terminated array of "KEY=val" strings).
  * elf_load_base is the base address PIE executables were loaded at (0 for
  * ET_EXEC). interp_base is the load base of the dynamic linker (0 if statically
  * linked). vdso_base is the guest address of the vDSO ELF image (0 if no vDSO).

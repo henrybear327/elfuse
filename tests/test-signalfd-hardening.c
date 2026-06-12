@@ -43,8 +43,8 @@ int passes = 0, fails = 0;
 #define SYS_rt_sigqueueinfo 138
 #endif
 
-/* siginfo_t crosses both glibc and musl, but si_value layouts differ.
- * Build the kernel-shaped buffer by hand so the test stays libc-agnostic.
+/* siginfo_t crosses both glibc and musl, but si_value layouts differ. Build the
+ * kernel-shaped buffer by hand so the test stays libc-agnostic.
  */
 static void build_kernel_siginfo(int sig,
                                  int code,
@@ -80,8 +80,8 @@ static void build_kernel_siginfo(int sig,
      */
     u64 = (uint64_t) (uintptr_t) payload_ptr;
     memcpy(out + 24, &u64, 8);
-    /* If both int and ptr are set, ptr wins because it overlaps. Tests pick
-     * one or the other.
+    /* If both int and ptr are set, ptr wins because it overlaps. Tests pick one
+     * or the other.
      */
     if (payload_ptr == NULL) {
         s32 = payload_int;
@@ -175,8 +175,8 @@ static void test_standard_coalesces(void)
         return;
     }
 
-    /* Three kill()s should produce exactly one signalfd record (Linux
-     * coalesces standard signals on the pending bitmask).
+    /* Three kill()s should produce exactly one signalfd record (Linux coalesces
+     * standard signals on the pending bitmask).
      */
     kill(getpid(), SIGUSR1);
     kill(getpid(), SIGUSR1);
@@ -212,8 +212,8 @@ static void test_standard_coalesces(void)
 static void test_sigrtmax_reachable(void)
 {
     /* SIGRTMAX (64 on aarch64) was excluded by an off-by-one in the
-     * collect/take loops (signum < LINUX_NSIG instead of <= LINUX_NSIG).
-     * This test fails before the fix and passes after.
+     * collect/take loops (signum < LINUX_NSIG instead of <= LINUX_NSIG). This
+     * test fails before the fix and passes after.
      */
     TEST("SIGRTMAX reaches signalfd");
 
@@ -258,9 +258,9 @@ static void test_sigrtmax_reachable(void)
 
 static void test_ssi_ptr_roundtrip(void)
 {
-    /* sigval has separate int and ptr forms. For the ptr form the full 64
-     * bits land in si_value; signalfd_siginfo exposes both ssi_int (low 32)
-     * and ssi_ptr (full 64). Verify both are populated from one queued ptr.
+    /* sigval has separate int and ptr forms. For the ptr form the full 64 bits
+     * land in si_value; signalfd_siginfo exposes both ssi_int (low 32) and
+     * ssi_ptr (full 64). Verify both are populated from one queued ptr.
      */
     TEST("ssi_ptr / ssi_int round-trip");
 
@@ -276,8 +276,8 @@ static void test_ssi_ptr_roundtrip(void)
         return;
     }
 
-    /* Use an arbitrary pointer-shaped value with a high bit set so a
-     * truncating implementation drops information detectably.
+    /* Use an arbitrary pointer-shaped value with a high bit set so a truncating
+     * implementation drops information detectably.
      */
     void *payload = (void *) 0x0123456789ABCDEFULL;
     pid_t pid = getpid();
@@ -367,9 +367,9 @@ static void test_sender_metadata(void)
 
 static void test_mask_filters_only(void)
 {
-    /* signalfd's own mask is the sole filter: a signal blocked from
-     * synchronous delivery via sigprocmask is still readable from the
-     * signalfd if its mask includes the signal.
+    /* signalfd's own mask is the sole filter: a signal blocked from synchronous
+     * delivery via sigprocmask is still readable from the signalfd if its mask
+     * includes the signal.
      */
     TEST("signalfd mask filters, not pthread mask");
 
@@ -442,10 +442,10 @@ static void test_mask_filters_only(void)
 
 static void test_sigqueue_libc_path(void)
 {
-    /* glibc / musl sigqueue() goes through SYS_rt_sigqueueinfo (138).
-     * Without that wired in, sigqueue() returns ENOSYS and apps that rely
-     * on POSIX queued signals (real-time apps, gdb) break. Verify the
-     * libc path produces a payload-bearing record.
+    /* glibc / musl sigqueue() goes through SYS_rt_sigqueueinfo (138). Without
+     * that wired in, sigqueue() returns ENOSYS and apps that rely on POSIX
+     * queued signals (real-time apps, gdb) break. Verify the libc path produces
+     * a payload-bearing record.
      */
     TEST("libc sigqueue() round-trip");
 
@@ -532,15 +532,14 @@ static void test_partial_fault_returns_partial_bytes(void)
 {
     /* Partial-fault recovery (write-then-take semantics).
      *
-     * Queue four RT signals (payloads 0xA1..0xA4). Place a 4-record buffer
-     * so records 0 and 1 land in a valid page but records 2 and 3 cross
-     * into an unmapped page. The bridge writes 2 records, hits EFAULT
-     * trying to write record 2, returns partial bytes (2 * 128) -- and
-     * crucially does NOT take records 2 and 3 from the rt-queue, so they
-     * remain pending in original FIFO order. The follow-up read returns
-     * exactly two records with payloads 0xA3 then 0xA4 (no duplication
-     * of 0xA1 / 0xA2; no re-queue path that could overflow RT_SIGQUEUE_MAX
-     * or desync the notification pipe).
+     * Queue four RT signals (payloads 0xA1..0xA4). Place a 4-record buffer so
+     * records 0 and 1 land in a valid page but records 2 and 3 cross into an
+     * unmapped page. The bridge writes 2 records, hits EFAULT trying to write
+     * record 2, returns partial bytes (2 * 128) -- and crucially does NOT take
+     * records 2 and 3 from the rt-queue, so they remain pending in original
+     * FIFO order. The follow-up read returns exactly two records with payloads
+     * 0xA3 then 0xA4 (no duplication of 0xA1 / 0xA2; no re-queue path that
+     * could overflow RT_SIGQUEUE_MAX or desync the notification pipe).
      */
     TEST("partial fault: partial bytes + FIFO");
 
@@ -616,16 +615,16 @@ static void test_partial_fault_returns_partial_bytes(void)
 
     /* Follow-up read into a fully-valid buffer.
      *
-     * Linux dequeues the record being copied before checking copy_to_user,
-     * so the record that hit EFAULT (payloads[2]) is lost; a follow-up
-     * read returns one record (payloads[3]). elfuse defers the take until
-     * the write succeeds, so a follow-up read returns two records
-     * (payloads[2] then payloads[3]) in original FIFO order.
+     * Linux dequeues the record being copied before checking copy_to_user, so
+     * the record that hit EFAULT (payloads[2]) is lost; a follow-up read
+     * returns one record (payloads[3]). elfuse defers the take until the write
+     * succeeds, so a follow-up read returns two records (payloads[2] then
+     * payloads[3]) in original FIFO order.
      *
-     * Both behaviors are accepted: the contract under test is "no
-     * duplication of records that already reached the guest, no
-     * out-of-order delivery within whatever survives, and the last
-     * queued payload is always preserved."
+     * Both behaviors are accepted: the contract under test is "no duplication
+     * of records that already reached the guest, no out-of-order delivery
+     * within whatever survives, and the last queued payload is always
+     * preserved."
      */
     struct signalfd_siginfo recs[8];
     memset(recs, 0, sizeof(recs));
@@ -693,12 +692,11 @@ static void test_rt_sigqueueinfo_bad_pointer_efault(void)
 
 static void test_rt_sigqueueinfo_rejects_foreign_pid(void)
 {
-    /* rt_sigqueueinfo is a process-scoped (tgid) syscall. A pid that does
-     * not name the current process must return ESRCH instead of routing
-     * the signal through whichever thread happened to share the numeric
-     * id. The first probe picks a pid the host kernel cannot have
-     * assigned to the current guest so the call cannot collide with a
-     * legitimate target.
+    /* rt_sigqueueinfo is a process-scoped (tgid) syscall. A pid that does not
+     * name the current process must return ESRCH instead of routing the signal
+     * through whichever thread happened to share the numeric id. The first
+     * probe picks a pid the host kernel cannot have assigned to the current
+     * guest so the call cannot collide with a legitimate target.
      */
     TEST("rt_sigqueueinfo rejects foreign pid");
 
@@ -716,9 +714,9 @@ static void test_rt_sigqueueinfo_rejects_foreign_pid(void)
     PASS();
 }
 
-/* Helpers for the worker-thread tid case. The worker publishes its own
- * tid via a thread-shared variable, then waits on a barrier so the main
- * thread can call rt_sigqueueinfo with that tid before the worker exits.
+/* Helpers for the worker-thread tid case. The worker publishes its own tid via
+ * a thread-shared variable, then waits on a barrier so the main thread can call
+ * rt_sigqueueinfo with that tid before the worker exits.
  */
 typedef struct {
     pthread_mutex_t mtx;
@@ -744,18 +742,17 @@ static void *tid_worker(void *arg)
 
 static void test_rt_sigqueueinfo_thread_tid_routes_to_tgid(void)
 {
-    /* Linux is permissive: rt_sigqueueinfo(tid_of_any_thread, ...)
-     * succeeds and the signal lands in the thread group's pending set
-     * (kill_pid_info routes through PIDTYPE_TGID). The contract under
-     * test is that elfuse matches that routing: a worker thread tid is
-     * accepted, and the queued signal becomes readable from the process
-     * signalfd. A regression that scoped the syscall to "tgid only"
-     * would surface here as ESRCH.
+    /* Linux is permissive: rt_sigqueueinfo(tid_of_any_thread, ...) succeeds and
+     * the signal lands in the thread group's pending set (kill_pid_info routes
+     * through PIDTYPE_TGID). The contract under test is that elfuse matches
+     * that routing: a worker thread tid is accepted, and the queued signal
+     * becomes readable from the process signalfd. A regression that scoped the
+     * syscall to "tgid only" would surface here as ESRCH.
      */
     TEST("rt_sigqueueinfo tid routes to tgid");
 
-    /* Block SIGRTMIN process-wide so the queued signal stays pending
-     * for signalfd to read instead of terminating the process.
+    /* Block SIGRTMIN process-wide so the queued signal stays pending for
+     * signalfd to read instead of terminating the process.
      */
     sigset_t block;
     sigemptyset(&block);
@@ -810,8 +807,8 @@ static void test_rt_sigqueueinfo_thread_tid_routes_to_tgid(void)
     int ret = raw_rt_sigqueueinfo(worker_tid, SIGRTMIN, info);
     int err = errno;
 
-    /* Drain any queued signal via signalfd before letting the worker
-     * exit so the signal does not leak into pthread_join.
+    /* Drain any queued signal via signalfd before letting the worker exit so
+     * the signal does not leak into pthread_join.
      */
     struct signalfd_siginfo rec;
     memset(&rec, 0, sizeof(rec));

@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests clone3 for both fork (new process) and thread (CLONE_THREAD)
- * paths, verifying that the clone_args struct is correctly parsed and
- * delegated to the existing clone infrastructure.
+ * Tests clone3 for both fork (new process) and thread (CLONE_THREAD) paths,
+ * verifying that the clone_args struct is correctly parsed and delegated to the
+ * existing clone infrastructure.
  */
 
 #include <stdarg.h>
@@ -157,16 +157,16 @@ static void test_thread(void)
     ca.stack_size = stack_size;
     ca.child_tid = (uint64_t) &thread_tid; /* set_child_tid / clear_child_tid */
 
-    /* Point the child's PC at thread_fn.
-     * clone3 with CLONE_THREAD resumes at the parent's PC but with X0=0.
-     * The caller needs the child to jump to thread_fn, so the caller sets up
-     * the stack with a return address. Actually, clone resumes at parent PC
-     * with X0=0 and the new stack, so the caller needs to arrange for the child
-     * to call thread_fn from the clone return path.
+    /* Point the child's PC at thread_fn. clone3 with CLONE_THREAD resumes at
+     * the parent's PC but with X0=0. The caller needs the child to jump to
+     * thread_fn, so the caller sets up the stack with a return address.
+     * Actually, clone resumes at parent PC with X0=0 and the new stack, so the
+     * caller needs to arrange for the child to call thread_fn from the clone
+     * return path.
      *
-     * For raw clone, the child returns from the syscall with X0=0.
-     * The code checks X0 in the caller. But since this is inline asm returning
-     * to the same PC, the test handles it by checking the return value.
+     * For raw clone, the child returns from the syscall with X0=0. The code
+     * checks X0 in the caller. But since this is inline asm returning to the
+     * same PC, the test handles it by checking the return value.
      */
 
     long ret = raw_clone3(&ca, CLONE_ARGS_SIZE_VER0);
@@ -228,8 +228,8 @@ static void test_unsupported_flags(void)
     memset(&ca, 0, sizeof(ca));
     ca.exit_signal = 17;
 
-    /* CLONE_PIDFD: now supported. Clone should succeed (returns child PID
-     * in parent, 0 in child).  Reap the child to avoid zombies.
+    /* CLONE_PIDFD: now supported. Clone should succeed (returns child PID in
+     * parent, 0 in child). Reap the child to avoid zombies.
      */
     int32_t pidfd_out = -1;
     ca.flags = 0x00001000; /* CLONE_PIDFD */
@@ -547,9 +547,9 @@ static void test_deferred_stack_munmap(void)
         munmap(reuse, stack_size);
 }
 
-/* Test 14: partial munmap overlap with a live clone3 stack must still unmap
- * the non-overlapping portion immediately, then release the deferred slice once
- * the thread exits.
+/* Test 14: partial munmap overlap with a live clone3 stack must still unmap the
+ * non-overlapping portion immediately, then release the deferred slice once the
+ * thread exits.
  */
 static void test_partial_deferred_stack_munmap(void)
 {

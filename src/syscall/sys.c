@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Uname, getrandom, getcwd, sched_getaffinity, getgroups, getrusage,
- * sysinfo, and prlimit64. All functions are called from syscall_dispatch()
- * in syscall/syscall.c.
+ * Uname, getrandom, getcwd, sched_getaffinity, getgroups, getrusage, sysinfo,
+ * and prlimit64. All functions are called from syscall_dispatch() in
+ * syscall/syscall.c.
  */
 
 #include <stdio.h>
@@ -76,8 +76,8 @@ _Static_assert(offsetof(struct rusage, ru_maxrss) ==
                "ru_maxrss offset must stay aligned for fast translation");
 
 /* Defined below in the scheduler-policy section; forward-declared so
- * sys_sched_getaffinity (which sits above the policy stubs) can share the
- * same per-thread TID gate.
+ * sys_sched_getaffinity (which sits above the policy stubs) can share the same
+ * per-thread TID gate.
  */
 static bool sched_pid_alive(int pid);
 
@@ -127,8 +127,8 @@ static void sysinfo_refresh_cached_locked(time_t now_sec)
     if (cached_boottime_sec != 0)
         cached_sysinfo.uptime = now_sec - cached_boottime_sec;
 
-    /* Free RAM from vm_statistics64.
-     * Scale proportionally if totalram is capped.
+    /* Free RAM from vm_statistics64. Scale proportionally if totalram is
+     * capped.
      */
     vm_statistics64_data_t vmstat = {0};
     mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
@@ -182,8 +182,8 @@ int64_t sys_uname(guest_t *g, uint64_t buf_gva)
 /* Linux getrandom(2) flags. arc4random_buf is always non-blocking and always
  * seeded, so GRND_NONBLOCK / GRND_RANDOM / GRND_INSECURE all collapse to the
  * same behavior here. Unknown flag bits must still return EINVAL per kernel
- * behavior (kernel/random.c rejects flags & ~SUPPORTED_FLAGS) so callers do
- * not silently fossilize wrong assumptions about the elfuse implementation.
+ * behavior (kernel/random.c rejects flags & ~SUPPORTED_FLAGS) so callers do not
+ * silently fossilize wrong assumptions about the elfuse implementation.
  */
 #define LINUX_GRND_NONBLOCK 0x0001
 #define LINUX_GRND_RANDOM 0x0002
@@ -270,8 +270,8 @@ int64_t sys_sched_getaffinity(guest_t *g,
                               uint64_t size,
                               uint64_t mask_gva)
 {
-    /* Return a 1-CPU affinity mask for simplicity.
-     * sched_setaffinity is not implemented; all threads see CPU 0.
+    /* Return a 1-CPU affinity mask for simplicity. sched_setaffinity is not
+     * implemented; all threads see CPU 0.
      */
     if (pid < 0)
         return -LINUX_EINVAL;
@@ -291,8 +291,8 @@ int64_t sys_sched_getaffinity(guest_t *g,
                           sizeof(cached_affinity_mask)) < 0)
         return -LINUX_EFAULT;
 
-    /* Linux zeroes remaining bytes past the fixed mask.
-     * Use guest_write in chunks for bounds safety.
+    /* Linux zeroes remaining bytes past the fixed mask. Use guest_write in
+     * chunks for bounds safety.
      */
     if (size > sizeof(cached_affinity_mask)) {
         uint64_t off = sizeof(cached_affinity_mask);
@@ -312,18 +312,18 @@ int64_t sys_sched_getaffinity(guest_t *g,
 
 /* Scheduler policy stubs.
  *
- * elfuse models a single SCHED_OTHER thread group. Linux scheduler syscalls
- * are per-thread: the pid argument is actually a TID, and a worker calling
+ * elfuse models a single SCHED_OTHER thread group. Linux scheduler syscalls are
+ * per-thread: the pid argument is actually a TID, and a worker calling
  * sched_getscheduler(gettid()) must reach its own thread entry, not just the
  * thread-group leader. Live TIDs are matched via thread_tid_alive(); pid 0
  * means "the calling thread" and is always accepted.
  *
  * Any policy transition away from SCHED_OTHER is rejected unless the stub can
  * model it faithfully. Callers branch on the apparent policy, and silently
- * accepting BATCH/IDLE/RT classes while still reporting SCHED_OTHER would
- * hide guest bugs. SCHED_DEADLINE through legacy sched_setscheduler is
- * -EINVAL because the legacy syscall cannot supply the deadline attributes
- * (real Linux requires sched_setattr).
+ * accepting BATCH/IDLE/RT classes while still reporting SCHED_OTHER would hide
+ * guest bugs. SCHED_DEADLINE through legacy sched_setscheduler is -EINVAL
+ * because the legacy syscall cannot supply the deadline attributes (real Linux
+ * requires sched_setattr).
  *
  * Errno ordering follows Linux 6.x kernel/sched/syscalls.c:
  *   1. pid < 0 or NULL param pointer -> EINVAL
@@ -342,20 +342,22 @@ static bool sched_pid_alive(int pid)
     return thread_tid_alive((int64_t) pid) != 0;
 }
 
-/* Validate a sched_param for the named policy. Returns 0 if accepted by the
- * stub, or a negative Linux errno. EPERM is reserved for "request would be
- * valid on Linux but the stub refuses to honor it" -- RT priority elevation
- * and BATCH/IDLE class transitions away from SCHED_OTHER. EINVAL covers
- * every other out-of-spec input (bad priority range, SCHED_DEADLINE through
- * the legacy entry point, unknown policy bits).
+/* Validate a sched_param for the named policy.
+ *
+ * Returns 0 if accepted by the stub, or a negative Linux errno. EPERM is
+ * reserved for "request would be valid on Linux but the stub refuses to honor
+ * it" -- RT priority elevation and BATCH/IDLE class transitions away from
+ * SCHED_OTHER. EINVAL covers every other out-of-spec input (bad priority range,
+ * SCHED_DEADLINE through the legacy entry point, unknown policy bits).
  */
 static int sched_check_policy_param(int policy, int prio)
 {
     int base_policy = policy & ~LINUX_SCHED_RESET_ON_FORK;
 
-    /* Reject any unknown high bit. The mask 0x7 covers every base policy
-     * id we recognize (NORMAL=0, FIFO=1, RR=2, BATCH=3, IDLE=5, DEADLINE=6);
-     * the unused 4 and 7 fall through to the default switch arm below.
+    /* Reject any unknown high bit. The mask 0x7 covers every base policy id the
+     * dispatcher recognizes (NORMAL=0, FIFO=1, RR=2, BATCH=3, IDLE=5,
+     * DEADLINE=6); the unused 4 and 7 fall through to the default switch arm
+     * below.
      */
     if (policy & ~(LINUX_SCHED_RESET_ON_FORK | 0x7))
         return -LINUX_EINVAL;
@@ -471,11 +473,11 @@ int64_t sys_sched_rr_get_interval(guest_t *g, int pid, uint64_t ts_gva)
         return -LINUX_ESRCH;
     if (ts_gva == 0)
         return -LINUX_EFAULT;
-    /* Linux's fair_sched_class.get_rr_interval returns a CFS-derived slice
-     * for SCHED_OTHER tasks whenever the runqueue carries load. Reporting
-     * 100 ms (the sched_rr_timeslice default and a typical CFS quantum)
-     * gives querying tools a plausible non-zero value without pretending
-     * the guest is actually under SCHED_RR.
+    /* Linux's fair_sched_class.get_rr_interval returns a CFS-derived slice for
+     * SCHED_OTHER tasks whenever the runqueue carries load. Reporting 100 ms
+     * (the sched_rr_timeslice default and a typical CFS quantum) gives querying
+     * tools a plausible non-zero value without pretending the guest is actually
+     * under SCHED_RR.
      */
     linux_timespec_t ts = {.tv_sec = 0, .tv_nsec = 100 * 1000 * 1000L};
     if (guest_write_small(g, ts_gva, &ts, sizeof(ts)) < 0)
@@ -503,8 +505,8 @@ int64_t sys_getgroups(guest_t *g, int size, uint64_t list_gva)
 
 int64_t sys_getrusage(guest_t *g, int who, uint64_t usage_gva)
 {
-    /* Linux RUSAGE_SELF=0, RUSAGE_CHILDREN=-1, RUSAGE_THREAD=1.
-     * macOS has the same values. Reject unknown values early.
+    /* Linux RUSAGE_SELF=0, RUSAGE_CHILDREN=-1, RUSAGE_THREAD=1. macOS has the
+     * same values. Reject unknown values early.
      */
     if (who != 0 && who != -1 && who != 1)
         return -LINUX_EINVAL;
@@ -558,8 +560,8 @@ int64_t sys_sysinfo(guest_t *g, uint64_t info_gva)
 
 /* Resource limits. */
 
-/* Translate Linux RLIMIT_* resource numbers to macOS equivalents.
- * The numbering differs: Linux RLIMIT_NPROC=6 vs macOS RLIMIT_NPROC=7.
+/* Translate Linux RLIMIT_* resource numbers to macOS equivalents. The numbering
+ * differs: Linux RLIMIT_NPROC=6 vs macOS RLIMIT_NPROC=7.
  */
 static int translate_rlimit_resource(int linux_res)
 {
@@ -693,8 +695,8 @@ int64_t sys_prlimit64(guest_t *g,
 
         rlimit_cache_set(resource, new_lim);
 
-        /* Track RLIMIT_NOFILE in the guest FD table so fd_alloc
-         * enforces the limit and returns -EMFILE.
+        /* Track RLIMIT_NOFILE in the guest FD table so fd_alloc enforces the
+         * limit and returns -EMFILE.
          */
         if (resource == 7 /* RLIMIT_NOFILE */) {
             int cur = (new_lim.rlim_cur == UINT64_MAX) ? FD_TABLE_SIZE
@@ -754,9 +756,8 @@ int sys_format_limits(char *buf, size_t bufsz)
         if (RANGE_CHECK(res, 0, RLIMIT_CACHE_SIZE)) {
             linux_rlimit64_t lim;
             if (!rlimit_cache_get(res, &lim)) {
-                /* RLIMIT_NOFILE (Linux 7): use the guest FD table
-                 * limit rather than host getrlimit, which may return
-                 * RLIM_INFINITY on macOS.
+                /* RLIMIT_NOFILE (Linux 7): use the guest FD table limit rather
+                 * than host getrlimit, which may return RLIM_INFINITY on macOS.
                  */
                 if (res == 7) {
                     int cur = fd_get_rlimit_nofile();

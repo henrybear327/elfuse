@@ -21,9 +21,9 @@
  *      bounded-retry hardening item in TODO.md is gated on -- is also
  *      caught here because the test driver wraps every run in a timeout.
  *
- * The test does not try to PROVE the cross-vCPU race window absent. A
- * passing run is evidence the bounded-retry hardening lacks a concrete
- * reproducer today; a hard crash or accounting mismatch would supply one.
+ * The test does not try to PROVE the cross-vCPU race window absent. A passing
+ * run is evidence the bounded-retry hardening lacks a concrete reproducer
+ * today; a hard crash or accounting mismatch would supply one.
  */
 
 #include <errno.h>
@@ -70,8 +70,8 @@ static void *noop_reader(void *arg)
         atomic_fetch_add_explicit(&g_writes, 1, memory_order_relaxed);
         uint32_t back = ctx->page[ctx->tag];
         if (back != v) {
-            /* Another thread targets a different slot, so any value other
-             * than what this thread just wrote is a coherence bug.
+            /* Another thread targets a different slot, so any value other than
+             * what this thread just wrote is a coherence bug.
              */
             atomic_fetch_add_explicit(&g_mismatches, 1, memory_order_relaxed);
         }
@@ -283,18 +283,19 @@ static void test_alternating_mprotect_stress(void)
 }
 
 /* Single-threaded sweep across page counts that exercise the three TLBI
- * accumulator branches: <=TLBI_SELECTIVE_MAX_PAGES (per-page VAE1IS),
- * 17..64 pages (FEAT_TLBIRANGE RVAE1IS single shot), >64 pages (broadcast
- * VMALLE1IS). Each size is mprotect-cycled R<->RW with full readback. A
- * stale TLB or wrong RVAE1IS NUM/SCALE encoding would surface as a data
- * mismatch or a SIGSEGV during the readback phase. */
+ * accumulator branches: <=TLBI_SELECTIVE_MAX_PAGES (per-page VAE1IS), 17..64
+ * pages (FEAT_TLBIRANGE RVAE1IS single shot), >64 pages (broadcast VMALLE1IS).
+ * Each size is mprotect-cycled R<->RW with full readback. A stale TLB or wrong
+ * RVAE1IS NUM/SCALE encoding would surface as a data mismatch or a SIGSEGV
+ * during the readback phase.
+ */
 static void test_rvae_boundary_sweep(void)
 {
     /* 2 hits the smallest RVAE1IS encoding (NUM=0) if it ever reaches the
-     * TLBI_RANGE_LARGE path via coalescing; today the selective threshold
-     * gates it off, but the test pins the encoding contract. The remaining
-     * sizes straddle the selective / RVAE1IS / broadcast accumulator
-     * boundaries. */
+     * TLBI_RANGE_LARGE path via coalescing; today the selective threshold gates
+     * it off, but the test pins the encoding contract. The remaining sizes
+     * straddle the selective / RVAE1IS / broadcast accumulator boundaries.
+     */
     static const int sizes[] = {2, 16, 17, 32, 63, 64, 65, 128};
     static const int n_sizes = (int) (sizeof(sizes) / sizeof(sizes[0]));
     for (int k = 0; k < n_sizes; k++) {
@@ -356,11 +357,12 @@ static void test_rvae_boundary_sweep(void)
     }
 }
 
-/* Multi-vCPU variant of the alternating R<->RW test but on a 32-page region
- * so the toggler hits the TLBI_RANGE_LARGE path (RVAE1IS) instead of the
+/* Multi-vCPU variant of the alternating R<->RW test but on a 32-page region so
+ * the toggler hits the TLBI_RANGE_LARGE path (RVAE1IS) instead of the
  * single-page selective TLBI. Inner-shareable RVAE1IS must invalidate the
  * sibling vCPU TLBs; if it doesn't, the reader threads see stale TLB entries
- * and the test surfaces an unexpected read return code or a VM crash. */
+ * and the test surfaces an unexpected read return code or a VM crash.
+ */
 struct rvae_toggler_arg {
     void *page;
     size_t size;
@@ -476,21 +478,23 @@ static void test_rvae_multi_vcpu_stress(int npages)
     PASS();
 }
 
-/* 32-page mprotect cycle that deterministically straddles a 2 MiB guest
- * block boundary. The boundary forces guest_split_block on both blocks
- * the range crosses (16 pages each side), exercising the split-then-
- * tlbi-range-large code path that the ordinary boundary sweep only hits
- * by chance depending on gap-finder placement. */
+/* 32-page mprotect cycle that deterministically straddles a 2 MiB guest block
+ * boundary. The boundary forces guest_split_block on both blocks the range
+ * crosses (16 pages each side), exercising the split-then- tlbi-range-large
+ * code path that the ordinary boundary sweep only hits by chance depending on
+ * gap-finder placement.
+ */
 static void test_rvae_2mib_straddle(void)
 {
     TEST("RVAE1IS 2 MiB block-straddle cycle");
 
-    /* Allocate enough headroom to guarantee a 2 MiB boundary with at least
-     * 16 pages on each side, regardless of where mmap places the region.
-     * Worst case: mmap returns a 2 MiB-aligned base, so the first usable
-     * boundary is mmap_base + 2 MiB; we need 16 pages below that boundary
-     * (i.e. inside the first 2 MiB) and 16 pages above (inside the second
-     * 2 MiB). 4 MiB + slack covers it. */
+    /* Allocate enough headroom to guarantee a 2 MiB boundary with at least 16
+     * pages on each side, regardless of where mmap places the region. Worst
+     * case: mmap returns a 2 MiB-aligned base, so the first usable boundary is
+     * mmap_base + 2 MiB; we need 16 pages below that boundary (i.e. inside the
+     * first 2 MiB) and 16 pages above (inside the second 2 MiB). 4 MiB + slack
+     * covers it.
+     */
     const size_t mib_2 = 2 * 1024 * 1024;
     size_t alloc_sz = 4 * mib_2 + 64 * PAGE_SIZE;
     uint8_t *region = mmap(NULL, alloc_sz, PROT_READ | PROT_WRITE,
@@ -499,10 +503,11 @@ static void test_rvae_2mib_straddle(void)
         FAIL("mmap");
         return;
     }
-    /* Pick the first 2 MiB boundary AT LEAST 16 pages above the start so
-     * the 32-page protect window straddles it (16 pages below + 16 above).
-     * If the natural rounded-up boundary is too close to base, jump to the
-     * next one -- the allocation is sized to keep that within range. */
+    /* Pick the first 2 MiB boundary AT LEAST 16 pages above the start so the
+     * 32-page protect window straddles it (16 pages below + 16 above). If the
+     * natural rounded-up boundary is too close to base, jump to the next one --
+     * the allocation is sized to keep that within range.
+     */
     uintptr_t base = (uintptr_t) region;
     uintptr_t boundary = (base + mib_2 - 1) & ~(uintptr_t) (mib_2 - 1);
     if (boundary - base < 16 * PAGE_SIZE)
@@ -560,16 +565,17 @@ static void test_rvae_2mib_straddle(void)
         FAIL("straddle readback or mprotect failed");
 }
 
-/* R<->RX cycle on a 32-page region. Each cycle writes a unique
- * `mov w0, #imm; ret` epilogue to every page while RW, then mprotects to
- * RX and calls the page. The expected return value is the imm just written.
- * If the X11 I-cache hint were dropped from the TLBI_RANGE_LARGE path, the
- * call would execute stale instructions cached from a prior cycle and the
- * returned imm would mismatch.
+/* R<->RX cycle on a 32-page region. Each cycle writes a unique "mov w0, #imm;
+ * ret" epilogue to every page while RW, then mprotects to RX and calls the
+ * page. The expected return value is the imm just written. If the X11 I-cache
+ * hint were dropped from the TLBI_RANGE_LARGE path, the call would execute
+ * stale instructions cached from a prior cycle and the returned imm would
+ * mismatch.
  *
  * The RVAE1IS path is exercised because the 32-page range exceeds
  * TLBI_SELECTIVE_MAX_PAGES = 16; combined with PROT_EXEC the helper marks
- * icache_flush=1 and the shim's tlbi_range_large branch runs IC IALLU. */
+ * icache_flush=1 and the shim's tlbi_range_large branch runs IC IALLU.
+ */
 static void test_rvae_icache_stress(void)
 {
     TEST("RVAE1IS R<->RX I-cache hint coverage");
@@ -585,9 +591,10 @@ static void test_rvae_icache_stress(void)
 
     bool ok = true;
     for (int cycle = 0; cycle < 16 && ok; cycle++) {
-        /* Distinct imm per cycle so a stale I-cache fetch surfaces as a
-         * value mismatch. imm range [1, 0xFFF] -- mov-imm encoding takes a
-         * 16-bit literal at bits [20:5], easy to keep small. */
+        /* Distinct imm per cycle so a stale I-cache fetch surfaces as a value
+         * mismatch. imm range [1, 0xFFF] -- mov-imm encoding takes a 16-bit
+         * literal at bits [20:5], easy to keep small.
+         */
         uint32_t imm = (uint32_t) (cycle + 1) & 0xFFFu;
         /* mov w0, #imm  =  0x52800000 | (imm << 5) */
         uint32_t mov = 0x52800000u | (imm << 5);
@@ -606,8 +613,9 @@ static void test_rvae_icache_stress(void)
         }
 
         /* Call each page; verify the return value matches the imm we just
-         * wrote. A mismatch indicates the I-cache held a stale instruction
-         * from a prior cycle (i.e. the RVAE1IS path skipped IC IALLU). */
+         * wrote. A mismatch indicates the I-cache held a stale instruction from
+         * a prior cycle (i.e. the RVAE1IS path skipped IC IALLU).
+         */
         for (size_t i = 0; i < NPAGES; i++) {
             uint32_t (*fn)(void) =
                 (uint32_t (*)(void))((uint8_t *) p + i * PAGE_SIZE);
@@ -640,8 +648,9 @@ int main(void)
     test_rvae_boundary_sweep();
     test_rvae_2mib_straddle();
     test_rvae_icache_stress();
-    /* Drive the RVAE1IS NUM encoding across its boundaries under contention:
-     * 17 pages -> NUM=8, 32 -> NUM=15 (mid), 64 -> NUM=31 (max). */
+    /* Drive the RVAE1IS NUM encoding across its boundaries under contention: 17
+     * pages -> NUM=8, 32 -> NUM=15 (mid), 64 -> NUM=31 (max).
+     */
     test_rvae_multi_vcpu_stress(17);
     test_rvae_multi_vcpu_stress(32);
     test_rvae_multi_vcpu_stress(64);

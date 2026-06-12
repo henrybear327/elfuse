@@ -6,13 +6,13 @@
  * Per-syscall count + total + max latency, captured during the EL0 syscall
  * storm that dominates dynamic-linker bring-up. Opt-in via
  * ELFUSE_STARTUP_TRACE=syscalls (or =all alongside the existing per-step VM
- * bring-up tracer). Recording stops at the first successful execve so the
- * dump reflects pre-execve startup; without execve it dumps on guest exit.
+ * bring-up tracer). Recording stops at the first successful execve so the dump
+ * reflects pre-execve startup; without execve it dumps on guest exit.
  *
  * Disabled cost is one branch + one global load per syscall_dispatch entry
- * because syscall_hist_enabled() resolves the env once and caches the
- * result. Enabled cost is two CLOCK_MONOTONIC reads per syscall plus three
- * relaxed atomic adds.
+ * because syscall_hist_enabled() resolves the env once and caches the result.
+ * Enabled cost is two CLOCK_MONOTONIC reads per syscall plus three relaxed
+ * atomic adds.
  */
 
 #ifndef ELFUSE_SYSCALL_HIST_H

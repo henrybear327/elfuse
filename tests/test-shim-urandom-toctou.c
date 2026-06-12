@@ -1,25 +1,23 @@
-/* test-shim-urandom-toctou.c -- urandom EL1 fault recovery survives
- * concurrent mprotect(PROT_NONE) of the read buffer.
+/* test-shim-urandom-toctou.c -- urandom EL1 fault recovery survives concurrent
+ * mprotect(PROT_NONE) of the read buffer.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * The urandom-read shim fast path probes the guest buffer (AT s1e0w) and
- * then performs an EL1 strb into it. A sibling vCPU can mprotect or
- * munmap the buffer between the probe and the store, faulting the EL1
- * write. Without handle_el1_data_abort_recover, that fault routes to
- * BAD_VEC and halts the VM.
+ * The urandom-read shim fast path probes the guest buffer (AT s1e0w) and then
+ * performs an EL1 strb into it. A sibling vCPU can mprotect or munmap the
+ * buffer between the probe and the store, faulting the EL1 write. Without
+ * handle_el1_data_abort_recover, that fault routes to BAD_VEC and halts the VM.
  *
- * This test runs a tight loop of read(/dev/urandom, buf, 1) while a
- * sibling thread continuously flips the buffer between PROT_READ|WRITE
- * and PROT_NONE via mprotect. Expected behavior:
+ * This test runs a tight loop of read(/dev/urandom, buf, 1) while a sibling
+ * thread continuously flips the buffer between PROT_READ|WRITE and PROT_NONE
+ * via mprotect. Expected behavior:
  *   - read returns 1 (success) when the buffer is RW
  *   - read returns -1 with errno=EFAULT when the buffer is PROT_NONE
  *   - elfuse never halts
  *
- * If the recovery handler is missing or wrong, the VM crashes mid-run
- * and the test process never returns; the make-check timeout catches
- * that as a failure.
+ * If the recovery handler is missing or wrong, the VM crashes mid-run and the
+ * test process never returns; the make-check timeout catches that as a failure.
  */
 
 #include <errno.h>
@@ -80,9 +78,9 @@ int main(void)
         return 1;
     }
 
-    /* Reader: each iteration calls read(); accepts either success or
-     * EFAULT. Any other result (or a crash, which manifests as the
-     * VM halting before we reach the join) is a failure.
+    /* Reader: each iteration calls read(); accepts either success or EFAULT.
+     * Any other result (or a crash, which manifests as the VM halting before we
+     * reach the join) is a failure.
      */
     for (int i = 0; i < ITERATIONS; i++) {
         char b;

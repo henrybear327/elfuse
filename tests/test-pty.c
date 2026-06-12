@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Foot, sshd, tmux, and any libvte-derived terminal need the multiplexer
- * primitives glibc's posix_openpt(3) / ptsname(3) / openpty(3) stack rests
- * on. Exercise the pieces glibc and posix-compliant pty children depend on:
+ * primitives glibc's posix_openpt(3) / ptsname(3) / openpty(3) stack rests on.
+ * Exercise the pieces glibc and posix-compliant pty children depend on:
  *
  *   1. TIOCSWINSZ on the /dev/ptmx master fd (the direct failure foot saw)
  *   2. TIOCGPTN -> /dev/pts/N path round trip
@@ -14,8 +14,8 @@
  *   5. /dev/pts/N open in a forked child after the child has already closed
  *      its master (foot/sshd/openssh sftp-server pattern)
  *
- * The test stays self-contained on the syscall surface (no libutil/openpty),
- * so it runs the same way under elfuse-aarch64, qemu-aarch64, and any future
+ * The test stays self-contained on the syscall surface (no libutil/openpty), so
+ * it runs the same way under elfuse-aarch64, qemu-aarch64, and any future
  * elfuse-x86_64 reuse.
  */
 
@@ -93,13 +93,12 @@ int main(void)
 
     /* Regression guard for the pty_keepalive_table BSS-zero collision: any
      * close that runs before the very first /dev/ptmx open would walk the
-     * still-zero-initialized table and match a master_host_fd of zero,
-     * silently closing the wrong slave_host_fd (also zero). Closing stdin
-     * here forces fd_cleanup_entry to invoke proc_pty_close_keepalive in
-     * that vulnerable window. If the fix regresses, every subsequent test
-     * still passes locally but a future stdio fd in another vCPU may go
-     * missing. The cheap sentinel makes sure stdin's close itself does
-     * not corrupt elfuse's own file table.
+     * still-zero-initialized table and match a master_host_fd of zero, silently
+     * closing the wrong slave_host_fd (also zero). Closing stdin here forces
+     * fd_cleanup_entry to invoke proc_pty_close_keepalive in that vulnerable
+     * window. If the fix regresses, every subsequent test still passes locally
+     * but a future stdio fd in another vCPU may go missing. The cheap sentinel
+     * makes sure stdin's close itself does not corrupt elfuse's own file table.
      */
     close(STDIN_FILENO);
 
@@ -169,10 +168,10 @@ int main(void)
     int unlock = 0;
     EXPECT_TRUE(ioctl(ptmx, TIOCSPTLCK, &unlock) == 0, "TIOCSPTLCK(0) failed");
 
-    /* Linux TIOCSPTLCK(non-zero) locks the slave and returns success.
-     * elfuse cannot actually enforce the lock on macOS (no re-lock primitive)
-     * but must still report success so callers do not misread the result as
-     * "this kernel has no devpts".
+    /* Linux TIOCSPTLCK(non-zero) locks the slave and returns success. elfuse
+     * cannot actually enforce the lock on macOS (no re-lock primitive) but must
+     * still report success so callers do not misread the result as "this kernel
+     * has no devpts".
      */
     TEST("TIOCSPTLCK(1) accepted as best-effort no-op");
     int lock = 1;
@@ -240,10 +239,10 @@ int main(void)
     char pts_path[32];
     snprintf(pts_path, sizeof(pts_path), "/dev/pts/%u", ptyno);
 
-    /* glibc ptsname(3) stats the formatted path before returning it.
-     * Until the path.c stat allowlist included /dev/pts/N, the stat went
-     * to the host (which has no /dev/pts at all) and ptsname returned
-     * ENOENT, leaving every caller without a usable slave path.
+    /* glibc ptsname(3) stats the formatted path before returning it. Until the
+     * path.c stat allowlist included /dev/pts/N, the stat went to the host
+     * (which has no /dev/pts at all) and ptsname returned ENOENT, leaving every
+     * caller without a usable slave path.
      */
     TEST("stat(/dev/pts/N) succeeds and reports a char device");
     struct stat st;
@@ -287,10 +286,11 @@ int main(void)
         close(slave);
     }
 
-    /* TIOCGPTPEER short-circuits the ptsname/stat/open dance. Recent foot
-     * and util-linux prefer it; older kernels return ENOTTY and the caller
-     * falls back to /dev/pts. Accept either an fd or ENOTTY (some hosts
-     * legitimately do not implement it), but never silent corruption. */
+    /* TIOCGPTPEER short-circuits the ptsname/stat/open dance. Recent foot and
+     * util-linux prefer it; older kernels return ENOTTY and the caller falls
+     * back to /dev/pts. Accept either an fd or ENOTTY (some hosts legitimately
+     * do not implement it), but never silent corruption.
+     */
     TEST("TIOCGPTPEER returns a slave fd or ENOTTY");
     int peer = ioctl(ptmx, TIOCGPTPEER, O_RDWR | O_NOCTTY);
     int peer_ok = peer >= 0 || (peer == -1 && errno == ENOTTY);
@@ -299,8 +299,8 @@ int main(void)
         close(peer);
 
     /* dup of the master must keep both aliases functional even after the
-     * original is closed. The keepalive slave needs to be mirrored across
-     * the dup so the surviving alias still observes master-side tty ioctls.
+     * original is closed. The keepalive slave needs to be mirrored across the
+     * dup so the surviving alias still observes master-side tty ioctls.
      */
     TEST("dup(ptmx) followed by close(orig) leaves alias usable");
     int alias = dup(ptmx);
@@ -320,10 +320,10 @@ int main(void)
         ptmx = alias; /* the alias is the live master from here on */
     }
 
-    /* Fork must propagate the master's keepalive across the IPC handoff so
-     * the child can do master-side tty ioctls without the macOS ENOTTY
-     * fallback. The parent's keepalive slave fd is independent (each side
-     * holds its own slot) so closing one side does not affect the other.
+    /* Fork must propagate the master's keepalive across the IPC handoff so the
+     * child can do master-side tty ioctls without the macOS ENOTTY fallback.
+     * The parent's keepalive slave fd is independent (each side holds its own
+     * slot) so closing one side does not affect the other.
      */
     TEST("child fork inherits master keepalive (TIOCSWINSZ works)");
     int sync_pipe[2];
@@ -358,7 +358,8 @@ int main(void)
                            WEXITSTATUS(wstatus) == 0;
             EXPECT_TRUE(child_ok, "child TIOCSWINSZ on master failed");
             /* Parent should still see the child's update because the slave
-             * keepalive in the parent is still alive. */
+             * keepalive in the parent is still alive.
+             */
             struct winsize ws_parent = {0};
             int parent_ok = ioctl(ptmx, TIOCGWINSZ, &ws_parent) == 0 &&
                             ws_parent.ws_row == 30 && ws_parent.ws_col == 90;
@@ -371,9 +372,9 @@ int main(void)
 
     /* Re-open and immediately close should not leak the keepalive slave.
      * Without the proc_pty_close_keepalive call in sys_close's fast path,
-     * single-thread close goes through fd_close_regular_relaxed and
-     * bypasses fd_cleanup_entry, leaving the hidden slave fd open until
-     * elfuse exits. Loop enough times to expose any per-close leak.
+     * single-thread close goes through fd_close_regular_relaxed and bypasses
+     * fd_cleanup_entry, leaving the hidden slave fd open until elfuse exits.
+     * Loop enough times to expose any per-close leak.
      */
     TEST("repeated open/close does not exhaust the keepalive table");
     int leak_loop_ok = 1;
@@ -389,11 +390,11 @@ int main(void)
                 "repeated /dev/ptmx open/close exhausted the keepalive table");
 
     /* foot/sshd/openssh sftp-server pattern: the child closes its inherited
-     * master fd before opening the slave (the child has no use for the
-     * master). Earlier, this dropped the keepalive table entry that held the
-     * macOS slave_path mapping, and the subsequent open("/dev/pts/N") in the
-     * child failed with ENOENT even though the parent still held the master
-     * and the macOS slave node was openable. The retained-path semantics in
+     * master fd before opening the slave (the child has no use for the master).
+     * Earlier, this dropped the keepalive table entry that held the macOS
+     * slave_path mapping, and the subsequent open("/dev/pts/N") in the child
+     * failed with ENOENT even though the parent still held the master and the
+     * macOS slave node was openable. The retained-path semantics in
      * proc_pty_close_keepalive must let the child still translate the path.
      */
     TEST("child can open /dev/pts/N after closing its master");
@@ -467,9 +468,9 @@ int main(void)
                     /* Both ENOENT (devfs node gone) and ENXIO (devfs node
                      * lingers but the pty pair has been torn down) are valid
                      * macOS responses depending on kernel version. The
-                     * invariant the test guards is "the stale cached path
-                     * does not silently hand back an unrelated tty"; any
-                     * open failure satisfies that.
+                     * invariant the test guards is "the stale cached path does
+                     * not silently hand back an unrelated tty"; any open
+                     * failure satisfies that.
                      */
                     int stale_ok =
                         stale_fd < 0 && (errno == ENOENT || errno == ENXIO);
@@ -494,8 +495,8 @@ int main(void)
     /* A pty master received via SCM_RIGHTS bypasses the /dev/ptmx open
      * intercept, so the receiver process has no keepalive entry for it.
      * proc_pty_master_adopt must lazily register one before master-side tty
-     * ioctls, even when TIOCSWINSZ runs before the first TIOCGPTN. Two
-     * checks live inside this block: TIOCSWINSZ-first and the post-adopt
+     * ioctls, even when TIOCSWINSZ runs before the first TIOCGPTN. Two checks
+     * live inside this block: TIOCSWINSZ-first and the post-adopt
      * stat(/dev/pts/N). Each has its own TEST() label below.
      */
     int sp[2];

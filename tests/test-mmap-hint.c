@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Verifies that non-fixed anonymous mmap() honors a free low address hint
- * such as 0x400000. box64 uses this pattern to reserve the ET_EXEC image
- * window for static x86-64 binaries.
+ * Verifies that non-fixed anonymous mmap() honors a free low address hint such
+ * as 0x400000. box64 uses this pattern to reserve the ET_EXEC image window for
+ * static x86-64 binaries.
  */
 
 #include <errno.h>

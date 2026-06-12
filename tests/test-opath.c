@@ -5,8 +5,8 @@
  *
  * Linux O_PATH descriptors carry only a path reference: read/write/lseek/
  * ioctl/fsync/flock/ftruncate/fchmod/fchown/getdents/fsetxattr/fremovexattr
- * must all return EBADF.  fstat/fstatfs/close/dup/fcntl-cloexec/fchdir and
- * use as a *at() dirfd remain valid.
+ * must all return EBADF. fstat/fstatfs/close/dup/fcntl-cloexec/fchdir and use
+ * as a *at() dirfd remain valid.
  */
 
 #define _GNU_SOURCE
@@ -163,9 +163,9 @@ static void test_xattr_rejected(void)
         return;
 
     /* The setxattr/removexattr path may also return ENOTSUP/EOPNOTSUPP on
-     * filesystems that lack xattr support.  Only require EBADF from elfuse;
-     * skip these checks on a filesystem that rejects xattr outright on a
-     * fresh /tmp file (rare; APFS and ext4 both honor user.* xattrs).
+     * filesystems that lack xattr support. Only require EBADF from elfuse; skip
+     * these checks on a filesystem that rejects xattr outright on a fresh /tmp
+     * file (rare; APFS and ext4 both honor user.* xattrs).
      */
     int probe = setxattr(tmp_file, "user.elfuse_probe", "x", 1, 0);
     if (probe < 0 && errno != EEXIST) {
@@ -195,9 +195,9 @@ static void test_getdents_rejected(void)
     }
 
     /* glibc's readdir() works through fdopendir, but fdopendir itself uses
-     * fstat + getdents64.  The kernel returns EBADF on getdents64; glibc
-     * surfaces that via readdir errno or fdopendir failure.  Use the raw
-     * syscall to keep the contract precise.
+     * fstat + getdents64. The kernel returns EBADF on getdents64; glibc
+     * surfaces that via readdir errno or fdopendir failure. Use the raw syscall
+     * to keep the contract precise.
      */
     char buf[1024];
     TEST("getdents64(O_PATH dir) -> EBADF");

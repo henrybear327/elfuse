@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Exercises the /proc nodes that elfuse synthesizes through procemu:
- * /proc/self/oom_score_adj (read/write/persist/range/zero-length writev),
- * the legacy /proc/self/oom_adj scaling alias, /proc/self/oom_score
- * (open-time and write-time enforcement), /proc/self/fdinfo entries for
- * generic fds plus eventfd/signalfd/timerfd, /proc/net/tcp serial-number
- * density across mixed socket types, and /proc/cpuinfo CPU enumeration.
- * These tests pin the host-visible byte format so a regression to the
- * wrong separator, scaling factor, or sparse layout fails loudly.
+ * /proc/self/oom_score_adj (read/write/persist/range/zero-length writev), the
+ * legacy /proc/self/oom_adj scaling alias, /proc/self/oom_score (open-time and
+ * write-time enforcement), /proc/self/fdinfo entries for generic fds plus
+ * eventfd/signalfd/timerfd, /proc/net/tcp serial-number density across mixed
+ * socket types, and /proc/cpuinfo CPU enumeration. These tests pin the
+ * host-visible byte format so a regression to the wrong separator, scaling
+ * factor, or sparse layout fails loudly.
  */
 
 #include <dirent.h>
@@ -36,12 +36,11 @@
 int passes = 0, fails = 0;
 
 /* Some procfs write-rejection tests can only be exercised as root (root
- * bypasses the 0444 open-time gate, so the kernel actually invokes the
- * proc node's write handler). On non-root the test cannot prove the
- * lower layer is correct without also reproducing a kernel-internal
- * regression; counting these as skips keeps the summary honest instead
- * of either masking real regressions behind a bogus PASS or pretending
- * the path was exercised.
+ * bypasses the 0444 open-time gate, so the kernel actually invokes the proc
+ * node's write handler). On non-root the test cannot prove the lower layer is
+ * correct without also reproducing a kernel-internal regression; counting these
+ * as skips keeps the summary honest instead of either masking real regressions
+ * behind a bogus PASS or pretending the path was exercised.
  */
 static int procfs_skips = 0;
 #define PROCFS_SKIP(reason)           \
@@ -115,8 +114,9 @@ static void test_proc_oom_score_adj_rejects_out_of_range(void)
         FAIL("open");
         return;
     }
-    /* Linux validates the input domain on the writer side; the kernel
-     * returns EINVAL for any value outside [-1000, 1000]. */
+    /* Linux validates the input domain on the writer side; the kernel returns
+     * EINVAL for any value outside [-1000, 1000].
+     */
     const char too_high[] = "1001\n";
     ssize_t rc = write(fd, too_high, sizeof(too_high) - 1);
     int saved = errno;
@@ -139,17 +139,18 @@ static void test_proc_oom_adj_scaling(void)
 
     int fd = open("/proc/self/oom_adj", O_RDWR);
     if (fd < 0) {
-        /* Older silent-PASS treated absence as acceptable, which turned
-         * the scaling regression into a no-op on any host that did not
-         * ship the legacy compat node. elfuse must expose it via the
-         * procemu layer, and current Linux kernels still keep the alias,
-         * so absence is a real regression.
+        /* Older silent-PASS treated absence as acceptable, which turned the
+         * scaling regression into a no-op on any host that did not ship the
+         * legacy compat node. elfuse must expose it via the procemu layer, and
+         * current Linux kernels still keep the alias, so absence is a real
+         * regression.
          */
         FAIL("open /proc/self/oom_adj");
         return;
     }
-    /* Linux fs/proc/base.c oom_adj_write special-cases OOM_ADJUST_MAX so
-     * 15 maps directly to OOM_SCORE_ADJ_MAX (1000), not 15*1000/17 = 882. */
+    /* Linux fs/proc/base.c oom_adj_write special-cases OOM_ADJUST_MAX so 15
+     * maps directly to OOM_SCORE_ADJ_MAX (1000), not 15*1000/17 = 882.
+     */
     if (write(fd, "15\n", 3) != 3) {
         close(fd);
         FAIL("write");
@@ -185,9 +186,9 @@ static void test_proc_oom_adj_same_fd_roundtrip(void)
 
     int fd = open("/proc/self/oom_adj", O_RDWR);
     if (fd < 0) {
-        /* See test_proc_oom_adj_scaling for rationale: silent PASS on
-         * absent oom_adj turned the same-fd readback regression into a
-         * no-op. Fail hard so a missing compat alias surfaces.
+        /* See test_proc_oom_adj_scaling for rationale: silent PASS on absent
+         * oom_adj turned the same-fd readback regression into a no-op. Fail
+         * hard so a missing compat alias surfaces.
          */
         FAIL("open /proc/self/oom_adj");
         return;
@@ -221,10 +222,10 @@ static void test_proc_oom_adj_same_fd_roundtrip(void)
 static void test_proc_oom_score_no_write(void)
 {
     TEST("/proc/self/oom_score writes are rejected");
-    /* Linux: open succeeds (root bypasses the 0444 check, non-root sees
-     * EACCES from the permission gate); writes always fail because there
-     * is no write handler. The test focuses on the write side, which is
-     * uniform across uids.
+    /* Linux: open succeeds (root bypasses the 0444 check, non-root sees EACCES
+     * from the permission gate); writes always fail because there is no write
+     * handler. The test focuses on the write side, which is uniform across
+     * uids.
      */
     int fd = open("/proc/self/oom_score", O_RDONLY);
     if (fd < 0) {
@@ -238,8 +239,8 @@ static void test_proc_oom_score_no_write(void)
         FAIL("read");
         return;
     }
-    /* Stub returns 0; real Linux computes a small positive score, but for
-     * a userspace bridge a constant zero is acceptable.
+    /* Stub returns 0; real Linux computes a small positive score, but for a
+     * userspace bridge a constant zero is acceptable.
      */
     EXPECT_TRUE(atoi(buf) >= 0, "score must be non-negative");
 }
@@ -247,13 +248,13 @@ static void test_proc_oom_score_no_write(void)
 static void test_proc_oom_score_write_fails(void)
 {
     TEST("/proc/self/oom_score write is rejected");
-    /* The intended coverage is the proc node's write handler returning
-     * EIO. That handler is only reached when open succeeds with write
-     * access. Only root can open the 0444 file O_WRONLY; non-root sees
-     * EACCES at open and exits the write-rejection path entirely. The
-     * sibling test_proc_oom_score_open_enforces_read_only covers the
-     * open-time EACCES branch separately, so explicitly skip here when
-     * the write path cannot be reached.
+    /* The intended coverage is the proc node's write handler returning EIO.
+     * That handler is only reached when open succeeds with write access. Only
+     * root can open the 0444 file O_WRONLY; non-root sees EACCES at open and
+     * exits the write-rejection path entirely. The sibling
+     * test_proc_oom_score_open_enforces_read_only covers the open-time EACCES
+     * branch separately, so explicitly skip here when the write path cannot be
+     * reached.
      */
     int fd = open("/proc/self/oom_score", O_WRONLY);
     if (fd < 0) {
@@ -269,10 +270,9 @@ static void test_proc_oom_score_write_fails(void)
     ssize_t w = write(fd, "0\n", 2);
     int saved = errno;
     close(fd);
-    /* Linux's proc_reg_write returns -EIO when the proc node has no
-     * write op. Older or stripped kernels may return other errno; the
-     * load-bearing assertion is that the write fails, not the exact
-     * errno value.
+    /* Linux's proc_reg_write returns -EIO when the proc node has no write op.
+     * Older or stripped kernels may return other errno; the load-bearing
+     * assertion is that the write fails, not the exact errno value.
      */
     if (w < 0)
         PASS();
@@ -311,11 +311,11 @@ static void test_proc_oom_adj_reread_tracks_score_adj_updates(void)
 
     int fd = open("/proc/self/oom_adj", O_RDONLY);
     if (fd < 0) {
-        /* The legacy oom_adj compat node must exist whenever the test
-         * runs under elfuse (procemu emits it) or under a current Linux
-         * kernel that still ships the compat alias. The previous version
-         * silently PASSed on open failure, which turned this regression
-         * into a no-op on any host where the file was absent.
+        /* The legacy oom_adj compat node must exist whenever the test runs
+         * under elfuse (procemu emits it) or under a current Linux kernel that
+         * still ships the compat alias. The previous version silently PASSed on
+         * open failure, which turned this regression into a no-op on any host
+         * where the file was absent.
          */
         FAIL("open /proc/self/oom_adj");
         return;
@@ -443,7 +443,8 @@ static void test_proc_oom_zero_length_writev(void)
         return;
     }
     /* Two empty iovecs: total length zero. Linux returns 0; the previous
-     * implementation returned EINVAL via proc_parse_int_write. */
+     * implementation returned EINVAL via proc_parse_int_write.
+     */
     char dummy = 0;
     struct iovec iov[2] = {{&dummy, 0}, {&dummy, 0}};
     ssize_t n = writev(fd, iov, 2);
@@ -464,7 +465,8 @@ static void test_proc_oom_stat_size_zero(void)
         return;
     }
     /* A non-zero st_size would cap stat-sized read buffers, truncating
-     * "-1000\n" (6 bytes) to whatever size was hardcoded. */
+     * "-1000\n" (6 bytes) to whatever size was hardcoded.
+     */
     EXPECT_TRUE(st.st_size == 0, "st_size should be 0");
 }
 
@@ -514,9 +516,9 @@ static void test_proc_fdinfo_eventfd_count(void)
         FAIL("read");
         return;
     }
-    /* Linux fs/eventfd.c emits "eventfd-count: %16llx" with a single
-     * space separator (not a tab, unlike pos:/flags:/mnt_id:). Pin the
-     * exact prefix so a regression to a tab is caught. Decimal 42 is 0x2a.
+    /* Linux fs/eventfd.c emits "eventfd-count: %16llx" with a single space
+     * separator (not a tab, unlike pos:/flags:/mnt_id:). Pin the exact prefix
+     * so a regression to a tab is caught. Decimal 42 is 0x2a.
      */
     const char *p = strstr(buf, "eventfd-count: ");
     EXPECT_TRUE(p && strstr(p, "2a") != NULL,
@@ -551,8 +553,8 @@ static void test_proc_fdinfo_signalfd_mask(void)
         return;
     }
     /* Linux fs/signalfd.c emits "sigmask:\t%016llx" with a tab separator
-     * (verified against a real /proc/self/fdinfo dump on Linux 6.x).
-     * Pin the exact prefix so a regression to a space is caught.
+     * (verified against a real /proc/self/fdinfo dump on Linux 6.x). Pin the
+     * exact prefix so a regression to a space is caught.
      */
     EXPECT_TRUE(strstr(buf, "sigmask:\t") != NULL,
                 "sigmask missing tab separator");
@@ -597,8 +599,9 @@ static void test_proc_fdinfo_timerfd_periodic_value(void)
 
     long long value_sec = -1, value_nsec = -1;
     long long interval_sec = -1, interval_nsec = -1;
-    /* Linux fs/timerfd.c emits "it_value: (S, NS)" with a single space
-     * after the colon (unlike pos:/flags: which use tabs). */
+    /* Linux fs/timerfd.c emits "it_value: (S, NS)" with a single space after
+     * the colon (unlike pos:/flags: which use tabs).
+     */
     const char *value = strstr(buf, "it_value: (");
     const char *interval = strstr(buf, "it_interval: (");
     if (!value || !interval ||
@@ -612,9 +615,9 @@ static void test_proc_fdinfo_timerfd_periodic_value(void)
     long long value_total_ns = value_sec * 1000000000LL + value_nsec;
     long long interval_total_ns = interval_sec * 1000000000LL + interval_nsec;
     /* it_interval is the static settime value and must round-trip; Linux's
-     * timerfd_get_remaining() reports 0 once the timer has fired, while
-     * elfuse computes time-until-next from the kqueue arm time. Both are
-     * non-negative and bounded by the interval, so accept either form.
+     * timerfd_get_remaining() reports 0 once the timer has fired, while elfuse
+     * computes time-until-next from the kqueue arm time. Both are non-negative
+     * and bounded by the interval, so accept either form.
      */
     EXPECT_TRUE(interval_total_ns == 50000000 && value_total_ns >= 0 &&
                     value_total_ns <= interval_total_ns,
@@ -624,12 +627,13 @@ static void test_proc_fdinfo_timerfd_periodic_value(void)
 static void test_proc_fdinfo_timerfd_ticks_drains_kqueue(void)
 {
     TEST("/proc/self/fdinfo/<N> ticks reflects pending kqueue fires");
-    /* Arm a periodic timer, wait for several fires, then read fdinfo
-     * WITHOUT first reading the timerfd. The pre-fix snapshot exported
-     * a stale expirations counter (the kqueue events had not been folded
-     * in), so ticks would read 0 even after multiple fires. Linux's
-     * fs/timerfd.c snapshots ticks under the wait-queue lock, where the
-     * counter reflects every fire that hit the kernel state. */
+    /* Arm a periodic timer, wait for several fires, then read fdinfo WITHOUT
+     * first reading the timerfd. The pre-fix snapshot exported a stale
+     * expirations counter (the kqueue events had not been folded in), so ticks
+     * would read 0 even after multiple fires. Linux's fs/timerfd.c snapshots
+     * ticks under the wait-queue lock, where the counter reflects every fire
+     * that hit the kernel state.
+     */
     int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
     if (tfd < 0) {
         FAIL("timerfd_create");
@@ -669,18 +673,19 @@ static void test_proc_fdinfo_timerfd_ticks_drains_kqueue(void)
         FAIL("parse ticks");
         return;
     }
-    /* At minimum one fire should be visible; on a slow host more would
-     * be expected. Pre-fix elfuse would report 0 here. */
+    /* At minimum one fire should be visible; on a slow host more would be
+     * expected. Pre-fix elfuse would report 0 here.
+     */
     EXPECT_TRUE(ticks >= 1, "ticks should reflect at least one fire");
 }
 
 static void test_proc_fdinfo_dir_concurrent_safe(void)
 {
     TEST("/proc/self/fdinfo dir tolerates concurrent re-open");
-    /* Open the directory twice and verify both enumerate independently.
-     * The earlier shared-dir design could mutate one open's backing files
-     * while another iterated. Both Linux and the per-open scratch fix
-     * should at minimum surface stdin/out/err on each enumeration.
+    /* Open the directory twice and verify both enumerate independently. The
+     * earlier shared-dir design could mutate one open's backing files while
+     * another iterated. Both Linux and the per-open scratch fix should at
+     * minimum surface stdin/out/err on each enumeration.
      */
     DIR *d1 = opendir("/proc/self/fdinfo");
     if (!d1) {
@@ -759,16 +764,15 @@ static void test_proc_net_tcp_sl_dense(void)
 {
     TEST("/proc/net/tcp sl column stays dense across mixed sockets");
     /* Interleave non-TCP sockets BEFORE the bound TCP listeners so the
-     * proc_pidinfo iterator visits the rejected sockets first and the
-     * pre-fix sparse-slot bug would assign nonzero sl to the first
-     * emitted row. Two TCP listeners ensure the second row's sl exposes
-     * any gap created by additional non-TCP visits between them.
+     * proc_pidinfo iterator visits the rejected sockets first and the pre-fix
+     * sparse-slot bug would assign nonzero sl to the first emitted row. Two TCP
+     * listeners ensure the second row's sl exposes any gap created by
+     * additional non-TCP visits between them.
      *
-     * Pre-fix: udp1, udp2, sp[0], sp[1] all bump the iterator slot
-     * counter to 4 before tcp1 emits. tcp1 row: sl=4. tcp2 row: sl=5.
-     * The first-row check (sl == 0) would fail.
-     * Post-fix: only emitted rows increment the visitor's row counter;
-     * tcp1: sl=0, tcp2: sl=1. Dense.
+     * Pre-fix: udp1, udp2, sp[0], sp[1] all bump the iterator slot counter to 4
+     * before tcp1 emits. tcp1 row: sl=4. tcp2 row: sl=5. The first-row check
+     * (sl == 0) would fail. Post-fix: only emitted rows increment the visitor's
+     * row counter; tcp1: sl=0, tcp2: sl=1. Dense.
      */
     int udp1 = socket(AF_INET, SOCK_DGRAM, 0);
     int udp2 = socket(AF_INET, SOCK_DGRAM, 0);
@@ -821,9 +825,9 @@ static void test_proc_net_tcp_sl_dense(void)
     close(tcp2);
     buf[total] = '\0';
 
-    /* Skip the header line; collect each subsequent row's leading "sl"
-     * field. /proc/net/tcp's row format is "  N: ..." with N a decimal
-     * serial. Verify the serials form 0,1,2,... with no gaps.
+    /* Skip the header line; collect each subsequent row's leading "sl" field.
+     * /proc/net/tcp's row format is " N: ..." with N a decimal serial. Verify
+     * the serials form 0,1,2,... with no gaps.
      */
     char *line = strchr(buf, '\n');
     if (!line) {
@@ -849,8 +853,9 @@ static void test_proc_net_tcp_sl_dense(void)
         line = eol + 1;
     }
     if (expected == 0) {
-        /* The bound listener should have produced a row. Treat absence
-         * as failure since the regression coverage depends on it. */
+        /* The bound listener should have produced a row. Treat absence as
+         * failure since the regression coverage depends on it.
+         */
         FAIL("no TCP rows after bind/listen");
         return;
     }
@@ -948,10 +953,9 @@ int main(void)
     test_proc_net_dirfd_openat_uses_virtual_entries();
     test_proc_cpuinfo_all_cpus();
 
-    /* Local summary includes the skip count so missed coverage (e.g.
-     * non-root oom_score write path) is visible alongside passes and
-     * fails. Cannot reuse SUMMARY() from test-harness.h because it has
-     * no skip accounting.
+    /* Local summary includes the skip count so missed coverage (e.g. non-root
+     * oom_score write path) is visible alongside passes and fails. Cannot reuse
+     * SUMMARY() from test-harness.h because it has no skip accounting.
      */
     printf("\ntest-proc-fidelity: %d passed, %d failed, %d skipped%s\n", passes,
            fails, procfs_skips, fails == 0 ? " - PASS" : " - FAIL");

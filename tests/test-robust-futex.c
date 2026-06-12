@@ -68,8 +68,8 @@ static int child_fn(void *arg)
     /* Register robust list with kernel */
     raw_syscall2(99, (long) &rhead, sizeof(rhead)); /* set_robust_list */
 
-    /* Exit without releasing the lock; robust walk should set
-     * FUTEX_OWNER_DIED on lock_word
+    /* Exit without releasing the lock; robust walk should set FUTEX_OWNER_DIED
+     * on lock_word
      */
     raw_syscall1(93, 0); /* exit */
     test_unreachable();

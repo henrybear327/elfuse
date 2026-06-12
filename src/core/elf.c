@@ -145,8 +145,8 @@ int elf_load(const char *path, elf_info_t *info)
                 long saved_pos = ftell(f);
                 if (fseek(f, (long) ph->p_offset, SEEK_SET) == 0) {
                     size_t n = fread(info->interp_path, 1, interp_len, f);
-                    /* interp_len includes the NUL from the ELF file.
-                     * On short read, clear the path (unusable). On full read,
+                    /* interp_len includes the NUL from the ELF file. On short
+                     * read, clear the path (unusable). On full read,
                      * force-terminate as insurance.
                      */
                     if (n < interp_len)
@@ -193,9 +193,9 @@ int elf_load(const char *path, elf_info_t *info)
         return -1;
     }
 
-    /* Store program header file offset for later phdr_gpa calculation.
-     * The loader places program headers at the same GPA as they would be in
-     * the first PT_LOAD segment (they are typically within it).
+    /* Store program header file offset for later phdr_gpa calculation. The
+     * loader places program headers at the same GPA as they would be in the
+     * first PT_LOAD segment (they are typically within it).
      */
     info->phdr_gpa = info->load_min + ehdr.e_phoff;
 
@@ -213,9 +213,9 @@ int elf_map_segments(const elf_info_t *info,
                      uint64_t infra_hi)
 {
     /* Half-open intersection test for [a, a+alen) and [b, b+blen). When
-     * infra_lo == infra_hi the caller opted out (early bring-up before
-     * guest_t is wired up); the host-side writes that follow still get
-     * the existing guest_size bound check.
+     * infra_lo == infra_hi the caller opted out (early bring-up before guest_t
+     * is wired up); the host-side writes that follow still get the existing
+     * guest_size bound check.
      */
     bool infra_active = infra_lo < infra_hi;
     FILE *f = fopen(path, "rb");
@@ -231,9 +231,9 @@ int elf_map_segments(const elf_info_t *info,
         return -1;
     }
 
-    /* Read and parse program headers again to get file offsets. The size
-     * was already bound-checked during elf_load(); recheck defensively in
-     * case the header sizes changed since (e.g. corrupt file races).
+    /* Read and parse program headers again to get file offsets. The size was
+     * already bound-checked during elf_load(); recheck defensively in case the
+     * header sizes changed since (e.g. corrupt file races).
      */
     size_t ph_total = (size_t) ehdr.e_phnum * ehdr.e_phentsize;
     if (ph_total == 0 || ph_total > 65536) {
@@ -327,28 +327,28 @@ int elf_map_segments(const elf_info_t *info,
             return -1;
         }
 
-        /* PT_LOAD with memsz == 0 maps no bytes, but the page-tail zero
-         * extent below still rounds up to the next page boundary. For an
-         * unaligned gpa that means a crafted ELF could splat zeros across
-         * the tail of a previously loaded segment in the same page, or
-         * trip the infra-overlap check with no live mapping behind it.
-         * Linux ignores zero-memsz PT_LOADs; mirror that here.
+        /* PT_LOAD with memsz == 0 maps no bytes, but the page-tail zero extent
+         * below still rounds up to the next page boundary. For an unaligned gpa
+         * that means a crafted ELF could splat zeros across the tail of a
+         * previously loaded segment in the same page, or trip the infra-overlap
+         * check with no live mapping behind it. Linux ignores zero-memsz
+         * PT_LOADs; mirror that here.
          */
         if (memsz == 0) {
             seg_idx++;
             continue;
         }
 
-        /* The host memset zeros up to the next page boundary AFTER the
-         * segment ends, so the infra-overlap check has to use the same
-         * rounded extent. The end is PAGE_ALIGN_UP(gpa + memsz) rather
-         * than gpa + PAGE_ALIGN_UP(memsz) because gpa is not always
-         * page-aligned (e.g. ld.so's RW segment at vaddr 0x2f650): with
-         * the older bytes-from-gpa formula the page covering the last
-         * memsz byte kept its mid-page tail untouched, and execve into a
-         * dynamic-linked target then read stale state from the prior
-         * incarnation of the same interpreter at offsets ld.so allocates
-         * from beyond memsz (e.g. the first link_map in _dl_new_object).
+        /* The host memset zeros up to the next page boundary AFTER the segment
+         * ends, so the infra-overlap check has to use the same rounded extent.
+         * The end is PAGE_ALIGN_UP(gpa + memsz) rather than gpa +
+         * PAGE_ALIGN_UP(memsz) because gpa is not always page-aligned (e.g.
+         * ld.so's RW segment at vaddr 0x2f650): with the older bytes-from-gpa
+         * formula the page covering the last memsz byte kept its mid-page tail
+         * untouched, and execve into a dynamic-linked target then read stale
+         * state from the prior incarnation of the same interpreter at offsets
+         * ld.so allocates from beyond memsz (e.g. the first link_map in
+         * _dl_new_object).
          */
         uint64_t zero_len = PAGE_ALIGN_UP(gpa + memsz) - gpa;
         if (gpa + zero_len > guest_size)
@@ -415,8 +415,8 @@ void elf_resolve_interp(const char *sysroot,
         if (access(out, F_OK) == 0)
             return;
 
-        /* Strategy 2: sysroot/lib/basename. Handles store-style
-         * interpreter paths such as /.../lib/ld-musl-aarch64.so.1
+        /* Strategy 2: sysroot/lib/basename. Handles store-style interpreter
+         * paths such as /.../lib/ld-musl-aarch64.so.1
          */
         const char *base = strrchr(interp_path, '/');
         base = base ? base + 1 : interp_path;

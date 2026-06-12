@@ -4,14 +4,14 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * rosetta_prepare loads the Apple Rosetta binary into the primary buffer at
- * a low GPA and exposes it at its statically-linked high VA (0x800000000000)
- * via a non-identity mem_region_t.va_base. The TTBR1 kbuf is initialized at
- * a 256 MiB window just below the rosetta image. rosetta_finalize wires the
+ * rosetta_prepare loads the Apple Rosetta binary into the primary buffer at a
+ * low GPA and exposes it at its statically-linked high VA (0x800000000000) via
+ * a non-identity mem_region_t.va_base. The TTBR1 kbuf is initialized at a 256
+ * MiB window just below the rosetta image. rosetta_finalize wires the
  * bootstrap-visible pieces needed to enter the translator: fd 3 setup,
  * binfmt-style argv construction, cmdline refresh, and the TTBR0 kbuf alias.
- * The runtime still depends on the high-VA mmap path in mem.c for Rosetta's
- * own slab and JIT allocations.
+ * The runtime still depends on the high-VA mmap path in mem.c for Rosetta's own
+ * slab and JIT allocations.
  *
  * Elfuse extends mem_region_t with a va_base field instead, so the page-table
  * builder handles non-identity placement in a single pass.
@@ -62,24 +62,25 @@ static inline uint64_t align2m_down(uint64_t v)
 /* The VZ_CAPS payload only has room for a 42-byte inline path. Publish
  * /proc/self/fd/3 there when the real host path is longer so rosetta sees a
  * valid reopenable path without truncation, while the host-side translator
- * subprocess still retains the full original binary path. Both buffers are
- * read by the VZ_CAPS ioctl handler from any vCPU; writes happen during
- * rosetta_finalize on execve. A pthread_mutex covers both setter and
- * snapshot reader so a multi-vCPU guest doing concurrent execves cannot
- * observe a torn or stale string.
+ * subprocess still retains the full original binary path. Both buffers are read
+ * by the VZ_CAPS ioctl handler from any vCPU; writes happen during
+ * rosetta_finalize on execve. A pthread_mutex covers both setter and snapshot
+ * reader so a multi-vCPU guest doing concurrent execves cannot observe a torn
+ * or stale string.
  */
 static pthread_mutex_t rosettad_path_lock = PTHREAD_MUTEX_INITIALIZER;
 static char rosettad_binary_path[PATH_MAX];
 static char rosettad_caps_binary_path[ROSETTA_CAPS_BINARY_PATH_LEN];
 static char rosettad_owned_binary_path[PATH_MAX];
 
-/* Move any owned path out of rosettad_owned_binary_path into out (which
- * the caller can then unlink after dropping the lock). Returns true if a
- * path was drained. The path lock must be held by the caller. The unlink
- * itself is deferred to the caller because it can block on slow
- * filesystems (NFS, FUSE), and the path lock is also taken by the
- * VZ_CAPS snapshot helpers on every vCPU; running the syscall inside the
- * critical section would stall those readers.
+/* Move any owned path out of rosettad_owned_binary_path into out (which the
+ * caller can then unlink after dropping the lock).
+ *
+ * Returns true if a path was drained. The path lock must be held by the caller.
+ * The unlink itself is deferred to the caller because it can block on slow
+ * filesystems (NFS, FUSE), and the path lock is also taken by the VZ_CAPS
+ * snapshot helpers on every vCPU; running the syscall inside the critical
+ * section would stall those readers.
  */
 static bool rosettad_drain_owned_path_locked(char out[PATH_MAX])
 {
@@ -146,9 +147,9 @@ void rosettad_clear_binary_path(void)
         unlink(prev_owned);
 }
 
-/* Common body for the two snapshot helpers below. Copies src into out_buf
- * with NUL termination while holding the rosetta path lock so the reader
- * cannot observe a torn write from a concurrent execve.
+/* Common body for the two snapshot helpers below. Copies src into out_buf with
+ * NUL termination while holding the rosetta path lock so the reader cannot
+ * observe a torn write from a concurrent execve.
  */
 static size_t rosettad_snapshot_locked(const char *src,
                                        char *out_buf,
@@ -218,8 +219,8 @@ int rosetta_prepare(guest_t *g,
 
     /* Compute 2 MiB-aligned placement covering all rosetta PT_LOAD segments.
      * rosetta is statically linked at 0x800000000000; segments span a small
-     * range above that. The mapping must cover the entire span so all
-     * segments resolve through a single Stage-2 region.
+     * range above that. The mapping must cover the entire span so all segments
+     * resolve through a single Stage-2 region.
      */
     uint64_t va_base = align2m_down(ri->load_min);
     uint64_t va_end = align2m_up(ri->load_max);
@@ -229,13 +230,13 @@ int rosetta_prepare(guest_t *g,
     }
     uint64_t size = va_end - va_base;
 
-    /* Pick a primary-buffer placement below the full high-IPA infra reserve,
-     * 2 MiB aligned. guest_init() has already reserved
-     * [interp_base - INFRA_RESERVE, interp_base) for the page-table pool,
-     * shim text, and shim data, so rosetta must stay below that window.
+    /* Pick a primary-buffer placement below the full high-IPA infra reserve, 2
+     * MiB aligned. guest_init() has already reserved [interp_base -
+     * INFRA_RESERVE, interp_base) for the page-table pool, shim text, and shim
+     * data, so rosetta must stay below that window.
      *
-     * HVF on M1 caps Stage-2 hv_vm_map at the hardware-default IPA width
-     * (36 bits on this host); a separate Stage-2 mapping at 128 TiB via
+     * HVF on M1 caps Stage-2 hv_vm_map at the hardware-default IPA width (36
+     * bits on this host); a separate Stage-2 mapping at 128 TiB via
      * guest_add_mapping is rejected with HV_BAD_ARGUMENT. Load rosetta into the
      * primary buffer at a low GPA and use the non-identity page-table mapping
      * (mem_region_t.va_base) to expose it at its statically-linked high VA.
@@ -263,9 +264,9 @@ int rosetta_prepare(guest_t *g,
         }
 
         /* Load rosetta into the primary buffer. load_base = guest_base -
-         * va_base places p_vaddr+load_base inside host_base+guest_base.
-         * The wrap math is the same trick elf.c documents for high-VA
-         * binaries: uint64_t arithmetic, two's-complement intentional.
+         * va_base places p_vaddr+load_base inside host_base+guest_base. The
+         * wrap math is the same trick elf.c documents for high-VA binaries:
+         * uint64_t arithmetic, two's-complement intentional.
          */
         uint64_t load_base = guest_base - va_base;
         uint64_t infra_lo = g->interp_base - INFRA_RESERVE;
@@ -276,11 +277,11 @@ int rosetta_prepare(guest_t *g,
             return -1;
         }
 
-        /* Place TTBR1 kbuf in the primary buffer just below the rosetta
-         * image. The kbuf needs to fit in [kbuf_gpa, kbuf_gpa + 256 MiB);
-         * brk and stack live below it, rosetta above. Validate the gap
-         * before subtracting so the underflow case (guest_base near 0)
-         * cannot wrap into a huge uint64_t that defeats the gap check.
+        /* Place TTBR1 kbuf in the primary buffer just below the rosetta image.
+         * The kbuf needs to fit in [kbuf_gpa, kbuf_gpa + 256 MiB); brk and
+         * stack live below it, rosetta above. Validate the gap before
+         * subtracting so the underflow case (guest_base near 0) cannot wrap
+         * into a huge uint64_t that defeats the gap check.
          */
         if (guest_base < KBUF_SIZE + g->stack_top + BLOCK_2MIB) {
             log_error(
@@ -313,8 +314,8 @@ int rosetta_prepare(guest_t *g,
         }
     } else {
         /* execve re-entry. The placement (guest_base, va_base, kbuf_gpa)
-         * survived guest_reset; the PT pool was zeroed so the TTBR1 tree
-         * must be rebuilt. Segments get reloaded in place.
+         * survived guest_reset; the PT pool was zeroed so the TTBR1 tree must
+         * be rebuilt. Segments get reloaded in place.
          */
         guest_base = g->rosetta_guest_base;
         uint64_t load_base = guest_base - va_base;
@@ -333,8 +334,8 @@ int rosetta_prepare(guest_t *g,
         }
     }
 
-    /* I-cache invalidation for the loaded executable segments. macOS wrote
-     * the bytes via the data side; without explicit invalidation the first
+    /* I-cache invalidation for the loaded executable segments. macOS wrote the
+     * bytes via the data side; without explicit invalidation the first
      * execution can hit stale I-cache entries.
      */
     for (int i = 0; i < ri->num_segments; i++) {
@@ -352,10 +353,10 @@ int rosetta_prepare(guest_t *g,
 
     /* One mem_region_t covering the whole rosetta image with the union of
      * segment permissions. The page-table builder honours va_base for
-     * non-identity placement: entry indices come from va_base + offset,
-     * block descriptors point at guest_base + offset (the primary buffer).
-     * RWX is acceptable because rosetta is a static binary whose JIT writes
-     * code into separate mmap regions (not into its own image).
+     * non-identity placement: entry indices come from va_base + offset, block
+     * descriptors point at guest_base + offset (the primary buffer). RWX is
+     * acceptable because rosetta is a static binary whose JIT writes code into
+     * separate mmap regions (not into its own image).
      */
     int perms = MEM_PERM_R;
     for (int i = 0; i < ri->num_segments; i++) {
@@ -402,16 +403,16 @@ int rosetta_finalize(guest_t *g,
     *out_argv = NULL;
 
     /* Defer every externally-visible state change (guest fd 3, cmdline,
-     * out_argc/out_argv) until after every fallible setup step succeeds.
-     * Any failure before commit goes through the fail label and tears down
-     * only the host-local resources allocated so far.
+     * out_argc/out_argv) until after every fallible setup step succeeds. Any
+     * failure before commit goes through the fail label and tears down only the
+     * host-local resources allocated so far.
      */
     int bin_host_fd = -1;
     const char **rosetta_argv = NULL;
     int rosetta_argc = 0;
 
-    /* Pre-open the x86_64 binary so it can be installed at guest fd 3 once
-     * the full setup succeeds. Rosetta locates its target via /proc/self/fd/3
+    /* Pre-open the x86_64 binary so it can be installed at guest fd 3 once the
+     * full setup succeeds. Rosetta locates its target via /proc/self/fd/3
      * (binfmt_misc convention).
      */
     bin_host_fd = open(binary_host_path, O_RDONLY);
@@ -433,13 +434,12 @@ int rosetta_finalize(guest_t *g,
      *     (-sh, -bash) lose the dash.
      *   - execve(path, "altname", ...) loses "altname"; the guest sees
      *     binary_path as argv[0].
-     * If a real workload surfaces either pain point, switch to the
-     * preserving form (4 slots: rosetta, binary, original_argv[0],
-     * original_argv[1..]) and verify rosetta strips both leading slots
-     * rather than one.
+     * If a real workload surfaces either pain point, switch to the preserving
+     * form (4 slots: rosetta, binary, original_argv[0], original_argv[1..]) and
+     * verify rosetta strips both leading slots rather than one.
      *
-     * Minimum argc is 2 (rosetta + binary) so rosetta always sees argv[1]
-     * even when the caller supplied no argv.
+     * Minimum argc is 2 (rosetta + binary) so rosetta always sees argv[1] even
+     * when the caller supplied no argv.
      */
     rosetta_argc = (guest_argc > 0) ? guest_argc + 1 : 2;
     rosetta_argv = malloc(sizeof(char *) * (rosetta_argc + 1));
@@ -457,8 +457,8 @@ int rosetta_finalize(guest_t *g,
     /* Install the TTBR0 user-VA alias for the kbuf so rosetta's TaggedPointer
      * extraction (which strips bits 63:48) resolves to the same physical pages
      * as the TTBR1 kernel-VA window. The aliasing-proof invariant (RW + UXN +
-     * PXN under both mappings) is enforced inside the helper.
-     * An installed-but-unused alias is harmless (read-write pages aliasing the
+     * PXN under both mappings) is enforced inside the helper. An
+     * installed-but-unused alias is harmless (read-write pages aliasing the
      * same physical kbuf), so the commit step below does not need to roll it
      * back if a later allocation fails.
      */
@@ -479,10 +479,9 @@ int rosetta_finalize(guest_t *g,
         goto fail;
     }
 
-    /* Ownership of bin_host_fd is now held by the guest fd table.
-     * Mark the rosetta target fd CLOEXEC so a rosetta-to-native execve does not
-     * leak it into the new image. fd_alloc_at clears linux_flags, so the OR is
-     * safe.
+    /* Ownership of bin_host_fd is now held by the guest fd table. Mark the
+     * rosetta target fd CLOEXEC so a rosetta-to-native execve does not leak it
+     * into the new image. fd_alloc_at clears linux_flags, so the OR is safe.
      */
     fd_table[bin_guest_fd].linux_flags |= LINUX_O_CLOEXEC;
 
@@ -559,10 +558,11 @@ static void digest_to_hex(const uint8_t digest[ROSETTAD_DIGEST_SIZE],
 /* AOT cache paths */
 
 /* Build <HOME>/.cache/elfuse-rosettad[/suffix] into out. When suffix is NULL,
- * write the bare cache directory; otherwise append "/<suffix>". Lazily
- * creates ~/.cache and the elfuse-rosettad subdirectory; EEXIST on either is
- * fine. Returns 0 on success, -1 on any failure (HOME unset, snprintf
- * truncation, mkdir denied for a reason other than EEXIST).
+ * write the bare cache directory; otherwise append "/<suffix>". Lazily creates
+ * ~/.cache and the elfuse-rosettad subdirectory; EEXIST on either is fine.
+ *
+ * Returns 0 on success, -1 on any failure (HOME unset, snprintf truncation,
+ * mkdir denied for a reason other than EEXIST).
  */
 static int aot_cache_path(const char *suffix, char *out, size_t outsz)
 {
@@ -570,9 +570,9 @@ static int aot_cache_path(const char *suffix, char *out, size_t outsz)
     if (!home || !*home)
         return -1;
 
-    /* Make ~/.cache first (fresh-user case), then the elfuse subdirectory.
-     * The intermediate path lives in a scratch buffer so out is only written
-     * once -- callers may pass the same buffer for both phases.
+    /* Make ~/.cache first (fresh-user case), then the elfuse subdirectory. The
+     * intermediate path lives in a scratch buffer so out is only written once
+     * -- callers may pass the same buffer for both phases.
      */
     char parent[PATH_MAX];
     int pn = snprintf(parent, sizeof(parent), "%s/.cache", home);
@@ -610,8 +610,9 @@ static int aot_cache_path_for_digest(const uint8_t digest[ROSETTAD_DIGEST_SIZE],
     return aot_cache_path(leaf, out, outsz);
 }
 
-/* Open the cached AOT file for a binary with the given digest. Returns
- * the open fd (O_RDONLY) on hit, -1 on miss or any other error. The fd
+/* Open the cached AOT file for a binary with the given digest.
+ *
+ * Returns the open fd (O_RDONLY) on hit, -1 on miss or any other error. The fd
  * is positioned at offset 0 so the caller can hand it straight back via
  * SCM_RIGHTS.
  */
@@ -682,21 +683,21 @@ out:
 }
 
 /* Translator publishes via rename() of its temp file -- a content copy is
- * unnecessary because the AOT output is already in the cache directory.
- * Keeping the cache-store step as a single rename inline in
- * rosettad_translate; a separate copy helper would only be needed for
- * paths that produce the AOT bytes outside the cache directory.
+ * unnecessary because the AOT output is already in the cache directory. Keeping
+ * the cache-store step as a single rename inline in rosettad_translate; a
+ * separate copy helper would only be needed for paths that produce the AOT
+ * bytes outside the cache directory.
  */
 
 /* SCM_RIGHTS fd-passing */
 
-/* Receive exactly one fd alongside buflen bytes of normal data. On
- * success returns the number of normal bytes received and writes the fd
- * to *out_fd. EINTR is retried. The protocol requires exactly one
- * SCM_RIGHTS cmsg carrying exactly one fd; anything weaker (truncation,
- * extra cmsgs, multiple fds, wrong cmsg payload size) is a malformed
- * peer and rejected. On rejection any kernel-allocated fds are closed
- * to avoid leaking them into the elfuse process.
+/* Receive exactly one fd alongside buflen bytes of normal data. On success
+ * returns the number of normal bytes received and writes the fd to *out_fd.
+ * EINTR is retried. The protocol requires exactly one SCM_RIGHTS cmsg carrying
+ * exactly one fd; anything weaker (truncation, extra cmsgs, multiple fds, wrong
+ * cmsg payload size) is a malformed peer and rejected. On rejection any
+ * kernel-allocated fds are closed to avoid leaking them into the elfuse
+ * process.
  */
 static ssize_t rosettad_recv_fd(int sock, void *buf, size_t buflen, int *out_fd)
 {
@@ -716,11 +717,11 @@ static ssize_t rosettad_recv_fd(int sock, void *buf, size_t buflen, int *out_fd)
     if (n <= 0)
         return n;
 
-    /* Walk every cmsg first, closing kernel-allocated fds in malformed or
-     * extra payloads. Defer the MSG_CTRUNC bailout until after the walk so
-     * fds that fit in cmsg_buf are closed instead of leaked into the elfuse
-     * process. cmsg_len is validated against CMSG_LEN(0) before any payload
-     * arithmetic to keep a hostile peer from underflowing the size_t.
+    /* Walk every cmsg first, closing kernel-allocated fds in malformed or extra
+     * payloads. Defer the MSG_CTRUNC bailout until after the walk so fds that
+     * fit in cmsg_buf are closed instead of leaked into the elfuse process.
+     * cmsg_len is validated against CMSG_LEN(0) before any payload arithmetic
+     * to keep a hostile peer from underflowing the size_t.
      */
     int n_rights = 0;
     bool malformed = false;
@@ -729,10 +730,10 @@ static ssize_t rosettad_recv_fd(int sock, void *buf, size_t buflen, int *out_fd)
             malformed = true;
             continue;
         }
-        /* cmsg_len must cover at least the cmsghdr header; the macro
-         * captures any alignment padding the platform inserts. Anything
-         * smaller is structurally invalid and the payload arithmetic
-         * below would underflow into a huge size_t.
+        /* cmsg_len must cover at least the cmsghdr header; the macro captures
+         * any alignment padding the platform inserts. Anything smaller is
+         * structurally invalid and the payload arithmetic below would underflow
+         * into a huge size_t.
          */
         if (c->cmsg_len < CMSG_LEN(0)) {
             malformed = true;
@@ -747,10 +748,9 @@ static ssize_t rosettad_recv_fd(int sock, void *buf, size_t buflen, int *out_fd)
         for (size_t i = 0; i < nfd; i++) {
             int fd;
             memcpy(&fd, (uint8_t *) CMSG_DATA(c) + i * sizeof(int), sizeof(fd));
-            /* Canonical case: exactly one fd in exactly one SCM_RIGHTS
-             * cmsg. Anything else (extra cmsgs, extra fds per cmsg) is
-             * malformed; close every fd that does not fit the canonical
-             * slot so none leak.
+            /* Canonical case: exactly one fd in exactly one SCM_RIGHTS cmsg.
+             * Anything else (extra cmsgs, extra fds per cmsg) is malformed;
+             * close every fd that does not fit the canonical slot so none leak.
              */
             if (n_rights == 0 && nfd == 1) {
                 *out_fd = fd;
@@ -762,11 +762,11 @@ static ssize_t rosettad_recv_fd(int sock, void *buf, size_t buflen, int *out_fd)
         }
     }
 
-    /* MSG_CTRUNC means the kernel discarded part of the ancillary data
-     * because cmsg_buf was too small. fds in the discarded portion were
-     * dropped by the kernel without ever entering this process; fds in
-     * the surviving cmsgs were walked above. Treat as a hard protocol
-     * error because the message framing is no longer reliable.
+    /* MSG_CTRUNC means the kernel discarded part of the ancillary data because
+     * cmsg_buf was too small. fds in the discarded portion were dropped by the
+     * kernel without ever entering this process; fds in the surviving cmsgs
+     * were walked above. Treat as a hard protocol error because the message
+     * framing is no longer reliable.
      */
     if ((msg.msg_flags & MSG_CTRUNC) || malformed || n_rights != 1) {
         if (*out_fd >= 0) {
@@ -780,8 +780,8 @@ static ssize_t rosettad_recv_fd(int sock, void *buf, size_t buflen, int *out_fd)
 }
 
 /* Send one fd alongside a 1-byte normal-data payload. Rosetta's recv_fd
- * counterpart allocates a 1-byte iov buffer and silently drops anything
- * larger; matching that exactly keeps the protocol bit-compatible.
+ * counterpart allocates a 1-byte iov buffer and silently drops anything larger;
+ * matching that exactly keeps the protocol bit-compatible.
  */
 static ssize_t rosettad_send_fd(int sock, uint8_t payload, int send_fd)
 {
@@ -808,9 +808,11 @@ static ssize_t rosettad_send_fd(int sock, uint8_t payload, int send_fd)
 
 /* Translate subprocess */
 
-/* Spawn 'elfuse rosettad translate <in_path> <out_path>' and wait for it
- * to exit. Returns 0 if the translator exited successfully and the
- * output file is non-empty, -1 otherwise.
+/* Spawn 'elfuse rosettad translate <in_path> <out_path>' and wait for it to
+ * exit.
+ *
+ * Returns 0 if the translator exited successfully and the output file is
+ * non-empty, -1 otherwise.
  */
 static int translate_via_rosettad(const char *in_path, const char *out_path)
 {
@@ -832,11 +834,11 @@ static int translate_via_rosettad(const char *in_path, const char *out_path)
         return -1;
     }
 
-    /* Bounded wait: a hung translator must not stall the handler thread
-     * that owns the rosetta socket. ROSETTAD_TRANSLATE_TIMEOUT_SEC bounds
-     * the wall-clock budget; on expiry, SIGKILL the child and report MISS
-     * to the caller so rosetta falls through to its JIT path. Override via
-     * the ELFUSE_ROSETTAD_TIMEOUT env var (seconds) for stress testing.
+    /* Bounded wait: a hung translator must not stall the handler thread that
+     * owns the rosetta socket. ROSETTAD_TRANSLATE_TIMEOUT_SEC bounds the
+     * wall-clock budget; on expiry, SIGKILL the child and report MISS to the
+     * caller so rosetta falls through to its JIT path. Override via the
+     * ELFUSE_ROSETTAD_TIMEOUT env var (seconds) for stress testing.
      */
     int timeout_sec = 120;
     const char *to_env = getenv("ELFUSE_ROSETTAD_TIMEOUT");
@@ -888,22 +890,22 @@ static int translate_via_rosettad(const char *in_path, const char *out_path)
     return 0;
 }
 
-/* Run the translate pipeline for a binary fd: SHA-256, cache lookup
- * (hit -> return cached fd), or spawn the translator and publish the
- * result. Returns an O_RDONLY fd pointing at the AOT file on success,
- * -1 on any failure. *out_digest is always written when the SHA-256
- * succeeds; the caller passes it back to rosetta so subsequent 'd'
- * lookups reuse the same key.
+/* Run the translate pipeline for a binary fd: SHA-256, cache lookup (hit ->
+ * return cached fd), or spawn the translator and publish the result.
+ *
+ * Returns an O_RDONLY fd pointing at the AOT file on success, -1 on any
+ * failure. *out_digest is always written when the SHA-256 succeeds; the caller
+ * passes it back to rosetta so subsequent 'd' lookups reuse the same key.
  */
 static int rosettad_translate(int bin_fd,
                               uint8_t out_digest[ROSETTAD_DIGEST_SIZE])
 {
-    /* Materialise first, hash second. Hashing bin_fd directly and then
-     * copying its bytes later opens a TOCTOU window: a concurrent writer
-     * mutating the inode between the two reads can poison the cache with
-     * bytes whose digest does not match. Snapshot the contents into an
-     * elfuse-owned temp file, then compute the digest from that snapshot
-     * so (hash, bytes) are taken from the same on-disk state.
+    /* Materialise first, hash second. Hashing bin_fd directly and then copying
+     * its bytes later opens a TOCTOU window: a concurrent writer mutating the
+     * inode between the two reads can poison the cache with bytes whose digest
+     * does not match. Snapshot the contents into an elfuse-owned temp file,
+     * then compute the digest from that snapshot so (hash, bytes) are taken
+     * from the same on-disk state.
      */
     char in_path[PATH_MAX];
     if (aot_materialize_input_fd(bin_fd, in_path) < 0) {
@@ -958,9 +960,9 @@ static int rosettad_translate(int bin_fd,
         return -1;
     }
 
-    /* Publish to the persistent cache; if rename fails another translator
-     * is racing this one, but aot_fd still points at the temp file's data
-     * and is safe to return.
+    /* Publish to the persistent cache; if rename fails another translator is
+     * racing this one, but aot_fd still points at the temp file's data and is
+     * safe to return.
      */
     char final_path[PATH_MAX];
     if (aot_cache_path_for_digest(out_digest, ".aot", final_path,
@@ -973,21 +975,21 @@ static int rosettad_translate(int bin_fd,
 
 /* rosettad handler thread */
 
-/* Maximum size of the per-translate params buffer rosetta sends alongside
- * the binary fd. The protocol allows up to this many bytes of opaque data;
- * the handler reads them but does not interpret them today.
+/* Maximum size of the per-translate params buffer rosetta sends alongside the
+ * binary fd. The protocol allows up to this many bytes of opaque data; the
+ * handler reads them but does not interpret them today.
  */
 #define ROSETTAD_PARAMS_MAX 256
 
-/* Rosetta's view of the socketpair: the fd it received via sys_socket.
- * Recorded so sys_connect / recvmsg / sendmsg can short-circuit the
- * connect (the socketpair is pre-wired) and pick rosettad-aware paths.
- * Static visibility: at most one rosettad bridge per elfuse process.
+/* Rosetta's view of the socketpair: the fd it received via sys_socket. Recorded
+ * so sys_connect / recvmsg / sendmsg can short-circuit the connect (the
+ * socketpair is pre-wired) and pick rosettad-aware paths. Static visibility: at
+ * most one rosettad bridge per elfuse process.
  *
  * The handler thread writes -1 to this field at termination while syscall
  * threads keep reading it via rosettad_is_socket. Plain int would let the
- * compiler tear or fold the load; atomic load/store with relaxed ordering
- * is enough since each read is independent of any other state.
+ * compiler tear or fold the load; atomic load/store with relaxed ordering is
+ * enough since each read is independent of any other state.
  */
 static _Atomic int rosettad_client_fd = -1;
 
@@ -1000,9 +1002,9 @@ bool rosettad_is_socket(int host_fd)
 
 bool rosettad_wait_for_idle(unsigned int max_ms)
 {
-    /* 1 ms granularity poll on the atomic. The handler thread clears the
-     * marker on EOF or on explicit QUIT; both paths run inside the
-     * detached worker, which the caller cannot join.
+    /* 1 ms granularity poll on the atomic. The handler thread clears the marker
+     * on EOF or on explicit QUIT; both paths run inside the detached worker,
+     * which the caller cannot join.
      */
     for (unsigned int i = 0; i < max_ms; i++) {
         if (atomic_load_explicit(&rosettad_client_fd, memory_order_acquire) ==
@@ -1061,9 +1063,9 @@ static int rosettad_write_full(int fd, const void *buf, size_t len)
     return 0;
 }
 
-/* Send the success reply for a TRANSLATE or DIGEST command:
- * {HIT byte, optional 32-byte digest, AOT fd via SCM_RIGHTS in a 1-byte iov}.
- * Pass digest=NULL on the DIGEST path (rosetta already knows the key).
+/* Send the success reply for a TRANSLATE or DIGEST command: {HIT byte, optional
+ * 32-byte digest, AOT fd via SCM_RIGHTS in a 1-byte iov}. Pass digest=NULL on
+ * the DIGEST path (rosetta already knows the key).
  * Returns 0 on success, -1 if any wire write failed.
  */
 static int rosettad_send_aot(int fd, const uint8_t *digest, int aot_fd)
@@ -1083,8 +1085,8 @@ static void *rosettad_handler_thread(void *arg)
 
     /* Block the host-directed signals elfuse uses internally so the handler
      * thread is not interrupted in the middle of a protocol exchange. The
-     * SIGPIPE / SIGCHLD masking matches the rest of elfuse's worker
-     * threads; SIGUSR1 is the vCPU timer kick.
+     * SIGPIPE / SIGCHLD masking matches the rest of elfuse's worker threads;
+     * SIGUSR1 is the vCPU timer kick.
      */
     sigset_t mask;
     sigemptyset(&mask);
@@ -1110,10 +1112,10 @@ static void *rosettad_handler_thread(void *arg)
             break;
 
         case ROSETTAD_CMD_TRANSLATE: {
-            /* Translate request: rosetta sends the binary fd via sendmsg
-             * with up to ROSETTAD_PARAMS_MAX bytes of params. Compute the
-             * SHA-256, look up the persistent AOT cache, and on miss invoke
-             * the translator subprocess. Reply is {HIT, digest[32], fd via
+            /* Translate request: rosetta sends the binary fd via sendmsg with
+             * up to ROSETTAD_PARAMS_MAX bytes of params. Compute the SHA-256,
+             * look up the persistent AOT cache, and on miss invoke the
+             * translator subprocess. Reply is {HIT, digest[32], fd via
              * SCM_RIGHTS in a 1-byte iov payload} or MISS on any failure.
              *
              * recv_fd failure means protocol desync (no way to tell what
@@ -1145,10 +1147,10 @@ static void *rosettad_handler_thread(void *arg)
         }
 
         case ROSETTAD_CMD_DIGEST: {
-            /* Digest lookup: rosetta caches its own .flu digests across
-             * runs and asks here first to skip re-translation. Cache hit
-             * sends back the AOT fd; miss makes rosetta fall through to a
-             * full translate request.
+            /* Digest lookup: rosetta caches its own .flu digests across runs
+             * and asks here first to skip re-translation. Cache hit sends back
+             * the AOT fd; miss makes rosetta fall through to a full translate
+             * request.
              */
             uint8_t digest[ROSETTAD_DIGEST_SIZE];
             if (rosettad_read_full(fd, digest, sizeof(digest)) !=
@@ -1171,9 +1173,9 @@ static void *rosettad_handler_thread(void *arg)
             goto done;
 
         default:
-            /* Unknown command: reply MISS to keep the wire balanced and
-             * hope rosetta recovers. A real cache miss / handshake noise
-             * landing in this branch would otherwise hang the protocol.
+            /* Unknown command: reply MISS to keep the wire balanced and hope
+             * rosetta recovers. A real cache miss / handshake noise landing in
+             * this branch would otherwise hang the protocol.
              */
             if (rosettad_write_byte(fd, ROSETTAD_RESP_MISS) < 0)
                 goto done;
@@ -1182,11 +1184,11 @@ static void *rosettad_handler_thread(void *arg)
     }
 
 done:
-    /* Drop the client-fd marker so rosettad_is_socket stops misclassifying
-     * a recycled fd number. The actual client fd was closed by the guest
-     * (or will be) -- this just retracts the bridge claim. The handler
-     * does not race with sys_socket starting another bridge: at most one
-     * rosetta bridge per elfuse process by design.
+    /* Drop the client-fd marker so rosettad_is_socket stops misclassifying a
+     * recycled fd number. The actual client fd was closed by the guest (or will
+     * be) -- this just retracts the bridge claim. The handler does not race
+     * with sys_socket starting another bridge: at most one rosetta bridge per
+     * elfuse process by design.
      */
     atomic_store_explicit(&rosettad_client_fd, -1, memory_order_relaxed);
     close(fd);

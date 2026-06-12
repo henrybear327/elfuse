@@ -3,13 +3,12 @@
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Each thread under pthread gets its own TLS block; on x86_64 the
- * FS-register points at a different address per thread. Rosetta has
- * to wire that per-thread FS to a per-thread TPIDR_EL0 when it lowers
- * the guest. The single-thread initial-exec probe (glibc-tls) only
- * exercises the main thread's setup; this probe asserts that a worker
- * thread sees its own isolated TLS slot and that the main thread's
- * slot is not clobbered by the worker.
+ * Each thread under pthread gets its own TLS block; on x86_64 the FS-register
+ * points at a different address per thread. Rosetta has to wire that per-thread
+ * FS to a per-thread TPIDR_EL0 when it lowers the guest. The single-thread
+ * initial-exec probe (glibc-tls) only exercises the main thread's setup; this
+ * probe asserts that a worker thread sees its own isolated TLS slot and that
+ * the main thread's slot is not clobbered by the worker.
  *
  * Build (on an x86_64 Linux host):
  *   gcc -O2 -pthread -o pthread-tls-probe x86_64-glibc-pthread-tls.c
@@ -48,9 +47,8 @@ static void *worker(void *arg)
 
 int main(void)
 {
-    /* Main thread's TLS slot starts at the default value. Write a
-     * different marker so we can prove the worker's write does not
-     * bleed across.
+    /* Main thread's TLS slot starts at the default value. Write a different
+     * marker so we can prove the worker's write does not bleed across.
      */
     if (per_thread_value != 0xa5a5a5a5a5a5a5a5ULL) {
         emit(STDERR_FILENO, "main-initial-wrong");
@@ -69,8 +67,8 @@ int main(void)
         return 3;
     }
 
-    /* Worker must have seen its own default (not main's overwritten
-     * marker), and its own write must have stayed in its slot.
+    /* Worker must have seen its own default (not main's overwritten marker),
+     * and its own write must have stayed in its slot.
      */
     if (wr.initial != 0xa5a5a5a5a5a5a5a5ULL) {
         emit(STDERR_FILENO, "worker-initial-not-isolated");
@@ -80,8 +78,8 @@ int main(void)
         emit(STDERR_FILENO, "worker-write-readback-wrong");
         return 5;
     }
-    /* Main's slot must still hold the value we wrote before pthread
-     * _create, untouched by the worker's write.
+    /* Main's slot must still hold the value we wrote before pthread _create,
+     * untouched by the worker's write.
      */
     if (per_thread_value != 0xdeadbeefdeadbeefULL) {
         emit(STDERR_FILENO, "main-slot-clobbered");

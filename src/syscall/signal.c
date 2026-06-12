@@ -41,12 +41,12 @@
 /* Signal state (module-level, process-wide). */
 static signal_state_t sig_state;
 
-/* Per-thread pending fault info.
- * When a synchronous fault (BRK, segfault, etc.) needs to deliver a signal,
- * the caller sets this before signal_queue()+signal_deliver(). signal_deliver()
- * consumes it to populate si_code/si_addr/fault_address in the signal frame
- * instead of the default SI_USER/si_pid fields. Thread-local because each
- * vCPU thread delivers signals independently.
+/* Per-thread pending fault info. When a synchronous fault (BRK, segfault, etc.)
+ * needs to deliver a signal, the caller sets this before
+ * signal_queue()+signal_deliver(). signal_deliver() consumes it to populate
+ * si_code/si_addr/fault_address in the signal frame instead of the default
+ * SI_USER/si_pid fields. Thread-local because each vCPU thread delivers signals
+ * independently.
  */
 typedef struct {
     bool valid;    /* True if fault info is pending */
@@ -57,37 +57,36 @@ typedef struct {
 
 static _Thread_local pending_fault_t pending_fault;
 
-/* Per-delivery SROP cookie. Stored when signal_deliver builds the frame
- * (in uc_flags), validated when signal_rt_sigreturn reads it back.
- * Thread-local because each vCPU thread delivers independently.
- * A stack of cookies handles nested signals (up to 16 deep).
+/* Per-delivery SROP cookie. Stored when signal_deliver builds the frame (in
+ * uc_flags), validated when signal_rt_sigreturn reads it back. Thread-local
+ * because each vCPU thread delivers independently. A stack of cookies handles
+ * nested signals (up to 16 deep).
  */
 #define MAX_NESTED_SIGNALS 16
 static _Thread_local uint64_t sigreturn_cookies[MAX_NESTED_SIGNALS];
 static _Thread_local int sigreturn_cookie_depth;
 
 /* Protects signal actions array. Multiple threads may call rt_sigaction
- * concurrently (e.g., during musl init). Blocked masks are per-thread
- * (each thread_entry_t has its own blocked / saved_blocked).
+ * concurrently (e.g., during musl init). Blocked masks are per-thread (each
+ * thread_entry_t has its own blocked / saved_blocked).
  */
 static pthread_mutex_t sig_lock = PTHREAD_MUTEX_INITIALIZER; /* Lock order: 4 */
 
 /* Atomic "maybe pending" hint. signal_queue() sets it before releasing the
- * queue lock, and signal_deliver() clears it after draining visible state.
- * The vCPU hot path uses it to skip the locked signal_pending() check when
- * no thread can possibly observe a queued signal. False positives cost one
- * extra lock acquisition; false negatives would lose delivery, so ordering
- * here stays conservative.
+ * queue lock, and signal_deliver() clears it after draining visible state. The
+ * vCPU hot path uses it to skip the locked signal_pending() check when no
+ * thread can possibly observe a queued signal. False positives cost one extra
+ * lock acquisition; false negatives would lose delivery, so ordering here stays
+ * conservative.
  */
 #include <stdatomic.h>
 static _Atomic uint64_t sig_pending_hint = 0;
 
-/* Guest ITIMER_REAL emulation.
- * Signal emulation keeps the guest's ITIMER_REAL internally rather than
- * forwarding to the host setitimer(), because macOS shares alarm() and
- * setitimer(ITIMER_REAL) as the same underlying timer, and elfuse needs
- * alarm() for its own vCPU per-iteration timeout. The guest timer is checked
- * after each syscall in the vCPU loop via signal_check_timer().
+/* Guest ITIMER_REAL emulation. Signal emulation keeps the guest's ITIMER_REAL
+ * internally rather than forwarding to the host setitimer(), because macOS
+ * shares alarm() and setitimer(ITIMER_REAL) as the same underlying timer, and
+ * elfuse needs alarm() for its own vCPU per-iteration timeout. The guest timer
+ * is checked after each syscall in the vCPU loop via signal_check_timer().
  */
 typedef struct {
     int active;              /* Non-zero if timer is armed */
@@ -231,9 +230,9 @@ static int signal_rt_dequeue_locked(int signum, signal_rt_info_t *out)
     return 1;
 }
 
-/* Per-thread signal mask accessors.  POSIX requires each thread to
- * have its own blocked mask.  Falls back to sig_state.blocked when
- * current_thread is NULL (early startup, before threads are initialized).
+/* Per-thread signal mask accessors. POSIX requires each thread to have its own
+ * blocked mask. Falls back to sig_state.blocked when current_thread is NULL
+ * (early startup, before threads are initialized).
  */
 static inline uint64_t *thread_blocked_ptr(void)
 {
@@ -256,35 +255,34 @@ static inline bool *thread_saved_valid_ptr(void)
 
 /* Public API. */
 
-/* Singleton guest pointer used by attention-flag setters in this file.
- * elfuse runs one VM per process so a single global is correct. The
- * setter (signal_set_shim_globals_guest) asserts NULL-or-same to catch
- * a lifecycle bug in any future multi-VM design.
+/* Singleton guest pointer used by attention-flag setters in this file. elfuse
+ * runs one VM per process so a single global is correct. The setter
+ * (signal_set_shim_globals_guest) asserts NULL-or-same to catch a lifecycle bug
+ * in any future multi-VM design.
  *
- * Atomic because attention_raise runs on every signal queue from any
- * thread without holding sig_lock, while signal_init clears it across
- * the execve reset window. ARM64 aligned 64-bit pointer writes are
- * single-copy atomic, but plain reads/writes have no ordering, so a
- * concurrent attention_raise could observe a stale value or fail to
- * see a fresh registration. The release-acquire pair seals the window.
+ * Atomic because attention_raise runs on every signal queue from any thread
+ * without holding sig_lock, while signal_init clears it across the execve reset
+ * window. ARM64 aligned 64-bit pointer writes are single-copy atomic, but plain
+ * reads/writes have no ordering, so a concurrent attention_raise could observe
+ * a stale value or fail to see a fresh registration. The release-acquire pair
+ * seals the window.
  */
 static _Atomic(guest_t *) attention_guest;
 
 void signal_init(void)
 {
     memset(&sig_state, 0, sizeof(sig_state));
-    /* Clear the attention singleton on every init pass. Bootstrap and
-     * the fork-child receive path both call this before
-     * signal_set_shim_globals_guest publishes the live g; the reset
-     * keeps the setter's NULL-or-same assertion from latching onto a
-     * stale parent pointer in the child process. Release-store so a
-     * sibling thread that ACQUIRE-loads the slot after init observes
-     * NULL and falls back to thread_interrupt_all instead of a stale
-     * parent pointer.
+    /* Clear the attention singleton on every init pass. Bootstrap and the
+     * fork-child receive path both call this before
+     * signal_set_shim_globals_guest publishes the live g; the reset keeps the
+     * setter's NULL-or-same assertion from latching onto a stale parent pointer
+     * in the child process. Release-store so a sibling thread that
+     * ACQUIRE-loads the slot after init observes NULL and falls back to
+     * thread_interrupt_all instead of a stale parent pointer.
      */
     atomic_store_explicit(&attention_guest, NULL, memory_order_release);
-    /* Altstack is now per-thread (in thread_entry_t), initialized to
-     * SS_DISABLE by thread_register_main() and thread_alloc().
+    /* Altstack is now per-thread (in thread_entry_t), initialized to SS_DISABLE
+     * by thread_register_main() and thread_alloc().
      */
 }
 
@@ -301,10 +299,10 @@ void signal_set_shim_globals_guest(guest_t *g)
     atomic_store_explicit(&attention_guest, g, memory_order_release);
 }
 
-/* Raise the shim-globals attention flag if the singleton has been
- * registered; otherwise fall back to a bare vCPU interrupt. Both paths
- * end up running thread_interrupt_all (shim_globals_raise_attention
- * issues it internally), so callers only need this single helper.
+/* Raise the shim-globals attention flag if the singleton has been registered;
+ * otherwise fall back to a bare vCPU interrupt. Both paths end up running
+ * thread_interrupt_all (shim_globals_raise_attention issues it internally), so
+ * callers only need this single helper.
  */
 static inline void attention_raise(void)
 {
@@ -316,9 +314,9 @@ static inline void attention_raise(void)
 }
 
 /* Predicate matches the deliverability gate used by signal_queue and
- * signal_queue_info: SIGKILL/SIGSTOP are uncatchable and must always
- * interrupt; other signals only interrupt when at least one active
- * thread does not block them.
+ * signal_queue_info: SIGKILL/SIGSTOP are uncatchable and must always interrupt;
+ * other signals only interrupt when at least one active thread does not block
+ * them.
  */
 static inline bool signal_should_interrupt(int signum)
 {
@@ -356,9 +354,9 @@ void signal_reset_for_exec(void)
     }
     pthread_mutex_unlock(&sig_lock);
 
-    /* Clear any stale pending fault info so it does not leak into the
-     * new program's first signal delivery (e.g., if a BRK handler
-     * called execve with pending_fault still valid).
+    /* Clear any stale pending fault info so it does not leak into the new
+     * program's first signal delivery (e.g., if a BRK handler called execve
+     * with pending_fault still valid).
      */
     pending_fault.valid = false;
 }
@@ -377,25 +375,23 @@ void signal_queue(int signum)
                           memory_order_release);
     pthread_mutex_unlock(&sig_lock);
 
-    /* Notify any signalfd instances whose mask includes this signal.
-     * This makes the signalfd pipe readable so poll/epoll sees it.
+    /* Notify any signalfd instances whose mask includes this signal. This makes
+     * the signalfd pipe readable so poll/epoll sees it.
      */
     signalfd_notify(signum);
 
-    /* Only force vCPUs out of hv_vcpu_run(), and only force the shim's
-     * identity fast path off, if the signal is actually deliverable to
-     * at least one thread. SIGKILL/SIGSTOP cannot be blocked and always
-     * need interruption. For other signals, check per-thread blocked masks
-     * to avoid spurious context switches -- Go, JVM, and Node.js mask
-     * signals in worker threads, causing thousands of unnecessary ~1000ns
-     * VM exit+re-entry cycles per second if signal emulation interrupts
-     * unconditionally.
+    /* Only force vCPUs out of hv_vcpu_run(), and only force the shim's identity
+     * fast path off, if the signal is actually deliverable to at least one
+     * thread. SIGKILL/SIGSTOP cannot be blocked and always need interruption.
+     * For other signals, check per-thread blocked masks to avoid spurious
+     * context switches -- Go, JVM, and Node.js mask signals in worker threads,
+     * causing thousands of unnecessary ~1000ns VM exit+re-entry cycles per
+     * second if signal emulation interrupts unconditionally.
      *
-     * Race: if a thread concurrently unblocks this signal via
-     * rt_sigprocmask, the pending signal could be missed here.
-     * signal_rt_sigprocmask handles this by re-checking pending
-     * signals after unblocking and interrupting the current thread
-     * if delivery became possible.
+     * Race: if a thread concurrently unblocks this signal via rt_sigprocmask,
+     * the pending signal could be missed here. signal_rt_sigprocmask handles
+     * this by re-checking pending signals after unblocking and interrupting the
+     * current thread if delivery became possible.
      */
     if (signal_should_interrupt(signum))
         attention_raise();
@@ -437,8 +433,8 @@ void signal_queue_info(int signum,
                           memory_order_release);
     pthread_mutex_unlock(&sig_lock);
     signalfd_notify(signum);
-    /* Same shim-globals attention raise as signal_queue: force the fast
-     * path off only when the queued signal can reach signal_deliver.
+    /* Same shim-globals attention raise as signal_queue: force the fast path
+     * off only when the queued signal can reach signal_deliver.
      */
     if (signal_should_interrupt(signum))
         attention_raise();
@@ -454,11 +450,10 @@ void signal_set_fault_info(int si_code, uint64_t addr, uint64_t esr)
 
 int signal_pending(void)
 {
-    /* Fast path: check atomic hint to avoid locking on the hot path.
-     * If the hint says nothing is pending, skip the lock entirely.
-     * The hint can have false positives (stale pending bit after
-     * mask change) but never false negatives (signal_queue always
-     * sets it before unlock).
+    /* Fast path: check atomic hint to avoid locking on the hot path. If the
+     * hint says nothing is pending, skip the lock entirely. The hint can have
+     * false positives (stale pending bit after mask change) but never false
+     * negatives (signal_queue always sets it before unlock).
      */
     uint64_t hint =
         atomic_load_explicit(&sig_pending_hint, memory_order_acquire);
@@ -476,20 +471,19 @@ int signal_pending(void)
 
 bool signal_attention_needed(void)
 {
-    /* Cheap atomic load on the sig-pending hint first; if a signal is
-     * queued and deliverable to at least one active thread, the shim should
-     * drop to the slow path even before we touch the itimer state. A pending
-     * signal blocked by every active thread is not useful slow-path work and
-     * should not keep identity syscalls out of the fast path indefinitely.
+    /* Cheap atomic load on the sig-pending hint first; if a signal is queued
+     * and deliverable to at least one active thread, the shim should drop to
+     * the slow path even before we touch the itimer state. A pending signal
+     * blocked by every active thread is not useful slow-path work and should
+     * not keep identity syscalls out of the fast path indefinitely.
      */
     uint64_t hint =
         atomic_load_explicit(&sig_pending_hint, memory_order_acquire);
     if (hint != 0 && thread_signal_deliverable(hint))
         return true;
-    /* Active guest itimers: even if no signal is queued YET, the
-     * timer can fire at any moment, and signal_check_timer needs an
-     * HVC #5 epilogue to notice it. Keep attention raised while any
-     * timer is armed.
+    /* Active guest itimers: even if no signal is queued YET, the timer can fire
+     * at any moment, and signal_check_timer needs an HVC #5 epilogue to notice
+     * it. Keep attention raised while any timer is armed.
      */
     if (__atomic_load_n(&guest_itimer.active, __ATOMIC_ACQUIRE) ||
         __atomic_load_n(&guest_itimer_virt.active, __ATOMIC_ACQUIRE) ||
@@ -518,9 +512,9 @@ bool signal_pending_interruption(bool *restart_out)
      *     ditto.
      *   - User handler with SA_RESTART: handler runs but the syscall is
      *     expected to be retried transparently.
-     * Any other signal (default-TERM, default-CORE, non-restart handler)
-     * forces the wait to be treated as interrupted; otherwise a SIGTERM
-     * hiding behind an ignored SIGCHLD would never wake the caller.
+     * Any other signal (default-TERM, default-CORE, non-restart handler) forces
+     * the wait to be treated as interrupted; otherwise a SIGTERM hiding behind
+     * an ignored SIGCHLD would never wake the caller.
      */
     bool all_noninterrupt = true;
     uint64_t bits = deliverable;
@@ -536,12 +530,11 @@ bool signal_pending_interruption(bool *restart_out)
         if (act->sa_handler == LINUX_SIG_IGN) {
             noninterrupt = true;
         } else if (act->sa_handler == LINUX_SIG_DFL) {
-            /* Mirror signal_deliver's SIG_DFL switch: IGN, CONT, and STOP
-             * are all discarded with no guest-visible effect on elfuse
-             * (STOP/CONT are not meaningful here), so they cannot
-             * legitimately interrupt a FUSE wait. Treating CONT or STOP
-             * as disruptive would force a spurious EINTR that never
-             * corresponds to an actual delivery.
+            /* Mirror signal_deliver's SIG_DFL switch: IGN, CONT, and STOP are
+             * all discarded with no guest-visible effect on elfuse (STOP/CONT
+             * are not meaningful here), so they cannot legitimately interrupt a
+             * FUSE wait. Treating CONT or STOP as disruptive would force a
+             * spurious EINTR that never corresponds to an actual delivery.
              */
             sig_disposition_t disp = signal_default_disposition(idx + 1);
             noninterrupt = disp == SIG_DISP_IGN || disp == SIG_DISP_CONT ||
@@ -563,10 +556,10 @@ bool signal_pending_interruption(bool *restart_out)
 
 const signal_state_t *signal_get_state(void)
 {
-    /* Populate IPC-serializable fields from per-thread state under the
-     * lock to avoid data races with concurrent sigaction calls.
-     * This ensures fork children inherit the parent thread's blocked
-     * mask and altstack (POSIX: fork preserves signal mask).
+    /* Populate IPC-serializable fields from per-thread state under the lock to
+     * avoid data races with concurrent sigaction calls. This ensures fork
+     * children inherit the parent thread's blocked mask and altstack (POSIX:
+     * fork preserves signal mask).
      */
     pthread_mutex_lock(&sig_lock);
     if (current_thread) {
@@ -610,10 +603,10 @@ static size_t signal_collect_signalfd(uint64_t mask,
 
     pthread_mutex_lock(&sig_lock);
     uint64_t deliverable = sig_state.pending & mask;
-    /* signum runs 1..LINUX_NSIG inclusive (64 is the highest valid RT signal
-     * on aarch64 Linux). Bare-musl applications can target SIGRTMAX directly,
-     * so the inclusive bound matters even though glibc reserves the top of the
-     * RT range for itself.
+    /* signum runs 1..LINUX_NSIG inclusive (64 is the highest valid RT signal on
+     * aarch64 Linux). Bare-musl applications can target SIGRTMAX directly, so
+     * the inclusive bound matters even though glibc reserves the top of the RT
+     * range for itself.
      */
     for (int signum = 1; signum <= LINUX_NSIG && total < max; signum++) {
         uint64_t bit = BIT64(signum - 1);
@@ -769,8 +762,8 @@ static int timeval_cmp(const struct timeval *a, const struct timeval *b)
     return 0;
 }
 
-/* Helper: add two timevals with overflow saturation.
- * Uses pre-check to avoid signed overflow UB.
+/* Helper: add two timevals with overflow saturation. Uses pre-check to avoid
+ * signed overflow UB.
  */
 static struct timeval timeval_add(const struct timeval *a,
                                   const struct timeval *b)
@@ -795,8 +788,8 @@ static struct timeval timeval_add(const struct timeval *a,
     return r;
 }
 
-/* Helper: subtract b from a (a must be >= b).
- * Clamps to zero if a < b to avoid negative results.
+/* Helper: subtract b from a (a must be >= b). Clamps to zero if a < b to avoid
+ * negative results.
  */
 static struct timeval timeval_sub(const struct timeval *a,
                                   const struct timeval *b)
@@ -849,11 +842,11 @@ void signal_set_itimer(const struct timeval *value,
         __atomic_store_n(&guest_itimer.active, 0, __ATOMIC_RELEASE);
     } else {
         /* Publish expiry and interval BEFORE the release-store of active.
-         * signal_check_timer and signal_attention_needed ACQUIRE-load
-         * active without holding sig_lock; if active is published before
-         * its associated fields, a consumer can observe active=1 with
-         * stale expiry/interval and decide an early or late SIGALRM.
-         * Matches the field order in signal_set_itimer_virt.
+         * signal_check_timer and signal_attention_needed ACQUIRE-load active
+         * without holding sig_lock; if active is published before its
+         * associated fields, a consumer can observe active=1 with stale
+         * expiry/interval and decide an early or late SIGALRM. Matches the
+         * field order in signal_set_itimer_virt.
          */
         guest_itimer.expiry = timeval_add(&now, value);
         guest_itimer.interval = interval ? *interval : (struct timeval) {0, 0};
@@ -861,11 +854,10 @@ void signal_set_itimer(const struct timeval *value,
     }
     pthread_mutex_unlock(&sig_lock);
 
-    /* Arming any timer requires the shim's identity fast path to drop
-     * to the slow path so signal_check_timer can see the expiry. The
-     * disarm case is handled by signal_attention_needed returning
-     * false at the next HVC epilogue recompute -- no explicit clear
-     * here.
+    /* Arming any timer requires the shim's identity fast path to drop to the
+     * slow path so signal_check_timer can see the expiry. The disarm case is
+     * handled by signal_attention_needed returning false at the next HVC
+     * epilogue recompute -- no explicit clear here.
      */
     if (arm)
         attention_raise();
@@ -894,7 +886,9 @@ void signal_get_itimer(struct timeval *value, struct timeval *interval)
 }
 
 /* Check a single timer; if expired, re-arm or deactivate, return signal to
- * queue. Must be called with sig_lock held. Returns 0 if not expired.
+ * queue. Must be called with sig_lock held.
+ *
+ * Returns 0 if not expired.
  */
 static int check_one_timer(guest_itimer_t *timer, const struct timeval *now)
 {
@@ -1107,20 +1101,20 @@ int64_t signal_rt_sigprocmask(guest_t *g,
             return -LINUX_EINVAL;
         }
         new_mask &= ~unmaskable;
-        /* Atomic store: thread_signal_deliverable reads this field
-         * lock-free via __atomic_load_n. Without atomic stores, the
-         * concurrent read is a C data race (UB).
+        /* Atomic store: thread_signal_deliverable reads this field lock-free
+         * via __atomic_load_n. Without atomic stores, the concurrent read is a
+         * C data race (UB).
          */
         __atomic_store_n(blocked, new_mask, __ATOMIC_RELEASE);
 
-        /* If this mask change makes a queued signal deliverable on the
-         * current thread, refresh the global hint. The caller is already
-         * returning through the vCPU loop, so the next signal_pending()
-         * check will observe the updated mask without broadcasting a host
-         * thread interrupt.
+        /* If this mask change makes a queued signal deliverable on the current
+         * thread, refresh the global hint. The caller is already returning
+         * through the vCPU loop, so the next signal_pending() check will
+         * observe the updated mask without broadcasting a host thread
+         * interrupt.
          *
-         * This closes the race where signal_queue() saw the signal blocked
-         * on every thread, skipped the interrupt path, and this thread then
+         * This closes the race where signal_queue() saw the signal blocked on
+         * every thread, skipped the interrupt path, and this thread then
          * unblocked it.
          */
         uint64_t newly_unblocked = old_blocked & ~*blocked;
@@ -1158,8 +1152,8 @@ int64_t signal_rt_sigsuspend(guest_t *g, uint64_t mask_gva, uint64_t sigsetsize)
         uint64_t unmaskable = sig_bit(LINUX_SIGKILL) | sig_bit(LINUX_SIGSTOP);
         *blocked = mask & ~unmaskable;
 
-        /* If no signal is pending with the new mask, restore immediately.
-         * In a real kernel, sigsuspend blocks until a signal arrives. Signal
+        /* If no signal is pending with the new mask, restore immediately. In a
+         * real kernel, sigsuspend blocks until a signal arrives. Signal
          * emulation check if any signal became deliverable with the new mask.
          * If yes, the vCPU loop will deliver it. If no, restore the mask; the
          * caller will loop (musl retries on -EINTR).
@@ -1168,10 +1162,10 @@ int64_t signal_rt_sigsuspend(guest_t *g, uint64_t mask_gva, uint64_t sigsetsize)
             *blocked = saved_blocked;
         }
         /* If a signal IS pending, the mask stays temporarily modified.
-         * signal_deliver() will execute the handler, and rt_sigreturn
-         * will restore uc_sigmask. But signal delivery needs to set uc_sigmask
-         * to the ORIGINAL mask (saved_blocked), not the sigsuspend mask. Store
-         * it for signal_deliver to use.
+         * signal_deliver() will execute the handler, and rt_sigreturn will
+         * restore uc_sigmask. But signal delivery needs to set uc_sigmask to
+         * the ORIGINAL mask (saved_blocked), not the sigsuspend mask. Store it
+         * for signal_deliver to use.
          */
         else {
             *saved_ptr = saved_blocked;
@@ -1195,9 +1189,9 @@ int64_t signal_rt_sigpending(guest_t *g, uint64_t set_gva, uint64_t sigsetsize)
         return -LINUX_EFAULT;
 
     pthread_mutex_lock(&sig_lock);
-    /* Return all pending signals (matching Linux kernel do_sigpending).
-     * In practice unblocked signals are delivered before sigpending can
-     * observe them, but returning the full set is strictly correct.
+    /* Return all pending signals (matching Linux kernel do_sigpending). In
+     * practice unblocked signals are delivered before sigpending can observe
+     * them, but returning the full set is strictly correct.
      */
     uint64_t result = sig_state.pending;
     pthread_mutex_unlock(&sig_lock);
@@ -1255,8 +1249,8 @@ int64_t signal_sigaltstack(guest_t *g, uint64_t ss_gva, uint64_t old_ss_gva)
 
 /* Signal delivery. */
 
-/* FPSIMD context header (required by musl for setjmp/longjmp).
- * Linux places this immediately after sigcontext.__reserved starts.
+/* FPSIMD context header (required by musl for setjmp/longjmp). Linux places
+ * this immediately after sigcontext.__reserved starts.
  */
 #define FPSIMD_MAGIC 0x46508001U
 #define FPSIMD_CONTEXT_SIZE (8 + 4 + 4 + 32 * 16) /* 528 bytes */
@@ -1267,8 +1261,8 @@ int64_t signal_sigaltstack(guest_t *g, uint64_t ss_gva, uint64_t old_ss_gva)
 #define ESR_MAGIC 0x45535201U
 #define ESR_CONTEXT_SIZE 16 /* { __u32 magic, size; __u64 esr; } */
 
-/* Build the extended context chain in the __reserved area.
- * Linux kernel (arch/arm64/kernel/signal.c) builds:
+/* Build the extended context chain in the __reserved area. Linux kernel
+ * (arch/arm64/kernel/signal.c) builds:
  *   1. FPSIMD context (always present)
  *   2. ESR context (present for synchronous faults: BRK, segfault, etc.)
  *   3. Terminator (magic=0, size=0)
@@ -1281,9 +1275,9 @@ static void build_sigcontext_reserved(uint8_t *reserved,
 {
     uint32_t off = 0;
 
-    /* 1. FPSIMD context: save actual FP/SIMD state so it is correctly
-     * restored by rt_sigreturn. Without this, a signal handler that
-     * modifies FP registers would corrupt the interrupted code's state.
+    /* 1. FPSIMD context: save actual FP/SIMD state so it is correctly restored
+     * by rt_sigreturn. Without this, a signal handler that modifies FP
+     * registers would corrupt the interrupted code's state.
      */
     uint32_t fpsimd_magic = FPSIMD_MAGIC, fpsimd_size = FPSIMD_CONTEXT_SIZE;
     memcpy(reserved + off, &fpsimd_magic, 4);
@@ -1333,9 +1327,9 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
     int signum = bit_ctz64(deliverable) + 1;
     signal_rt_info_t rt_info = signal_default_info(signum);
 
-    /* Dequeue: for RT signals, decrement count and only clear the
-     * pending bit when the queue is empty. Standard signals are
-     * always cleared (single instance, bitmask semantics).
+    /* Dequeue: for RT signals, decrement count and only clear the pending bit
+     * when the queue is empty. Standard signals are always cleared (single
+     * instance, bitmask semantics).
      */
     if (signum >= LINUX_SIGRTMIN) {
         signal_rt_dequeue_locked(signum, &rt_info);
@@ -1345,9 +1339,9 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
         sig_state.pending &= ~sig_bit(signum);
     }
 
-    /* signum is bit_ctz64(deliverable) + 1, bounded 1..64 by the 64-bit
-     * pending mask. The static analyzer cannot see the bound, so gate the
-     * array access defensively.
+    /* signum is bit_ctz64(deliverable) + 1, bounded 1..64 by the 64-bit pending
+     * mask. The static analyzer cannot see the bound, so gate the array access
+     * defensively.
      */
     int idx = signum - 1;
     if (!RANGE_CHECK(idx, 0, LINUX_NSIG)) {
@@ -1358,8 +1352,8 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
 
     /* Check handler type */
     if (act->sa_handler == LINUX_SIG_IGN) {
-        /* Ignored; discard signal. Clear any stale fault info so it
-         * does not leak into a later signal delivery.
+        /* Ignored; discard signal. Clear any stale fault info so it does not
+         * leak into a later signal delivery.
          */
         pending_fault.valid = false;
         pthread_mutex_unlock(&sig_lock);
@@ -1414,15 +1408,15 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
     linux_rt_sigframe_t frame;
     memset(&frame, 0, sizeof(frame));
 
-    /* siginfo: fault signals use si_code/si_addr from pending_fault;
-     * queued RT signals preserve sender metadata and sigval.
+    /* siginfo: fault signals use si_code/si_addr from pending_fault; queued RT
+     * signals preserve sender metadata and sigval.
      */
     frame.info.si_signo = signum;
     if (pending_fault.valid) {
         frame.info.si_code = pending_fault.si_code;
-        /* si_addr overlaps si_pid/si_uid at offset 16 in the siginfo union.
-         * On aarch64-linux, si_addr is a 64-bit pointer occupying both
-         * int32_t fields. Write it via memcpy to avoid strict aliasing.
+        /* si_addr overlaps si_pid/si_uid at offset 16 in the siginfo union. On
+         * aarch64-linux, si_addr is a 64-bit pointer occupying both int32_t
+         * fields. Write it via memcpy to avoid strict aliasing.
          */
         memcpy(&frame.info.si_pid, &pending_fault.addr, 8);
     } else {
@@ -1432,10 +1426,10 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
         frame.info.si_value = rt_info.si_ptr;
     }
 
-    /* ucontext: embed a per-delivery cookie in uc_flags for SROP
-     * validation. rt_sigreturn checks this before restoring state.
-     * Low priority (guest is same trust domain) but prevents accidental
-     * frame corruption from redirecting execution.
+    /* ucontext: embed a per-delivery cookie in uc_flags for SROP validation.
+     * rt_sigreturn checks this before restoring state. Low priority (guest is
+     * same trust domain) but prevents accidental frame corruption from
+     * redirecting execution.
      */
     uint64_t cookie;
     arc4random_buf(&cookie, sizeof(cookie));
@@ -1454,10 +1448,9 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
         frame.uc.uc_sigmask = *blocked;
     }
 
-    /* sigcontext: save all registers.
-     * fault_address: for synchronous faults (BRK, segfault), set to the
-     * faulting address; for asynchronous signals, zero.
-     * frame_esr: raw ESR_EL1 for the extended context chain. SIGTRAP
+    /* sigcontext: save all registers. fault_address: for synchronous faults
+     * (BRK, segfault), set to the faulting address; for asynchronous signals,
+     * zero. frame_esr: raw ESR_EL1 for the extended context chain. SIGTRAP
      * handlers read this to determine the BRK immediate value.
      */
     uint64_t frame_esr = 0;
@@ -1472,9 +1465,9 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
     frame.uc.uc_mcontext.pc = saved_pc;
     frame.uc.uc_mcontext.pstate = saved_pstate;
 
-    /* Extended context chain in __reserved area (FPSIMD + optional ESR).
-     * The ESR context lets signal handlers read the exception syndrome
-     * (e.g., BRK immediate from ESR ISS[15:0]) to determine trap type.
+    /* Extended context chain in __reserved area (FPSIMD + optional ESR). The
+     * ESR context lets signal handlers read the exception syndrome (e.g., BRK
+     * immediate from ESR ISS[15:0]) to determine trap type.
      */
     build_sigcontext_reserved(frame.uc.uc_mcontext.__reserved, frame_esr, vcpu);
 
@@ -1487,11 +1480,11 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
     if (thr && thr->on_altstack)
         frame.uc.uc_stack.ss_flags |= LINUX_SS_ONSTACK;
 
-    /* 3. Determine stack for signal frame: use altstack if SA_ONSTACK
-     * is set, an altstack is configured, and the thread is not already on it.
-     * Across fork, only the forking thread's altstack is preserved
-     * (via signal_get_state). Worker thread altstacks start as SS_DISABLE
-     * in the child, matching Linux kernel per-thread altstack semantics.
+    /* 3. Determine stack for signal frame: use altstack if SA_ONSTACK is set,
+     * an altstack is configured, and the thread is not already on it. Across
+     * fork, only the forking thread's altstack is preserved (via
+     * signal_get_state). Worker thread altstacks start as SS_DISABLE in the
+     * child, matching Linux kernel per-thread altstack semantics.
      */
     uint64_t signal_sp = saved_sp;
     bool use_altstack = false;
@@ -1502,9 +1495,9 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
         use_altstack = true;
     }
 
-    /* Guard against underflow: if signal_sp is too small to hold the
-     * frame, the subtraction wraps to a huge address. guest_write_small
-     * would catch it, but report the problem early with a diagnostic.
+    /* Guard against underflow: if signal_sp is too small to hold the frame, the
+     * subtraction wraps to a huge address. guest_write_small would catch it,
+     * but report the problem early with a diagnostic.
      */
     if (signal_sp < sizeof(frame)) {
         log_error(
@@ -1517,9 +1510,9 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
     }
     uint64_t frame_sp = (signal_sp - sizeof(frame)) & ~15ULL;
 
-    /* Push the SROP cookie for validation on rt_sigreturn.
-     * If nesting exceeds MAX_NESTED_SIGNALS, skip the cookie entirely
-     * (set uc_flags=0) so rt_sigreturn does not mis-validate.
+    /* Push the SROP cookie for validation on rt_sigreturn. If nesting exceeds
+     * MAX_NESTED_SIGNALS, skip the cookie entirely (set uc_flags=0) so
+     * rt_sigreturn does not mis-validate.
      */
     bool pushed_cookie = false;
     if (sigreturn_cookie_depth < MAX_NESTED_SIGNALS) {
@@ -1552,12 +1545,12 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
     /* X0 = signal number */
     hv_vcpu_set_reg(vcpu, HV_REG_X0, (uint64_t) signum);
 
-    /* X30 (LR) = return address for signal handler.
-     * On aarch64-linux, the kernel always sets LR to the vDSO's
-     * __kernel_rt_sigreturn (mov x8,#139; svc #0; ret). The sa_restorer
-     * field is architecturally unused on aarch64; the kernel ignores it.
-     * glibc leaves sa_restorer uninitialized (garbage); musl sets it to
-     * __restore_rt.  Match the kernel: always use the vDSO trampoline.
+    /* X30 (LR) = return address for signal handler. On aarch64-linux, the
+     * kernel always sets LR to the vDSO's __kernel_rt_sigreturn (mov x8,#139;
+     * svc #0; ret). The sa_restorer field is architecturally unused on aarch64;
+     * the kernel ignores it. glibc leaves sa_restorer uninitialized (garbage);
+     * musl sets it to __restore_rt. Match the kernel: always use the vDSO
+     * trampoline.
      */
     hv_vcpu_set_reg(vcpu, HV_REG_X30, VDSO_BASE + VDSO_OFF_SIGRET);
 
@@ -1586,9 +1579,9 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
         act->sa_flags &= ~LINUX_SA_SIGINFO;
     }
 
-    /* If delivery happens while returning from the syscall HVC path, the
-     * shim still has the interrupted syscall frame on its EL1 stack. Tell it
-     * to drop that frame so the handler PC/SP/LR/args installed above are not
+    /* If delivery happens while returning from the syscall HVC path, the shim
+     * still has the interrupted syscall frame on its EL1 stack. Tell it to drop
+     * that frame so the handler PC/SP/LR/args installed above are not
      * overwritten before ERET. Fault/BRK delivery paths ignore this marker.
      */
     hv_vcpu_set_reg(vcpu, HV_REG_X8, 2);
@@ -1610,8 +1603,8 @@ int signal_rt_sigreturn(hv_vcpu_t vcpu, guest_t *g)
     if (guest_read_small(g, sp, &frame, sizeof(frame)) < 0)
         return -LINUX_EFAULT;
 
-    /* Validate SROP cookie from uc_flags. Zero means the cookie was
-     * skipped (nesting overflow or pre-existing frame); allow those.
+    /* Validate SROP cookie from uc_flags. Zero means the cookie was skipped
+     * (nesting overflow or pre-existing frame); allow those.
      */
     uint64_t frame_cookie = frame.uc.uc_flags;
     if (frame_cookie != 0 && sigreturn_cookie_depth > 0) {
@@ -1627,13 +1620,13 @@ int signal_rt_sigreturn(hv_vcpu_t vcpu, guest_t *g)
         sigreturn_cookie_depth--;
     }
 
-    /* Validate restored PC before touching any vCPU state. Reject
-     * addresses in the EL1 shim or page table pool region; a crafted
-     * signal frame could redirect execution into EL1 code.
-     * Must happen before GPR/SP/PSTATE restore so that a failed check
-     * does not leave the vCPU with partially-attacker-controlled state.
-     * The infra reserve sits at high IPA (just below g->interp_base);
-     * use the runtime check rather than compile-time constants.
+    /* Validate restored PC before touching any vCPU state. Reject addresses in
+     * the EL1 shim or page table pool region; a crafted signal frame could
+     * redirect execution into EL1 code. Must happen before GPR/SP/PSTATE
+     * restore so that a failed check does not leave the vCPU with
+     * partially-attacker-controlled state. The infra reserve sits at high IPA
+     * (just below g->interp_base); use the runtime check rather than
+     * compile-time constants.
      */
     uint64_t restored_pc = frame.uc.uc_mcontext.pc;
     if (guest_addr_in_infra(g, restored_pc))
@@ -1645,8 +1638,8 @@ int signal_rt_sigreturn(hv_vcpu_t vcpu, guest_t *g)
     /* Restore SP, PC, PSTATE */
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL0, frame.uc.uc_mcontext.sp);
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_ELR_EL1, restored_pc);
-    /* Sanitize PSTATE: preserve EL0-safe bits, clear everything else.
-     * Bit fields preserved (matching Linux kernel's valid_user_regs):
+    /* Sanitize PSTATE: preserve EL0-safe bits, clear everything else. Bit
+     * fields preserved (matching Linux kernel's valid_user_regs):
      *   [31:28] NZCV:   condition flags
      *   [27:26] RES0:   cleared
      *   [25]    TCO:    tag check override (MTE, EL0-accessible)
@@ -1663,8 +1656,8 @@ int signal_rt_sigreturn(hv_vcpu_t vcpu, guest_t *g)
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1,
                         frame.uc.uc_mcontext.pstate & 0xF3001C00ULL);
 
-    /* Restore FPSIMD state from the sigcontext __reserved area.
-     * The FPSIMD context starts at offset 0 of __reserved (after magic/size).
+    /* Restore FPSIMD state from the sigcontext __reserved area. The FPSIMD
+     * context starts at offset 0 of __reserved (after magic/size).
      */
     const uint8_t *reserved = frame.uc.uc_mcontext.__reserved;
     uint32_t fpsimd_magic;
@@ -1682,9 +1675,9 @@ int signal_rt_sigreturn(hv_vcpu_t vcpu, guest_t *g)
         }
     }
 
-    /* Restore signal mask and update altstack-in-use flag.
-     * If the restored SP is still within the altstack range (nested signal
-     * case), keep on_altstack=1.  Matches Linux kernel's restore_altstack.
+    /* Restore signal mask and update altstack-in-use flag. If the restored SP
+     * is still within the altstack range (nested signal case), keep
+     * on_altstack=1. Matches Linux kernel's restore_altstack.
      */
     pthread_mutex_lock(&sig_lock);
     uint64_t *blocked = thread_blocked_ptr();
@@ -1703,14 +1696,14 @@ int signal_rt_sigreturn(hv_vcpu_t vcpu, guest_t *g)
     pthread_mutex_unlock(&sig_lock);
 
     /* Tell the EL1 shim to drop its saved syscall frame. rt_sigreturn has
-     * restored the complete guest register state here; letting the shim
-     * restore X1-X30 from the rt_sigreturn syscall entry would corrupt the
-     * interrupted context.
+     * restored the complete guest register state here; letting the shim restore
+     * X1-X30 from the rt_sigreturn syscall entry would corrupt the interrupted
+     * context.
      */
     hv_vcpu_set_reg(vcpu, HV_REG_X8, 2);
 
-    /* Return SYSCALL_EXEC_HAPPENED to skip the normal X0 writeback,
-     * since sigreturn has restored the entire register set.
+    /* Return SYSCALL_EXEC_HAPPENED to skip the normal X0 writeback, since
+     * sigreturn has restored the entire register set.
      */
     return SYSCALL_EXEC_HAPPENED;
 }

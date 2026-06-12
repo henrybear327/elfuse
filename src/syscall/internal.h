@@ -55,13 +55,17 @@ void fdtable_init(void);
 
 /* FD helpers. */
 
-/* Allocate the lowest available FD. Returns -1 if table is full.
- * cleanup is set atomically under fd_lock (pass NULL for plain fds).
+/* Allocate the lowest available FD.
+ *
+ * Returns -1 if table is full. cleanup is set atomically under fd_lock (pass
+ * NULL for plain fds).
  */
 int fd_alloc(int type, int host_fd, void (*cleanup)(int));
 
-/* Allocate the lowest available FD >= minfd. Returns -1 if none available.
- * cleanup is set atomically under fd_lock (pass NULL for plain fds).
+/* Allocate the lowest available FD >= minfd.
+ *
+ * Returns -1 if none available. cleanup is set atomically under fd_lock (pass
+ * NULL for plain fds).
  */
 int fd_alloc_from(int minfd, int type, int host_fd, void (*cleanup)(int));
 
@@ -74,18 +78,20 @@ int fd_alloc_from_relaxed(int minfd,
                           void (*cleanup)(int));
 
 /* Allocate a specific FD slot.
- * Returns -1 if out of range.
- * cleanup is set atomically under fd_lock (pass NULL for plain fds).
+ * Returns -1 if out of range. cleanup is set atomically under fd_lock (pass
+ * NULL for plain fds).
  */
 int fd_alloc_at(int fd, int type, int host_fd, void (*cleanup)(int));
 
-/* Allocate a specific FD slot with a single-thread fast path.
- * Falls back to fd_alloc_at() when replacement/cleanup must stay serialized.
+/* Allocate a specific FD slot with a single-thread fast path. Falls back to
+ * fd_alloc_at() when replacement/cleanup must stay serialized.
  */
 int fd_alloc_at_relaxed(int fd, int type, int host_fd, void (*cleanup)(int));
 
-/* Look up a guest FD. Returns host FD or -1 if invalid.
- * Unsafe for concurrent use; see fd_snapshot/fd_to_host_dup.
+/* Look up a guest FD.
+ *
+ * Returns host FD or -1 if invalid. Unsafe for concurrent use; see
+ * fd_snapshot/fd_to_host_dup.
  */
 int fd_to_host(int guest_fd);
 
@@ -96,25 +102,28 @@ int fd_to_host(int guest_fd);
 bool fd_snapshot(int guest_fd, fd_entry_t *out);
 
 /* Snapshot an fd entry AND dup its host fd in a single fd_lock critical
- * section. Eliminates the TOCTOU window between reading the type/metadata
- * and duplicating the host fd in the dup(2) path. Returns the dup'd host
- * fd (owned by the caller) on success, -1 on failure. On success the
- * snapshot in *out is consistent with the dup'd host fd.
+ * section. Eliminates the TOCTOU window between reading the type/metadata and
+ * duplicating the host fd in the dup(2) path.
+ *
+ * Returns the dup'd host fd (owned by the caller) on success, -1 on failure. On
+ * success the snapshot in *out is consistent with the dup'd host fd.
  */
 int fd_snapshot_and_dup(int guest_fd, fd_entry_t *out);
 
-/* Read just the fd type under fd_lock. Returns FD_CLOSED for out-of-range or
- * closed slots. Cheaper than fd_snapshot when only the type is needed for
- * dispatch (sys_read/sys_readv/sys_writev fast paths).
+/* Read just the fd type under fd_lock.
+ *
+ * Returns FD_CLOSED for out-of-range or closed slots. Cheaper than fd_snapshot
+ * when only the type is needed for dispatch (sys_read/sys_readv/sys_writev fast
+ * paths).
  */
 int fd_get_type(int guest_fd);
 
-/* Publish linux_flags for a guest fd under fd_lock. Use after fd_alloc when
- * the creating syscall needs to set linux_flags atomically with respect to a
+/* Publish linux_flags for a guest fd under fd_lock. Use after fd_alloc when the
+ * creating syscall needs to set linux_flags atomically with respect to a
  * concurrent fcntl(F_SETFL/F_SETFD) on the same slot. The fd_alloc-then-
  * publish window is small (the new gfd is not communicated to other threads
- * until the syscall returns) but the lock removes the structural race and
- * keeps every linux_flags writer on one lock domain.
+ * until the syscall returns) but the lock removes the structural race and keeps
+ * every linux_flags writer on one lock domain.
  */
 void fd_publish_linux_flags(int guest_fd, int linux_flags);
 
@@ -124,21 +133,21 @@ void fd_publish_linux_flags(int guest_fd, int linux_flags);
  */
 void fd_refresh_urandom_bitmap(int fd);
 
-/* Type -> cleanup registry. Modules that own a synthetic fd type register
- * their cleanup at init time; dup and fork-restore paths look up the
- * cleanup from the type so the binding stays consistent without each path
- * re-deriving the dispatch table.
+/* Type -> cleanup registry. Modules that own a synthetic fd type register their
+ * cleanup at init time; dup and fork-restore paths look up the cleanup from the
+ * type so the binding stays consistent without each path re-deriving the
+ * dispatch table.
  */
 void fd_register_cleanup(int type, void (*cleanup)(int));
 void (*fd_cleanup_for_type(int type))(int);
 
-/* True for fd types whose host backing (kqueue for timerfd/inotify, pipe
- * halves for eventfd/signalfd/netlink/pidfd, epoll instance) cannot be
- * meaningfully inherited across fork IPC: macOS SCM_RIGHTS rejects kqueue
- * fds, and the per-class side-table state (eventfd counter, signalfd mask,
- * pidfd target, epoll set, ...) is not serialized. The child must recreate
- * such fds via the appropriate syscall, so the parent filters them from the
- * SCM_RIGHTS payload and the receiver drops any that still arrive.
+/* True for fd types whose host backing (kqueue for timerfd/inotify, pipe halves
+ * for eventfd/signalfd/netlink/pidfd, epoll instance) cannot be meaningfully
+ * inherited across fork IPC: macOS SCM_RIGHTS rejects kqueue fds, and the
+ * per-class side-table state (eventfd counter, signalfd mask, pidfd target,
+ * epoll set, ...) is not serialized. The child must recreate such fds via the
+ * appropriate syscall, so the parent filters them from the SCM_RIGHTS payload
+ * and the receiver drops any that still arrive.
  */
 static inline bool fd_type_is_synthetic(int type)
 {
@@ -148,32 +157,34 @@ static inline bool fd_type_is_synthetic(int type)
 }
 
 /* Look up a guest FD and return a dup'd host fd owned by the caller.
- * Thread-safe: dup is performed under fd_lock. Returns -1 on failure.
- * Caller MUST close() the returned fd when done.
+ * Thread-safe: dup is performed under fd_lock.
+ *
+ * Returns -1 on failure. Caller MUST close() the returned fd when done.
  */
 int fd_to_host_dup(int guest_fd);
 
-/* Mark an FD slot as closed (set type = FD_CLOSED and update bitmap).
- * Does NOT close the host FD or free type-specific resources (DIR*,
- * epoll instance); caller must do that first.
+/* Mark an FD slot as closed (set type = FD_CLOSED and update bitmap). Does NOT
+ * close the host FD or free type-specific resources (DIR*, epoll instance);
+ * caller must do that first.
  */
 void fd_mark_closed(int fd);
 
-/* Same as fd_mark_closed but requires fd_lock to be already held.
- * Used by sys_execve CLOEXEC loop which holds fd_lock for the entire scan.
+/* Same as fd_mark_closed but requires fd_lock to be already held. Used by
+ * sys_execve CLOEXEC loop which holds fd_lock for the entire scan.
  */
 void fd_mark_closed_unlocked(int fd);
 
-/* Atomically snapshot an fd entry and mark it closed. Returns true if the
- * slot was open (snapshot written to *out), false if already closed. Prevents
- * the TOCTOU race where two concurrent close() calls both snapshot the
- * same open entry and double-close the host fd.
+/* Atomically snapshot an fd entry and mark it closed.
+ *
+ * Returns true if the slot was open (snapshot written to *out), false if
+ * already closed. Prevents the TOCTOU race where two concurrent close() calls
+ * both snapshot the same open entry and double-close the host fd.
  */
 bool fd_snapshot_and_close(int fd, fd_entry_t *out);
 
-/* Snapshot and close with a single-thread fast path.
- * Uses the unlocked table update when exactly one guest thread is active,
- * otherwise falls back to fd_snapshot_and_close().
+/* Snapshot and close with a single-thread fast path. Uses the unlocked table
+ * update when exactly one guest thread is active, otherwise falls back to
+ * fd_snapshot_and_close().
  */
 bool fd_snapshot_and_close_relaxed(int fd, fd_entry_t *out);
 
@@ -184,9 +195,9 @@ bool fd_snapshot_and_close_relaxed(int fd, fd_entry_t *out);
  */
 bool fd_close_regular_relaxed(int fd, int *host_fd_out);
 
-/* Release all type-specific resources for a closed FD entry (DIR*,
- * epoll instance, emulated subsystem state) and close the host fd.
- * Caller must have already removed the entry from fd_table.
+/* Release all type-specific resources for a closed FD entry (DIR*, epoll
+ * instance, emulated subsystem state) and close the host fd. Caller must have
+ * already removed the entry from fd_table.
  */
 void fd_cleanup_entry(int guest_fd, const fd_entry_t *snap);
 
@@ -195,23 +206,22 @@ void fd_cleanup_entry(int guest_fd, const fd_entry_t *snap);
 /* Convert macOS errno to negative Linux errno. */
 int64_t linux_errno(void);
 
-/* Translate Linux AT_* flags to macOS equivalents.
- * For unlinkat, fstatat, linkat, fchmodat, fchownat, utimensat.
+/* Translate Linux AT_* flags to macOS equivalents. For unlinkat, fstatat,
+ * linkat, fchmodat, fchownat, utimensat.
  */
 int translate_at_flags(int linux_flags);
 
-/* Reject any flag bits outside the allowed mask. Caller returns
- * -LINUX_EINVAL on failure. Shared by every *at() handler that validates
- * its flags argument.
+/* Reject any flag bits outside the allowed mask. Caller returns -LINUX_EINVAL
+ * on failure. Shared by every *at() handler that validates its flags argument.
  */
 static inline int validate_at_flags(int flags, int allowed)
 {
     return (flags & ~allowed) == 0;
 }
 
-/* Translate Linux faccessat flags to macOS equivalents.
- * Separate from translate_at_flags because Linux AT_EACCESS (0x200) shares
- * the same numeric value as AT_REMOVEDIR; the meaning is context-dependent.
+/* Translate Linux faccessat flags to macOS equivalents. Separate from
+ * translate_at_flags because Linux AT_EACCESS (0x200) shares the same numeric
+ * value as AT_REMOVEDIR; the meaning is context-dependent.
  */
 int translate_faccessat_flags(int linux_flags);
 
@@ -233,8 +243,8 @@ int64_t sys_mmap_anon(guest_t *g, uint64_t addr, uint64_t length, int prot);
 
 /* RLIMIT_NOFILE tracking. */
 
-/* Update the guest RLIMIT_NOFILE soft limit. Called from prlimit64
- * when resource == RLIMIT_NOFILE. fd_alloc checks this.
+/* Update the guest RLIMIT_NOFILE soft limit. Called from prlimit64 when
+ * resource == RLIMIT_NOFILE. fd_alloc checks this.
  */
 void fd_set_rlimit_nofile(int cur);
 
@@ -276,8 +286,8 @@ static inline int host_fd_ref_open(guest_fd_t guest_fd, host_fd_ref_t *ref)
 static inline void host_fd_ref_close(host_fd_ref_t *ref)
 {
     /* Preserve errno across close(2). Callers commonly invoke this on the
-     * cleanup path after a syscall failed and then read errno to translate
-     * the failure; a non-zero close error must not clobber that value.
+     * cleanup path after a syscall failed and then read errno to translate the
+     * failure; a non-zero close error must not clobber that value.
      */
     int saved_errno = errno;
     if (ref->owned && ref->fd >= 0)
@@ -298,11 +308,11 @@ static inline int host_dirfd_ref_open(guest_fd_t dirfd, host_fd_ref_t *ref)
     return host_fd_ref_open(dirfd, ref);
 }
 
-/* Open a host fd reference, rejecting O_PATH (FD_PATH) entries with -EBADF.
- * Use this for syscalls that operate on the underlying file -- read/write,
- * lseek, ftruncate, fsync/fdatasync, flock, fsetxattr/fremovexattr, ioctl, etc.
- * Linux returns EBADF on those calls when the fd was opened O_PATH; the host fd
- * here is a plain O_RDONLY descriptor, so without this gate the host call would
+/* Open a host fd reference, rejecting O_PATH (FD_PATH) entries with -EBADF. Use
+ * this for syscalls that operate on the underlying file -- read/write, lseek,
+ * ftruncate, fsync/fdatasync, flock, fsetxattr/fremovexattr, ioctl, etc. Linux
+ * returns EBADF on those calls when the fd was opened O_PATH; the host fd here
+ * is a plain O_RDONLY descriptor, so without this gate the host call would
  * silently succeed and diverge from Linux semantics.
  *
  * Calls that are explicitly allowed on O_PATH (fstat, fstatfs, fchdir, close,
@@ -323,8 +333,8 @@ static inline int64_t host_fd_ref_open_io(guest_fd_t guest_fd,
 }
 
 /* iov limits shared between readv/writev/preadv/pwritev and sendmsg/recvmsg.
- * SYSCALL_IOV_MAX matches the Linux UIO_MAXIOV cap; SYSCALL_IOV_STACK_MAX
- * keeps the typical case on the call-site stack.
+ * SYSCALL_IOV_MAX matches the Linux UIO_MAXIOV cap; SYSCALL_IOV_STACK_MAX keeps
+ * the typical case on the call-site stack.
  */
 #define SYSCALL_IOV_MAX 1024
 #define SYSCALL_IOV_STACK_MAX 64
@@ -337,13 +347,13 @@ typedef struct {
     struct iovec *iov;
 } host_iov_buf_t;
 
-/* Translate a guest iovec array at iov_gva (iovcnt entries) into the host
- * iovec layout in buf->iov, resolving each guest_base to a contiguous host
- * pointer with the requested permissions. On a non-contiguous iov entry the
- * helper truncates that entry to the contiguous prefix and zeros every
- * subsequent entry; the host readv/writev/sendmsg/recvmsg then returns a
- * POSIX-compliant short I/O instead of silently packing bytes from the next
- * guest buffer into the truncated tail.
+/* Translate a guest iovec array at iov_gva (iovcnt entries) into the host iovec
+ * layout in buf->iov, resolving each guest_base to a contiguous host pointer
+ * with the requested permissions. On a non-contiguous iov entry the helper
+ * truncates that entry to the contiguous prefix and zeros every subsequent
+ * entry; the host readv/writev/sendmsg/recvmsg then returns a POSIX-compliant
+ * short I/O instead of silently packing bytes from the next guest buffer into
+ * the truncated tail.
  *
  * iovcnt <= 0 or > SYSCALL_IOV_MAX returns -LINUX_EINVAL.
  *
@@ -369,10 +379,11 @@ void host_iov_free(host_iov_buf_t *buf);
 
 /* Read a guest path string with small-buffer optimization.
  *
- * Tries the stack-allocated short_buf first; falls back to long_buf for
- * paths > short_sz bytes.  On success, *out points to whichever buffer
- * contains the path (caller must not free).  Returns 0 on success, or
- * -LINUX_EFAULT on failure.
+ * Tries the stack-allocated short_buf first; falls back to long_buf for paths >
+ * short_sz bytes. On success, *out points to whichever buffer contains the path
+ * (caller must not free).
+ *
+ * Returns 0 on success, or -LINUX_EFAULT on failure.
  */
 static inline int guest_read_path(guest_t *g,
                                   uint64_t gva,

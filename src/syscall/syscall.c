@@ -4,9 +4,9 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Dispatch table, sc_xxx adapter wrappers, fast-path read/write,
- * and the main syscall_dispatch() entry point. Core infrastructure
- * and syscall implementations live in focused modules:
+ * Dispatch table, sc_xxx adapter wrappers, fast-path read/write, and the main
+ * syscall_dispatch() entry point. Core infrastructure and syscall
+ * implementations live in focused modules:
  *   syscall/fdtable.c:   FD table, bitmap allocator, alloc/close/snapshot
  *   syscall/translate.c: errno/flag translation (macOS <-> Linux)
  *   syscall/mem.c:       brk, mmap, munmap, mprotect, mremap, madvise, msync
@@ -73,8 +73,8 @@
  * (e.g., the Nix-pinned apple-sdk-14.4) lack the enumerator. The encoding is
  * stable: op0=3, op1=0, CRn=1, CRm=0, op2=1 -> 0xc081. Hypervisor.framework
  * exposes ACTLR_EL1 only on hardware/OS combinations where the bit is
- * meaningful (Apple Silicon TSO toggle); older platforms simply leave actlr
- * at 0, which falls through to PR_SET_MEM_MODEL_DEFAULT.
+ * meaningful (Apple Silicon TSO toggle); older platforms simply leave actlr at
+ * 0, which falls through to PR_SET_MEM_MODEL_DEFAULT.
  *
  * The guard checks the SDK version rather than the macro presence: on macOS 15+
  * the symbol is an enumerator (not a #define), so a plain #ifndef would always
@@ -89,9 +89,9 @@ void syscall_init(void)
 {
     fdtable_init();
     signal_init();
-    /* Mirror signal_init's attention_guest reset for the fd/urandom
-     * bitmap singleton in shim-globals. Defends against a stale
-     * parent-process pointer surviving across posix_spawn re-init.
+    /* Mirror signal_init's attention_guest reset for the fd/urandom bitmap
+     * singleton in shim-globals. Defends against a stale parent-process pointer
+     * surviving across posix_spawn re-init.
      */
     shim_globals_reset_singleton();
 
@@ -119,10 +119,12 @@ void syscall_init(void)
 /* Syscall handler table. */
 
 /* Each sc_xxx wrapper adapts one (or a group of fall-through) case(s) from the
- * old switch into a uniform signature.  Returns int64_t result, or a sentinel:
- * SYSCALL_EXEC_HAPPENED for exec/sigreturn, (INT64_MIN | code) for
- * exit/exit_group. Wrappers that need mmap_lock acquire it internally. Wrappers
- * that need the vCPU handle use current_thread->vcpu.
+ * old switch into a uniform signature.
+ *
+ * Returns int64_t result, or a sentinel: SYSCALL_EXEC_HAPPENED for
+ * exec/sigreturn, (INT64_MIN | code) for exit/exit_group. Wrappers that need
+ * mmap_lock acquire it internally. Wrappers that need the vCPU handle use
+ * current_thread->vcpu.
  */
 typedef int64_t (*syscall_handler_t)(guest_t *g,
                                      uint64_t x0,
@@ -148,8 +150,8 @@ typedef int64_t (*syscall_handler_t)(guest_t *g,
  *   SC_LOCKED(name, expr):  same, but hold mmap_lock during the call
  *   SC_STUB(name, val):     return a constant (alias for SC_FORWARD)
  *
- * All parameters are marked (void) to suppress -Wunused-parameter.
- * The body expression may reference g, x0-x5, and verbose freely.
+ * All parameters are marked (void) to suppress -Wunused-parameter. The body
+ * expression may reference g, x0-x5, and verbose freely.
  */
 
 /* clang-format off */
@@ -176,22 +178,21 @@ typedef int64_t (*syscall_handler_t)(guest_t *g,
 
 #define SC_STUB(name, val) SC_FORWARD(name, (val))
 
-/* Bracket setuid/setgid family invocations so concurrent shim-fast-path
- * readers cannot observe stale credentials. The host-side proc_sys_*
- * mutators flip the _Atomic credential slots inside proc-identity.c;
- * the shim cache must reflect that under the same atomic window.
+/* Bracket setuid/setgid family invocations so concurrent shim-fast-path readers
+ * cannot observe stale credentials. The host-side proc_sys_* mutators flip the
+ * _Atomic credential slots inside proc-identity.c; the shim cache must reflect
+ * that under the same atomic window.
  *
- * Sequence: OR ATTN_BIT_CRED -> mutator -> on success publish_creds ->
- * AND ~ATTN_BIT_CRED. The OR-only update preserves whatever
- * ATTN_BIT_SIGTIMER state the HVC #5 epilogue's recompute may have
- * set or cleared in parallel; AND-only clear at the end leaves the
- * SIGTIMER lane alone. Earlier revisions wrote the full word, which
- * let a sibling's recompute drop the flag to zero mid-publish and
- * reopened the torn-cred race the bracket was meant to close.
+ * Sequence: OR ATTN_BIT_CRED -> mutator -> on success publish_creds -> AND
+ * ~ATTN_BIT_CRED. The OR-only update preserves whatever ATTN_BIT_SIGTIMER state
+ * the HVC #5 epilogue's recompute may have set or cleared in parallel; AND-only
+ * clear at the end leaves the SIGTIMER lane alone. Earlier revisions wrote the
+ * full word, which let a sibling's recompute drop the flag to zero mid-publish
+ * and reopened the torn-cred race the bracket was meant to close.
  *
- * Implemented as a statement-expression macro so the SC_FORWARD body
- * stays a single expression and the mutator runs after the attention
- * raise as part of normal C sequencing.
+ * Implemented as a statement-expression macro so the SC_FORWARD body stays a
+ * single expression and the mutator runs after the attention raise as part of
+ * normal C sequencing.
  */
 #define CRED_BRACKETED(g_, mutator_)                                       \
     __extension__({                                                        \
@@ -221,7 +222,8 @@ SC_FORWARD(sc_pwrite64,  sys_pwrite64(g, (int) x0, x1, x2, (int64_t) x3))
 SC_FORWARD(sc_ioctl,     sys_ioctl(g, (int) x0, x1, x2))
 SC_FORWARD(sc_preadv,    sys_preadv(g, (int) x0, x1, (int) x2, (int64_t) x3))
 SC_FORWARD(sc_pwritev,   sys_pwritev(g, (int) x0, x1, (int) x2, (int64_t) x3))
-/* aarch64 LP64 raw ABI: x3=pos_l (full 64-bit offset), x4=pos_h (0), x5=flags */
+/* aarch64 LP64 raw ABI: x3=pos_l (full 64-bit offset), x4=pos_h (0), x5=flags
+ */
 SC_FORWARD(sc_preadv2,   sys_preadv2(g, (int) x0, x1, (int) x2, (int64_t) x3, (int) x5))
 SC_FORWARD(sc_pwritev2,  sys_pwritev2(g, (int) x0, x1, (int) x2, (int64_t) x3, (int) x5))
 SC_FORWARD(sc_sendfile,  sys_sendfile(g, (int) x0, (int) x1, x2, x3))
@@ -248,18 +250,18 @@ SC_FORWARD(sc_linkat,      sys_linkat(g, (int) x0, x1, (int) x2, x3, (int) x4))
 SC_FORWARD(sc_mount,       sys_mount(g, x0, x1, x2, (unsigned long) x3, x4))
 SC_FORWARD(sc_fchmod,      sys_fchmod((int) x0, (uint32_t) x1))
 
-/* Linux fchmodat (SYS 53) is 3-arg: dirfd, path, mode.
- * The flags parameter was added in fchmodat2 (SYS 452).
- * x3 contains garbage from the caller's register state.
+/* Linux fchmodat (SYS 53) is 3-arg: dirfd, path, mode. The flags parameter was
+ * added in fchmodat2 (SYS 452). x3 contains garbage from the caller's register
+ * state.
  */
 SC_FORWARD(sc_fchmodat,    sys_fchmodat(g, (int) x0, x1, (uint32_t) x2, 0))
 SC_FORWARD(sc_fchmodat2,   sys_fchmodat(g, (int) x0, x1, (uint32_t) x2, (int) x3))
 SC_FORWARD(sc_fchownat,    sys_fchownat(g, (int) x0, x1, (uint32_t) x2, (uint32_t) x3, (int) x4))
 SC_FORWARD(sc_fchown,      sys_fchown((int) x0, (uint32_t) x1, (uint32_t) x2))
 SC_FORWARD(sc_utimensat,   sys_utimensat(g, (int) x0, x1, x2, (int) x3))
-/* Linux faccessat (SYS 48) is 3-arg: dirfd, path, mode.
- * The flags parameter was added in faccessat2 (SYS 439).
- * x3 contains garbage from the caller's register state.
+/* Linux faccessat (SYS 48) is 3-arg: dirfd, path, mode. The flags parameter was
+ * added in faccessat2 (SYS 439). x3 contains garbage from the caller's register
+ * state.
  */
 SC_FORWARD(sc_faccessat,   sys_faccessat(g, (int) x0, x1, (int) x2, 0))
 SC_FORWARD(sc_faccessat2,  sys_faccessat(g, (int) x0, x1, (int) x2, (int) x3))
@@ -366,7 +368,8 @@ SC_FORWARD(sc_sched_get_priority_min, sys_sched_get_priority_min((int) x0))
 SC_FORWARD(sc_sched_get_priority_max, sys_sched_get_priority_max((int) x0))
 SC_FORWARD(sc_sched_rr_get_interval,  sys_sched_rr_get_interval(g, (int) x0, x1))
 
-/* Process identity is modeled as one Linux process inside this elfuse instance. */
+/* Process identity is modeled as one Linux process inside this elfuse instance.
+ */
 SC_FORWARD(sc_exit,    SC_EXIT_SENTINEL | ((int) x0 & 0xFF))
 SC_FORWARD(sc_getpid,  proc_get_pid())
 SC_FORWARD(sc_getppid, proc_get_ppid())
@@ -634,8 +637,8 @@ static int64_t sc_sched_setaffinity(guest_t *g,
     return 0;
 }
 
-/* Callback for thread_for_each: force-exit each worker vCPU.
- * Skips the calling thread. Used by exit_group and membarrier.
+/* Callback for thread_for_each: force-exit each worker vCPU. Skips the calling
+ * thread. Used by exit_group and membarrier.
  */
 static void thread_force_exit_cb(thread_entry_t *t, void *ctx)
 {
@@ -910,8 +913,8 @@ static int64_t sc_rt_tgsigqueueinfo(guest_t *g,
             log_debug("rt_tgsigqueueinfo(tgid=%d, tid=%d, sig=%d, si_code=%d)",
                       tgid, tid, sig, info.si_code);
     }
-    /* Queued signals carry sigval in si_value for both standard and RT
-     * signals; standard signals still coalesce to one pending instance.
+    /* Queued signals carry sigval in si_value for both standard and RT signals;
+     * standard signals still coalesce to one pending instance.
      */
     if (uinfo_gva) {
         int32_t si_int = 0;
@@ -928,23 +931,22 @@ static int64_t sc_rt_tgsigqueueinfo(guest_t *g,
 
 /* rt_sigqueueinfo(pid, sig, info) -- POSIX sigqueue() in glibc/musl uses this.
  *
- * The first argument is documented as a process identifier, but real Linux
- * is permissive: kill_pid_info() looks pid up in the task table and routes
- * the signal through PIDTYPE_TGID, so a thread id that resolves to a task
- * succeeds and the signal lands in that task's thread-group pending set.
- * Foreign pids that match no task return -ESRCH.
+ * The first argument is documented as a process identifier, but real Linux is
+ * permissive: kill_pid_info() looks pid up in the task table and routes the
+ * signal through PIDTYPE_TGID, so a thread id that resolves to a task succeeds
+ * and the signal lands in that task's thread-group pending set. Foreign pids
+ * that match no task return -ESRCH.
  *
  * elfuse mirrors this by forwarding to sc_rt_tgsigqueueinfo with
  * tgid==tid==pid: the downstream thread_find() lookup accepts any guest
- * thread's tid (collapsing to the single guest tgid), the
- * proc_get_pid() fallback accepts the main thread's tid, and unknown
- * pids fall through to -ESRCH. signal_queue_info() then queues
- * process-wide so the routing semantics match Linux even though the
- * lookup goes through the per-thread table.
+ * thread's tid (collapsing to the single guest tgid), the proc_get_pid()
+ * fallback accepts the main thread's tid, and unknown pids fall through to
+ * -ESRCH. signal_queue_info() then queues process-wide so the routing semantics
+ * match Linux even though the lookup goes through the per-thread table.
  *
- * Earlier review feedback flagged "incorrectly accepting thread ids"
- * and recommended a strict pid==tgid gate; that gate was tried and
- * rejected because the qemu/Linux reference accepts the same tids.
+ * Earlier review feedback flagged "incorrectly accepting thread ids" and
+ * recommended a strict pid==tgid gate; that gate was tried and rejected because
+ * the qemu/Linux reference accepts the same tids.
  */
 static int64_t sc_rt_sigqueueinfo(guest_t *g,
                                   uint64_t x0,
@@ -1033,9 +1035,9 @@ static int64_t sc_prctl(guest_t *g,
          */
         return (x1 <= LINUX_CAP_LAST_CAP) ? 1 : -LINUX_EINVAL;
     case LINUX_PR_SET_VMA:
-        /* PR_SET_VMA with PR_SET_VMA_ANON_NAME: accept and ignore.
-         * Android and memory profiling tools use this to name anonymous mmap
-         * regions. The name is purely advisory.
+        /* PR_SET_VMA with PR_SET_VMA_ANON_NAME: accept and ignore. Android and
+         * memory profiling tools use this to name anonymous mmap regions. The
+         * name is purely advisory.
          */
         if ((int) x1 == LINUX_PR_SET_VMA_ANON_NAME)
             return 0;
@@ -1371,12 +1373,11 @@ static int64_t sc_memfd_create(guest_t *g,
     (RESOLVE_NO_XDEV | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | \
      RESOLVE_BENEATH | RESOLVE_IN_ROOT | RESOLVE_CACHED)
 
-/* Linux openat2() treats the user-supplied open_how size as an ABI
- * version. The first published layout has three u64 fields
- * (flags, mode, resolve), so v0 is 24 bytes. Bytes beyond that are
- * future extension fields: all-zero tails are ignored, nonzero tails
- * return E2BIG. Keep the same page-sized upper bound Linux applies
- * before checking the tail.
+/* Linux openat2() treats the user-supplied open_how size as an ABI version. The
+ * first published layout has three u64 fields (flags, mode, resolve), so v0 is
+ * 24 bytes. Bytes beyond that are future extension fields: all-zero tails are
+ * ignored, nonzero tails return E2BIG. Keep the same page-sized upper bound
+ * Linux applies before checking the tail.
  */
 #define OPEN_HOW_SIZE_VER0 24
 #define OPEN_HOW_MAX_SIZE 4096
@@ -1467,9 +1468,9 @@ static int64_t sc_openat2(guest_t *g,
     if ((resolve & RESOLVE_BENEATH) && (resolve & RESOLVE_IN_ROOT))
         return -LINUX_EINVAL;
 
-    /* RESOLVE_CACHED asks the kernel to satisfy lookup from cache only.
-     * elfuse has no dentry cache, so report EAGAIN and let the guest retry
-     * without this constraint.
+    /* RESOLVE_CACHED asks the kernel to satisfy lookup from cache only. elfuse
+     * has no dentry cache, so report EAGAIN and let the guest retry without
+     * this constraint.
      */
     if (resolve & RESOLVE_CACHED)
         return -LINUX_EAGAIN;
@@ -1550,25 +1551,24 @@ static int64_t sc_openat2(guest_t *g,
                 sys_openat_path(g, (int) x0, rooted, (int) oflags, (int) mode);
         } else {
             /* Reuse the precheck-validated path[] rather than re-reading from
-             * guest VA x1, so a sibling vCPU cannot swap the string between
-             * the constraint checks above and the actual open.
+             * guest VA x1, so a sibling vCPU cannot swap the string between the
+             * constraint checks above and the actual open.
              */
             opened =
                 sys_openat_path(g, (int) x0, path, (int) oflags, (int) mode);
         }
         if (opened >= 0 && (resolve & RESOLVE_NO_XDEV) &&
             no_xdev_start_class >= 0) {
-            /* The string walker cannot see symlinks that the kernel
-             * followed during the actual open (sysroot case-fold sidecar
-             * shadows hide the link node from the precheck's fstatat
-             * walk). Re-classify the opened fd's resolved host path; if
-             * it landed in a different mount class, drop the fd and
-             * return EXDEV. This also tightens the precheck-vs-open
-             * TOCTOU window since the post-check sees the exact path
-             * the kernel resolved.
+            /* The string walker cannot see symlinks that the kernel followed
+             * during the actual open (sysroot case-fold sidecar shadows hide
+             * the link node from the precheck's fstatat walk). Re-classify the
+             * opened fd's resolved host path; if it landed in a different mount
+             * class, drop the fd and return EXDEV. This also tightens the
+             * precheck-vs-open TOCTOU window since the post-check sees the
+             * exact path the kernel resolved.
              *
-             * Fail closed on post-check errors: a fd whose class cannot
-             * be derived must not silently bypass the NO_XDEV contract.
+             * Fail closed on post-check errors: a fd whose class cannot be
+             * derived must not silently bypass the NO_XDEV contract.
              */
             int crossed =
                 path_openat2_check_fd_xdev((int) opened, no_xdev_start_class);
@@ -1686,8 +1686,8 @@ static int64_t sc_execveat(guest_t *g,
     pthread_mutex_lock(&mmap_lock);
     int64_t r;
     if (need_resolve) {
-        /* Use the host-resolved path directly so execveat does not copy a
-         * host pathname back into guest memory.
+        /* Use the host-resolved path directly so execveat does not copy a host
+         * pathname back into guest memory.
          */
         r = sys_execve(vcpu, g, 0, x2, x3, verbose, resolved);
     } else {
@@ -1934,8 +1934,8 @@ int syscall_dispatch(hv_vcpu_t vcpu, guest_t *g, int *exit_code, bool verbose)
                 goto slow_path;
             }
 
-            /* read() writes into the buffer (needs W); write() reads from
-             * the buffer (needs R).
+            /* read() writes into the buffer (needs W); write() reads from the
+             * buffer (needs R).
              */
             int perms = (nr == SYS_read) ? MEM_PERM_W : MEM_PERM_R;
             uint64_t avail = 0;
@@ -1965,12 +1965,12 @@ slow_path:
 /*
  * Private embedder pseudo-syscall for translated guests.
  *
- * This is not a Linux syscall number. Translated x86_64 guests cannot
- * issue native AArch64 HVC instructions, so elfuse uses this private
- * build-selected syscall number as the translated counterpart to HVC 6.
+ * This is not a Linux syscall number. Translated x86_64 guests cannot issue
+ * native AArch64 HVC instructions, so elfuse uses this private build-selected
+ * syscall number as the translated counterpart to HVC 6.
  *
- * This path is gated on g->is_rosetta so native AArch64 guests cannot
- * reach the embedder hook through SVC.
+ * This path is gated on g->is_rosetta so native AArch64 guests cannot reach the
+ * embedder hook through SVC.
  *
  * Layout:
  *   x8 = ELFUSE_ROSETTA_EMBEDDER_SYSCALL
@@ -2026,10 +2026,10 @@ slow_path:
             result = 0; /* Not written back, but keep clean */
         } else if (result == SYSCALL_EXEC_HAPPENED) {
             if (hist_start_ns) {
-                /* Guard the subtraction: syscall_hist_now_ns returns 0
-                 * if clock_gettime fails. An unsigned 0 minus a non-zero
-                 * start would underflow to a huge value and pollute the
-                 * histogram with a bogus latency sample.
+                /* Guard the subtraction: syscall_hist_now_ns returns 0 if
+                 * clock_gettime fails. An unsigned 0 minus a non-zero start
+                 * would underflow to a huge value and pollute the histogram
+                 * with a bogus latency sample.
                  */
                 uint64_t hist_end_ns = syscall_hist_now_ns();
                 if (hist_end_ns >= hist_start_ns)
@@ -2073,8 +2073,8 @@ fast_done:
          * src/core/guest.h); the helper also handles the HVC #11 EL0-fault
          * lazy-materialize path so both call sites use the same wire codes.
          * Must call the emit helper because the shim reads X8 unconditionally
-         * on return; the pre-syscall X8 is the syscall number (always
-         * non-zero) and would spuriously TLBI on every return.
+         * on return; the pre-syscall X8 is the syscall number (always non-zero)
+         * and would spuriously TLBI on every return.
          *
          * cpu_tlbi_req is a per-vCPU TLS slot, so this read needs no lock and
          * cannot be drained or torn by another vCPU's epilogue.

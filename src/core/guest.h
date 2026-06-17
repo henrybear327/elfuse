@@ -774,16 +774,22 @@ static inline bool guest_addr_in_infra(const guest_t *g, uint64_t addr)
  */
 int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits);
 
-/* Initialize guest from a POSIX shared memory fd (CoW fork path). Maps shm_fd
- * MAP_PRIVATE (copy-on-write), creates HVF VM, maps to hypervisor. The child
- * gets an instant CoW snapshot of parent's guest memory without copying. shm_fd
- * is closed after mapping.
+/* Initialize guest from a shared memory fd (CoW fork path). Creates the HVF VM
+ * and maps the fd to the hypervisor. The child gets an instant CoW snapshot of
+ * the parent's guest memory without copying.
+ *
+ * retain_shared selects the mapping: when true, shm_fd is an independent APFS
+ * clone, so it is mapped MAP_SHARED and retained in g->shm_fd (guest_destroy
+ * closes it) so the child can fclonefileat it for nested CoW fork. When false,
+ * shm_fd may be the parent's live fd, so it is mapped MAP_PRIVATE and closed
+ * after mapping. This function takes ownership of shm_fd on every path.
  * Returns 0 on success, -1 on failure.
  */
 int guest_init_from_shm(guest_t *g,
                         int shm_fd,
                         uint64_t size,
-                        uint32_t ipa_bits);
+                        uint32_t ipa_bits,
+                        bool retain_shared);
 
 /* Tear down VM and free guest memory. */
 void guest_destroy(guest_t *g);

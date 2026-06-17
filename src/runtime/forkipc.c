@@ -48,6 +48,18 @@
 #include "debug/log.h"
 #include "debug/syscall-hist.h"
 
+/* Linux clone flags. Shared by the fork-child TID-sync emulation below and
+ * sys_clone further down.
+ */
+#define LINUX_CLONE_VM 0x00000100
+#define LINUX_CLONE_VFORK 0x00004000
+#define LINUX_CLONE_THREAD 0x00010000
+#define LINUX_CLONE_SETTLS 0x00080000
+#define LINUX_CLONE_PARENT_SETTID 0x00100000
+#define LINUX_CLONE_CHILD_CLEARTID 0x00200000
+#define LINUX_CLONE_CHILD_SETTID 0x01000000
+/* LINUX_SIGCHLD defined in syscall_signal.h (included above) */
+
 /* fork_child_main. */
 
 static int fork_child_vfork_notify_fd = -1;
@@ -166,7 +178,8 @@ int fork_child_main(int ipc_fd,
             close(ipc_fd);
             return 1;
         }
-        if (guest_init_from_shm(&g, shm_fd, hdr.guest_size, hdr.ipa_bits) < 0) {
+        if (guest_init_from_shm(&g, shm_fd, hdr.guest_size, hdr.ipa_bits,
+                                hdr.shm_is_clone != 0) < 0) {
             log_error("fork-child: guest_init_from_shm failed");
             close(ipc_fd);
             return 1;
@@ -363,6 +376,30 @@ int fork_child_main(int ipc_fd,
      */
     thread_register_main(vcpu, vexit, hdr.child_pid, regs.sp_el1);
 
+    /* Emulate CLONE_CHILD_SETTID for the fork child. glibc's fork wrapper
+     * passes CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID so the child's TCB
+     * caches its own TID; without the SETTID write the child keeps the parent's
+     * cached TID and modern glibc trips stack-canary / TLS checks ("stack
+     * smashing detected"). The write goes through guest memory, valid for both
+     * the CoW and region-copy paths. A faulting ctid_gva is the guest's own bad
+     * pointer: warn and continue, matching how the kernel ignores a
+     * child_tidptr fault.
+     *
+     * CLONE_CHILD_CLEARTID is deliberately not honored here. The clear-and-wake
+     * on exit only matters to an in-process joiner waiting on the futex (that
+     * is how the worker-thread exit path serves pthread_join). A fork child is
+     * a separate process with its own address space, so its ctid lives in
+     * memory no other process can observe -- the parent reaps it via
+     * wait4/SIGCHLD, not a cross-process futex. Registering clear_child_tid
+     * would be inert.
+     */
+    if (hdr.clone_flags & LINUX_CLONE_CHILD_SETTID) {
+        int32_t tid32 = (int32_t) hdr.child_pid;
+        if (guest_write_small(&g, hdr.ctid_gva, &tid32, sizeof(tid32)) < 0)
+            log_warn("fork-child: CHILD_SETTID write to 0x%llx failed",
+                     (unsigned long long) hdr.ctid_gva);
+    }
+
     /* Re-publish identity into the child's shim-globals cache: the CoW / region
      * copy inherits the parent's pid/uid values, and the shim's identity fast
      * path would otherwise return the parent's pid to the child. Identity is
@@ -419,16 +456,6 @@ int fork_child_main(int ipc_fd,
 }
 
 /* sys_clone. */
-
-/* Linux clone flags */
-#define LINUX_CLONE_VM 0x00000100
-#define LINUX_CLONE_VFORK 0x00004000
-#define LINUX_CLONE_THREAD 0x00010000
-#define LINUX_CLONE_SETTLS 0x00080000
-#define LINUX_CLONE_PARENT_SETTID 0x00100000
-#define LINUX_CLONE_CHILD_CLEARTID 0x00200000
-#define LINUX_CLONE_CHILD_SETTID 0x01000000
-/* LINUX_SIGCHLD defined in syscall_signal.h (included above) */
 
 /* Namespace flags. elfuse implements no namespace isolation. Both sys_clone and
  * sys_clone3 reject them.
@@ -1528,6 +1555,10 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         .rosetta_entry = g->rosetta_entry,
         .kbuf_gpa = g->kbuf_gpa,
         .ttbr1 = g->ttbr1,
+        .clone_flags =
+            flags & (LINUX_CLONE_CHILD_SETTID | LINUX_CLONE_CHILD_CLEARTID),
+        .ctid_gva = ctid_gva,
+        .shm_is_clone = (snapshot_shm_fd >= 0) ? 1 : 0,
     };
     if (fork_ipc_write_all(ipc_sock, &hdr, sizeof(hdr)) < 0) {
         log_error("clone: failed to send header");

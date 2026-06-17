@@ -60,6 +60,22 @@ typedef struct {
     uint64_t rosetta_entry;
     uint64_t kbuf_gpa;
     uint64_t ttbr1;
+    /* Clone TID-sync state for the fork path. glibc's fork wrapper passes
+     * CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID so the child writes its new TID
+     * into the TCB and clears it on exit. The posix_spawn child has no access
+     * to the original clone() arguments, so the parent forwards them here:
+     * clone_flags carries the CHILD_SETTID / CHILD_CLEARTID bits and ctid_gva
+     * the guest address. Zero for callers (e.g. raw fork(2)) that pass neither.
+     */
+    uint64_t clone_flags;
+    uint64_t ctid_gva;
+    /* Nonzero when the shm fd sent below is an independent fclonefileat clone
+     * (not the parent's live fd). Only then may the child map it MAP_SHARED and
+     * retain it for its own nested CoW fork; the live-fd fallback must stay
+     * MAP_PRIVATE so the child does not share writes with the parent.
+     */
+    uint32_t shm_is_clone;
+    uint32_t _pad2;
 } ipc_header_t;
 
 typedef struct {

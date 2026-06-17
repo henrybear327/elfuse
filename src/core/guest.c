@@ -441,12 +441,13 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
 int guest_init_from_shm(guest_t *g,
                         int shm_fd,
                         uint64_t size,
-                        uint32_t ipa_bits)
+                        uint32_t ipa_bits,
+                        bool retain_shared)
 {
     uint64_t t0;
 
     memset(g, 0, sizeof(*g));
-    g->shm_fd = -1; /* Child does not own the shm */
+    g->shm_fd = -1; /* Child does not own the shm unless retain_shared */
     g->ipa_base = GUEST_IPA_BASE;
     g->elf_load_min = ELF_DEFAULT_BASE;
     g->brk_base = BRK_BASE_DEFAULT;
@@ -471,13 +472,21 @@ int guest_init_from_shm(guest_t *g,
     }
     g->pt_pool_next = g->pt_pool_base;
 
-    /* Map the shm fd MAP_PRIVATE: copy-on-write semantics. Reads see the
-     * parent's frozen snapshot; writes are private to this process. macOS CoW
-     * is page-granular: only modified pages are duplicated.
+    /* Two mapping modes:
+     *   retain_shared: shm_fd is an independent APFS clone of the parent's
+     *     memory (already isolated from the parent). Map MAP_SHARED so the
+     *     child's writes land in the clone file, then keep the fd so the child
+     *     can fclonefileat it for its own nested CoW fork. guest_destroy closes
+     *     it.
+     *   otherwise: shm_fd may be the parent's live fd (clonefile fallback). Map
+     *     MAP_PRIVATE so writes stay private to this process, then close the
+     * fd. macOS CoW is page-granular either way: only modified pages are
+     * duplicated.
      */
+    int map_flags = retain_shared ? MAP_SHARED : MAP_PRIVATE;
     t0 = startup_trace_now_ns();
     g->host_base =
-        mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, shm_fd, 0);
+        mmap(NULL, size, PROT_READ | PROT_WRITE, map_flags, shm_fd, 0);
     startup_trace_step("shm_mmap", t0);
     if (g->host_base == MAP_FAILED) {
         perror("guest: mmap shm");
@@ -486,8 +495,10 @@ int guest_init_from_shm(guest_t *g,
         return -1;
     }
 
-    /* Close the shm fd; the mapping keeps the pages alive */
-    close(shm_fd);
+    if (retain_shared)
+        g->shm_fd = shm_fd; /* Child owns the clone; guest_destroy closes it */
+    else
+        close(shm_fd); /* MAP_PRIVATE mapping keeps the pages alive */
 
     /* Create HVF VM with the same IPA width as the parent */
     hv_return_t ret = HV_ERROR;
@@ -506,6 +517,10 @@ int guest_init_from_shm(guest_t *g,
         log_error("guest: hv_vm_create (shm) failed: %d", (int) ret);
         munmap(g->host_base, size);
         g->host_base = NULL;
+        if (g->shm_fd >= 0) {
+            close(g->shm_fd);
+            g->shm_fd = -1;
+        }
         return -1;
     }
 
@@ -518,6 +533,10 @@ int guest_init_from_shm(guest_t *g,
         hv_vm_destroy();
         munmap(g->host_base, size);
         g->host_base = NULL;
+        if (g->shm_fd >= 0) {
+            close(g->shm_fd);
+            g->shm_fd = -1;
+        }
         return -1;
     }
 

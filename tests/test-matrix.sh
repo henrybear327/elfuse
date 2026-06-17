@@ -453,6 +453,7 @@ run_unit_tests()
 
     printf "\nProcess tests\n"
     test_check "$runner" "test-fork" "PASS" "$bindir/test-fork"
+    test_check "$runner" "test-clone-childtid" "PASS" "$bindir/test-clone-childtid"
     test_check "$runner" "test-exec" "exec-works" "$bindir/test-exec" "$bindir/echo-test" exec-works
     test_check "$runner" "test-fork-exec" "PASS" "$bindir/test-fork-exec" "$bindir/echo-test"
     test_check "$runner" "test-cloexec" "PASS" "$bindir/test-cloexec"

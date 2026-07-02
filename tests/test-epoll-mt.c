@@ -1,4 +1,5 @@
-/* Multi-threaded epoll registration regression test
+/*
+ * Multi-threaded epoll registration regression test
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -53,7 +54,7 @@ static int sibling_fn(void *arg)
     return 0;
 }
 
-/* Register host_fd for EPOLLIN on epfd, make it readable via make_ready(), and
+/* Register fd for EPOLLIN on epfd, make it readable via make_ready(), and
  * assert epoll_pwait() observes the edge within the timeout.
  *
  * Returns 1 on success.

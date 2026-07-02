@@ -1,4 +1,5 @@
-/* Verify SIMD/FP state preservation across clone(CLONE_THREAD)
+/*
+ * Verify SIMD/FP state preservation across clone(CLONE_THREAD)
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

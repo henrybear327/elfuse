@@ -1,4 +1,5 @@
-/* test-shim-urandom-wrap.c -- regression for wrapped shim urandom copies.
+/*
+ * test-shim-urandom-wrap.c -- regression for wrapped shim urandom copies.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

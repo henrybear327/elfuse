@@ -1,4 +1,5 @@
-/* Signal delivery
+/*
+ * Signal delivery
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -98,8 +99,7 @@ static guest_itimer_t guest_itimer;      /* ITIMER_REAL -> SIGALRM */
 static guest_itimer_t guest_itimer_virt; /* ITIMER_VIRTUAL -> SIGVTALRM */
 static guest_itimer_t guest_itimer_prof; /* ITIMER_PROF -> SIGPROF */
 
-/* Default disposition table. */
-/* Index 0 unused (signals are 1-based). */
+/* Default disposition table. Index 0 unused (signals are 1-based). */
 static const sig_disposition_t default_dispositions[LINUX_NSIG + 1] = {
     [0] = SIG_DISP_IGN, /* Invalid signal 0 */
     [LINUX_SIGHUP] = SIG_DISP_TERM,
@@ -1266,7 +1266,7 @@ int64_t signal_sigaltstack(guest_t *g, uint64_t ss_gva, uint64_t old_ss_gva)
  *   1. FPSIMD context (always present)
  *   2. ESR context (present for synchronous faults: BRK, segfault, etc.)
  *   3. Terminator (magic=0, size=0)
- * The esr parameter is the raw ESR_EL1 value; if non-zero, the ESR context
+ * The @esr parameter is the raw ESR_EL1 value; if non-zero, the ESR context
  * block is included.
  */
 static void build_sigcontext_reserved(uint8_t *reserved,
@@ -1563,10 +1563,10 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
     /* SPSR_EL1: EL0t (user mode) */
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, 0);
 
-    /* EL0-preemption delivery: the resume runs from HV_REG_PC, not via an
-     * ERET that consumes ELR_EL1, so redirect the live PC/PSTATE directly.
-     * The ELR_EL1/SPSR_EL1 writes above still cover the rt_sigreturn path,
-     * which unwinds back to EL0 through the shim ERET.
+    /* EL0-preemption delivery: the resume runs from HV_REG_PC, not via an ERET
+     * that consumes ELR_EL1, so redirect the live PC/PSTATE directly. The
+     * ELR_EL1/SPSR_EL1 writes above still cover the rt_sigreturn path, which
+     * unwinds back to EL0 through the shim ERET.
      */
     if (el0_preempt) {
         hv_vcpu_set_reg(vcpu, HV_REG_PC, act->sa_handler);
@@ -1613,9 +1613,9 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
     /* If delivery happens while returning from the syscall HVC path, the shim
      * still has the interrupted syscall frame on its EL1 stack. Tell it to drop
      * that frame so the handler PC/SP/LR/args installed above are not
-     * overwritten before ERET. Fault/BRK delivery paths ignore this marker.
-     * The EL0-preemption path resumes straight into the handler at EL0 with
-     * no shim frame to drop, so the marker is neither needed nor consulted.
+     * overwritten before ERET. Fault/BRK delivery paths ignore this marker. The
+     * EL0-preemption path resumes straight into the handler at EL0 with no shim
+     * frame to drop, so the marker is neither needed nor consulted.
      */
     if (!el0_preempt)
         hv_vcpu_set_reg(vcpu, HV_REG_X8, 2);

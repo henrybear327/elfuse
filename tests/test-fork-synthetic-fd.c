@@ -1,4 +1,5 @@
-/* test-fork-synthetic-fd.c -- fork inheritance contract for synthetic fds
+/*
+ * test-fork-synthetic-fd.c -- fork inheritance contract for synthetic fds
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

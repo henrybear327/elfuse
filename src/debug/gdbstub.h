@@ -1,4 +1,5 @@
-/* GDB Remote Serial Protocol stub for guest debugging
+/*
+ * GDB Remote Serial Protocol stub for guest debugging
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -53,7 +54,9 @@ int gdb_stub_is_active(void);
  * vCPU. The vCPU is already stopped (hv_vcpu_run returned). This blocks the
  * calling thread until GDB resumes it.
  *
- * ec: exception class from syndrome (0x30=hw bp, 0x32=step, 0x34=wp)
+ * @stop_reason: GDB_STOP_* cause code (1=breakpoint, 2=watchpoint, 3=step,
+ *   4=signal, 5=entry).
+ * @stop_addr: faulting breakpoint/watchpoint address (0 when none applies).
  * Returns: 0 to continue, 1 to single-step next instruction.
  */
 int gdb_stub_handle_stop(int stop_reason, uint64_t stop_addr);

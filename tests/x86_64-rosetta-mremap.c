@@ -1,4 +1,5 @@
-/* x86_64-rosetta-mremap.c - mremap() on high-VA source regions
+/*
+ * x86_64-rosetta-mremap.c - mremap() on high-VA source regions
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -39,7 +40,8 @@ static int fails;
 
 /* The primary IPA window is a handful of GiB; Rosetta places guest mappings at
  * their native x86_64 VAs far above it. Anything past 4 GiB is the high-VA
- * window that exercises the regression. */
+ * window that exercises the regression.
+ */
 static int is_high_va(const void *p)
 {
     return (uint64_t) (uintptr_t) p > 0x100000000ULL;
@@ -105,7 +107,8 @@ static void test_mremap_maymove_grow(void)
 }
 
 /* Shrinking a high-VA region in place keeps its base address and preserves the
- * retained head; only the trimmed tail is released. */
+ * retained head; only the trimmed tail is released.
+ */
 static void test_mremap_shrink(void)
 {
     const char *tag = "mremap-shrink";

@@ -1,4 +1,5 @@
-/* x86_64-glibc-gdtls-lib.c - Shared object with a general-dynamic thread-local
+/*
+ * x86_64-glibc-gdtls-lib.c - Shared object with a general-dynamic thread-local
  * variable, paired with x86_64-glibc-gdtls.c.
  *
  * Copyright 2026 elfuse contributors

@@ -1,4 +1,5 @@
-/* test-shim-identity-attention.c -- SIGALRM survives fast paths.
+/*
+ * test-shim-identity-attention.c -- SIGALRM survives fast paths.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

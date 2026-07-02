@@ -1,4 +1,5 @@
-/* x86_64-glibc-pthread-tls.c - pthread per-thread TLS probe
+/*
+ * x86_64-glibc-pthread-tls.c - pthread per-thread TLS probe
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

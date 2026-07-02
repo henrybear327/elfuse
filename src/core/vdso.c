@@ -1,4 +1,5 @@
-/* vDSO ELF image
+/*
+ * vDSO ELF image
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -22,7 +23,7 @@
  * below) keeps concurrent publishers and readers race-free.
  *
  * Anchor-age cap: the time trampolines refuse to interpolate once (cntvct -
- * anchor_cntvct) exceeds 2**31 cycles (~89 s at 24 MHz). That forces an SVC
+ * anchor_cntvct) exceeds 2**22 cycles (~0.175 s at 24 MHz). That forces an SVC
  * fallback the host can use to re-anchor against fresh macOS clocks, bounding
  * any drift relative to a fresh REALTIME SVC after an NTP step or long sleep.
  * The host SVC path also computes a predicted REALTIME from the anchor and
@@ -687,13 +688,13 @@ static void emit_clock_gettime_trampoline(uint32_t *code,
     code[20] = enc_lsr_x_imm(7, 6, VDSO_ANCHOR_AGE_SHIFT);
     /* lsr x7, x6, #ANCHOR_AGE_SHIFT */
     code[21] = enc_cbnz_x(7, svc_fallback_off - 0x54);
-    /* cbnz x7, svc_fallback (age cap) */
-    /* delta_ns = (delta * 699050666) >> 24. 699050666 is floor((1e9 << 24) /
-     * 24e6), the mult+shift form Linux's arm64 vDSO uses for CNTFRQ = 24 MHz;
-     * an LSR (~1 cycle) in place of any 64-bit UDIV (~10-22 cycles on Apple
-     * Silicon). Rounding down keeps the trampoline tick slightly slower than
-     * the host so the next reseed never steps time backwards. The age cap
-     * bounds delta < 2^22, so delta * 699050666 < 2^52 -- no overflow.
+    /* cbnz x7, svc_fallback (age cap) delta_ns = (delta * 699050666) >> 24.
+     * 699050666 is floor((1e9 << 24) / 24e6), the mult+shift form Linux's arm64
+     * vDSO uses for CNTFRQ = 24 MHz; an LSR (~1 cycle) in place of any 64-bit
+     * UDIV (~10-22 cycles on Apple Silicon). Rounding down keeps the trampoline
+     * tick slightly slower than the host so the next reseed never steps time
+     * backwards. The age cap bounds delta < 2^22, so delta * 699050666 < 2^52
+     * -- no overflow.
      */
     code[22] = enc_movz_x(7, 0xAAAA);
     code[23] = enc_movk_x_lsl16(7, 0x29AA); /* w7 = 699050666     */

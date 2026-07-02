@@ -1,4 +1,5 @@
-/* Guest memory management
+/*
+ * Guest memory management
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -144,8 +145,7 @@
 #define KBUF_SIZE 0x10000000ULL /* 256 MiB */
 #define KBUF_USER_VA (KBUF_VA_BASE & 0x0000FFFFFFFFFFFFULL) /* TTBR0 mirror */
 
-/* Page table attributes. */
-/* Memory region permission flags */
+/* Page table attributes. Memory region permission flags */
 #define MEM_PERM_R (1 << 0)
 #define MEM_PERM_W (1 << 1)
 #define MEM_PERM_X (1 << 2)
@@ -522,8 +522,7 @@ typedef struct {
      */
     _Atomic uint64_t pt_gen;
 
-    /*
-     * Optional HVC 6 embedder extension hook.
+    /* Optional HVC 6 embedder extension hook.
      *
      * Native AArch64 guests reach this through HVC 6. When the build enables
      * ELFUSE_NR_EMBEDDER_HVC6, translated Rosetta guests may reach the same

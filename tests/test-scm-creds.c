@@ -1,4 +1,5 @@
-/* Test SCM_CREDENTIALS / SO_PASSCRED over AF_UNIX sockets
+/*
+ * Test SCM_CREDENTIALS / SO_PASSCRED over AF_UNIX sockets
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

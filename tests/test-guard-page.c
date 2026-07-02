@@ -1,10 +1,11 @@
-/* Stack guard page and mmap edge case tests
+/*
+ * mmap PROT_NONE and mmap edge case tests
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Tests: stack guard page (PROT_NONE), large mmap allocations,
+ * Tests: mmap PROT_NONE, large mmap allocations,
  *        MAP_FIXED overlap, mprotect transitions.
  *
  * Syscalls exercised: mmap(222), munmap(215), mprotect(226)

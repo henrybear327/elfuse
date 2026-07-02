@@ -1,4 +1,5 @@
-/* EL1 shim globals -- host publisher.
+/*
+ * EL1 shim globals -- host publisher.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -28,17 +29,16 @@
 #include "syscall/signal.h"
 
 #ifndef HV_SYS_REG_TPIDR_EL1
-/* Older SDKs (e.g., the Nix-pinned apple-sdk-14.4) may lack the
- * enumerator. The encoding is stable: op0=3, op1=0, CRn=13, CRm=0,
- * op2=4 -> 0xc684. Mirrors the existing ACTLR_EL1 workaround in
- * src/syscall/syscall.c.
+/* Older SDKs (e.g., the Nix-pinned apple-sdk-14.4) may lack the enumerator. The
+ * encoding is stable: op0=3, op1=0, CRn=13, CRm=0, op2=4 -> 0xc684. Mirrors the
+ * existing ACTLR_EL1 workaround in src/syscall/syscall.c.
  */
 #define HV_SYS_REG_TPIDR_EL1 ((hv_sys_reg_t) 0xc684)
 #endif
 
 #ifndef HV_SYS_REG_CONTEXTIDR_EL1
-/* op0=3, op1=0, CRn=13, CRm=0, op2=1 -> 0xc681. Same SDK-fallback
- * pattern as TPIDR_EL1.
+/* op0=3, op1=0, CRn=13, CRm=0, op2=1 -> 0xc681. Same SDK-fallback pattern as
+ * TPIDR_EL1.
  */
 #define HV_SYS_REG_CONTEXTIDR_EL1 ((hv_sys_reg_t) 0xc681)
 #endif

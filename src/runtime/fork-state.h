@@ -1,4 +1,5 @@
-/* Fork IPC state serialization
+/*
+ * Fork IPC state serialization
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

@@ -1,17 +1,18 @@
-/* Read-only MAP_SHARED file overlay tests
+/*
+ * Read-only MAP_SHARED file overlay tests
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * Regression lock-in for the file-overlay path in src/syscall/mem.c.
  *
- * A MAP_SHARED, PROT_READ mapping of a file opened O_RDONLY is extremely
- * common -- the JVM maps its ~135 MiB lib/modules image this way, and so do
- * loaders that map read-only data segments. The original overlay code always
- * mmap'd the host page PROT_READ|PROT_WRITE and mapped the HVF segment RWX,
- * which fails twice for a read-only fd: the host mmap returns EACCES (writable
- * mapping of an O_RDONLY fd) and, even forced to PROT_READ, hv_vm_map then
- * fails because a MAP_SHARED-of-O_RDONLY region has macOS max_protection=READ.
+ * A MAP_SHARED, PROT_READ mapping of a file opened O_RDONLY is extremely common
+ * -- the JVM maps its ~135 MiB lib/modules image this way, and so do loaders
+ * that map read-only data segments. The original overlay code always mmap'd the
+ * host page PROT_READ|PROT_WRITE and mapped the HVF segment RWX, which fails
+ * twice for a read-only fd: the host mmap returns EACCES (writable mapping of
+ * an O_RDONLY fd) and, even forced to PROT_READ, hv_vm_map then fails because a
+ * MAP_SHARED-of-O_RDONLY region has macOS max_protection=READ.
  *
  * Syscalls exercised: openat, ftruncate/pwrite, mmap, munmap, pread64
  */
@@ -29,10 +30,11 @@
 int passes = 0, fails = 0;
 
 /* Several guest pages so the overlay spans more than one host page and the
- * containing 2 MiB segment is split and remapped over a realistic range.
- * 768 pages (3 MiB) crosses a 2 MiB boundary so hvf_segment_split's
- * multi-block path is exercised, matching how JVM's ~135 MiB lib/modules
- * image crosses many segments. */
+ * containing 2 MiB segment is split and remapped over a realistic range. 768
+ * pages (3 MiB) crosses a 2 MiB boundary so hvf_segment_split's multi-block
+ * path is exercised, matching how JVM's ~135 MiB lib/modules image crosses many
+ * segments.
+ */
 #define NPAGES 768
 #define PGSZ ((size_t) 4096)
 #define FILE_LEN (NPAGES * PGSZ)
@@ -43,8 +45,11 @@ static unsigned char page_marker(int page)
     return (unsigned char) (0x40 + (page % 64));
 }
 
-/* Create a file seeded with a per-page marker pattern, then close it. Returns
- * the path in `out` (caller-sized buffer). Returns 0 on success, -1 on error.
+/* Create a file seeded with a per-page marker pattern, then close it.
+ *
+ * Returns the path in @out (caller-sized buffer).
+ *
+ * Returns 0 on success, -1 on error.
  */
 static int make_seed_file(char *out, size_t out_sz)
 {
@@ -67,7 +72,8 @@ static int make_seed_file(char *out, size_t out_sz)
 }
 
 /* The headline case: O_RDONLY fd + MAP_SHARED + PROT_READ must map and expose
- * the full file contents. This is exactly the JVM lib/modules pattern. */
+ * the full file contents. This is exactly the JVM lib/modules pattern.
+ */
 static void test_rdonly_shared_read(const char *path)
 {
     TEST("MAP_SHARED PROT_READ on O_RDONLY fd maps");
@@ -104,8 +110,9 @@ static void test_rdonly_shared_read(const char *path)
     close(fd);
 }
 
-/* The same content must be readable back-to-back through a fresh mapping, and
- * a second concurrent read-only mapping of the same fd must also work. */
+/* The same content must be readable back-to-back through a fresh mapping, and a
+ * second concurrent read-only mapping of the same fd must also work.
+ */
 static void test_rdonly_shared_second_mapping(const char *path)
 {
     TEST("second MAP_SHARED PROT_READ mapping maps");
@@ -167,7 +174,8 @@ static void test_rdonly_shared_write_rejected(const char *path)
 
 /* A read-only mapping taken from a writable (O_RDWR) fd must also work; this
  * exercises the MAP_SHARED-PROT_READ-on-writable-fd branch (max_protection RWX
- * so the segment maps without dropping to MAP_PRIVATE). */
+ * so the segment maps without dropping to MAP_PRIVATE).
+ */
 static void test_rdwr_fd_readonly_mapping(const char *path)
 {
     TEST("MAP_SHARED PROT_READ on O_RDWR fd maps");
@@ -197,7 +205,8 @@ static void test_rdwr_fd_readonly_mapping(const char *path)
 
 /* A read-only mapping's max_protection must stay READ: mprotect must not be
  * able to upgrade it to PROT_WRITE after the fact. Linux remembers max_prot
- * from the O_RDONLY fd at mmap time and rejects the upgrade with EACCES. */
+ * from the O_RDONLY fd at mmap time and rejects the upgrade with EACCES.
+ */
 static void test_rdonly_mprotect_write_rejected(const char *path)
 {
     TEST("mprotect PROT_WRITE on read-only MAP_SHARED mapping is EACCES");

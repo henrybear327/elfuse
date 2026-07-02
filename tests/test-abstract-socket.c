@@ -1,4 +1,5 @@
-/* Test abstract Unix socket namespace emulation
+/*
+ * Test abstract Unix socket namespace emulation
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

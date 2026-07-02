@@ -1,4 +1,5 @@
-/* Validate multi-vCPU support in Apple Hypervisor.framework
+/*
+ * Validate multi-vCPU support in Apple Hypervisor.framework
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -57,7 +58,7 @@
 #define PAGE_SIZE_4K 4096ULL
 #define BLOCK_2MIB (2ULL * 1024 * 1024)
 
-/* Memory layout (16MiB total, much smaller than elfuse's 32GiB) */
+/* Memory layout (16MiB total, much smaller than elfuse's 64GiB+) */
 
 #define GUEST_SIZE (16ULL * 1024 * 1024)
 
@@ -70,7 +71,7 @@
 #define STACK_A_BASE 0x00A00000ULL   /* EL0 stack A (RW) */
 #define STACK_B_BASE 0x00C00000ULL   /* EL0 stack B (RW) */
 
-/* vCPU-A and vCPU-B SP_EL1 (top of respective 512KiB regions within shim data)
+/* vCPU-A and vCPU-B SP_EL1 (top of respective 1 MiB regions within shim data)
  */
 #define SP_EL1_A (SHIM_DATA_BASE + BLOCK_2MIB)     /* 0x400000 */
 #define SP_EL1_B (SHIM_DATA_BASE + BLOCK_2MIB / 2) /* 0x300000 */
@@ -173,8 +174,9 @@ static uint64_t build_page_tables(vm_state_t *vm, int include_tlbi_region)
 
     uint64_t *l2 = (uint64_t *) ((uint8_t *) vm->host_base + l2_off);
 
-    /* Map 2MiB blocks. L2 index = addr / 2MiB. */
-    /* Shim code (RX) at 0x100000 -> L2[0] (shares 0x0-0x1FFFFF) */
+    /* Map 2MiB blocks. L2 index = addr / 2MiB. Shim code (RX) at 0x100000 ->
+     * L2[0] (shares 0x0-0x1FFFFF)
+     */
     l2[0] = make_block(0x000000, PERM_RX);
 
     /* Shim data/stacks (RW) at 0x200000 -> L2[1] */

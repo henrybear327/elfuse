@@ -1,4 +1,5 @@
-/* Exercise the AF_NETLINK getsockname/sendto/recvfrom dispatch paths.
+/*
+ * Exercise the AF_NETLINK getsockname/sendto/recvfrom dispatch paths.
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -6,11 +7,10 @@
  *
  * Regression guard for the netlink socket emulation. Before getsockname,
  * sendto, and recvfrom were routed to the netlink handlers, these calls fell
- * through to the host socket syscalls on the underlying pipe fd and failed
- * with ENOTSOCK (errno 88), which in turn broke glibc getifaddrs(). The test
- * drives each of the three syscalls directly against a NETLINK_ROUTE socket
- * and then validates the end-to-end getifaddrs() path that originally
- * regressed.
+ * through to the host socket syscalls on the underlying pipe fd and failed with
+ * ENOTSOCK (errno 88), which in turn broke glibc getifaddrs(). The test drives
+ * each of the three syscalls directly against a NETLINK_ROUTE socket and then
+ * validates the end-to-end getifaddrs() path that originally regressed.
  *
  * The assertions hold for both the elfuse emulation and a real Linux kernel
  * (the test matrix runs the same binary under qemu-aarch64), so only

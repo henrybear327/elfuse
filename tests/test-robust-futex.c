@@ -1,4 +1,5 @@
-/* Robust futex owner-died cleanup tests
+/*
+ * Robust futex owner-died cleanup tests
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -83,13 +84,12 @@ int main(void)
     memset(&rhead, 0, sizeof(rhead));
     memset(&entry1, 0, sizeof(entry1));
 
-    /* Clone a thread: CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
-     * CLONE_CHILD_CLEARTID. CLONE_THREAD (0x00010000) is the same bit as
-     * CLONE_VM so it's implicitly set.
+    /* Clone a thread: CLONE_THREAD | CLONE_VM | CLONE_FS | CLONE_SIGHAND |
+     * CLONE_CHILD_CLEARTID. CLONE_THREAD implies CLONE_VM and CLONE_SIGHAND.
      */
-    long flags = 0x00010000    /* CLONE_VM (= CLONE_THREAD) */
-                 | 0x00000100  /* CLONE_FS */
-                 | 0x00000200  /* CLONE_FILES */
+    long flags = 0x00010000    /* CLONE_THREAD */
+                 | 0x00000100  /* CLONE_VM */
+                 | 0x00000200  /* CLONE_FS */
                  | 0x00000800  /* CLONE_SIGHAND */
                  | 0x00200000; /* CLONE_CHILD_CLEARTID */
 

@@ -1,4 +1,5 @@
-/* Test execve() syscall
+/*
+ * Test execve() syscall
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -22,8 +23,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* argv[1] = path to binary to exec argv[2..] = arguments to pass to it
-     */
+    /* argv[1] = path to binary to exec argv[2..] = arguments to pass to it */
     char *new_argv[64];
     int n = 0;
     for (int i = 1; i < argc && n < 63; i++) {

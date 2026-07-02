@@ -1,14 +1,15 @@
-/* x86_64-rosetta-madvise.c - madvise(MADV_DONTNEED) on high-VA regions
+/*
+ * x86_64-rosetta-madvise.c - madvise(MADV_DONTNEED) on high-VA regions
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Regression for elfuse sys_madvise rejecting high-VA mmap regions with
- * ENOMEM. Under Rosetta, anonymous mmap(NULL) lands in the high-VA window
- * (the region's gpa_base diverges from its VA start), where sys_madvise was
- * primary-window-only: it computed off = addr - ipa_base and rejected any
- * range past guest_size with ENOMEM, even though sys_mprotect already handles
- * the same high-VA range. V8's page allocator decommits guard/code pages with
+ * Regression for elfuse sys_madvise rejecting high-VA mmap regions with ENOMEM.
+ * Under Rosetta, anonymous mmap(NULL) lands in the high-VA window (the region's
+ * gpa_base diverges from its VA start), where sys_madvise was
+ * primary-window-only: it computed off = addr - ipa_base and rejected any range
+ * past guest_size with ENOMEM, even though sys_mprotect already handles the
+ * same high-VA range. V8's page allocator decommits guard/code pages with
  * mprotect(PROT_NONE)+madvise(MADV_DONTNEED) and CHECK_EQ(0, ret)s the madvise
  * return, so the spurious ENOMEM aborted x86_64 Node.js the moment its JIT
  * initialized.
@@ -38,7 +39,8 @@ static int fails;
 
 /* The primary IPA window is a handful of GiB; Rosetta places guest mappings at
  * their native x86_64 VAs far above it. Anything past 4 GiB is the high-VA
- * window that exercises the regression. */
+ * window that exercises the regression.
+ */
 static int is_high_va(const void *p)
 {
     return (uint64_t) (uintptr_t) p > 0x100000000ULL;
@@ -82,7 +84,8 @@ static void test_dontneed_rw(void)
 
 /* The exact V8 decommit pattern: a guard page is set PROT_NONE and then
  * MADV_DONTNEED'd. Linux returns 0 for a mapped-but-PROT_NONE page; after
- * re-granting RW the page reads back as zero. */
+ * re-granting RW the page reads back as zero.
+ */
 static void test_dontneed_protnone(void)
 {
     size_t sz = 2u * PAGE;

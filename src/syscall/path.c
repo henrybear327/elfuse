@@ -1,4 +1,5 @@
-/* Shared guest/host path handling
+/*
+ * Shared guest/host path handling
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

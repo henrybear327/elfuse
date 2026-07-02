@@ -1,15 +1,16 @@
-/* Host-literal fallback regression tests for case-insensitive sysroots
+/*
+ * Host-literal fallback regression tests for case-insensitive sysroots
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * proc_resolve_sysroot_path_flags resolves absolute guest paths inside the
  * sysroot when they exist there and otherwise falls back to the literal host
- * path so guests can reach host resources (mktemp dirs, /etc/resolv.conf).
- * On a case-insensitive sysroot the sidecar walk used to veto that fallback:
- * it anchored every absolute path at the sysroot root and returned ENOENT as
- * soon as a component was missing there, which broke every coreutils
- * invocation against a host mktemp directory (test-matrix "musl dyn" suite).
+ * path so guests can reach host resources (mktemp dirs, /etc/resolv.conf). On a
+ * case-insensitive sysroot the sidecar walk used to veto that fallback: it
+ * anchored every absolute path at the sysroot root and returned ENOENT as soon
+ * as a component was missing there, which broke every coreutils invocation
+ * against a host mktemp directory (test-matrix "musl dyn" suite).
  *
  * The harness (mk/tests.mk) runs this binary under --sysroot with a
  * case-insensitive sysroot so the sidecar is active, and passes:

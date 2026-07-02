@@ -1,4 +1,5 @@
-/* Poll/select/epoll syscall handlers
+/*
+ * Poll/select/epoll syscall handlers
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -671,8 +672,8 @@ pselect_cleanup:
  *
  * Limitations:
  *   - EPOLLEXCLUSIVE not supported (rare, for load balancing)
- *   - epoll_data is stored in a per-process registration table indexed by guest
- *     fd (one epoll registration per fd)
+ *   - epoll_data is stored per epoll instance (fd_table[epfd].dir), indexed by
+ *     guest fd; each instance keeps its own table
  */
 
 /* Linux EPOLL constants */

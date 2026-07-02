@@ -1,12 +1,13 @@
-/* Virtual chown overlay round-trip tests
+/*
+ * Virtual chown overlay round-trip tests
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * An emulated-root guest expects chown(2)/fchown(2)/fchownat(2) to succeed
- * even when rootless macOS cannot satisfy the change, and the follow-up
- * stat(2)/statx(2)/fstat(2) must observe the intended owner/group rather
- * than the host's real owner.
+ * An emulated-root guest expects chown(2)/fchown(2)/fchownat(2) to succeed even
+ * when rootless macOS cannot satisfy the change, and the follow-up
+ * stat(2)/statx(2)/fstat(2) must observe the intended owner/group rather than
+ * the host's real owner.
  *
  * Exercises the round-trip across the chown family, the -1 sentinel,
  * AT_SYMLINK_NOFOLLOW on a symlink, the regression guard for non-EPERM
@@ -99,8 +100,8 @@ static void test_chown_then_stat(void)
 
 static void test_chown_minus_one_keeps_gid(void)
 {
-    /* The earlier test already set (1000, 1001). chown(uid, -1) must
-     * change uid only and keep the prior gid override visible to stat.
+    /* The earlier test already set (1000, 1001). chown(uid, -1) must change uid
+     * only and keep the prior gid override visible to stat.
      */
     TEST("chown(uid,-1) keeps prior gid override");
     if (chown(tmp_file, 2000, (gid_t) -1) != 0) {
@@ -199,8 +200,8 @@ static void test_open_removed_dir_keeps_overlay_until_last_close(void)
 static void test_lchown_on_symlink(void)
 {
     TEST("lchown(link) leaves target unchanged");
-    /* Reset target ownership through the existing path so test ordering
-     * does not leak overrides from earlier asserts.
+    /* Reset target ownership through the existing path so test ordering does
+     * not leak overrides from earlier asserts.
      */
     if (chown(tmp_target, 100, 100) != 0) {
         FAIL("chown target");

@@ -1,4 +1,5 @@
-/* PI futex and EINTR regression tests
+/*
+ * PI futex and EINTR regression tests
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -145,7 +146,8 @@ static void test_pi_dead_owner(void)
     /* Clone a child thread that acquires the PI lock and exits.
      * CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD |
      * CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
-     * CLONE_CHILD_CLEARTID
+     * CLONE_CHILD_CLEARTID | CLONE_DETACHED (0x7d0f00; DETACHED is a legacy
+     * no-op on modern Linux)
      */
     void *stack_top = child_stack_buf + sizeof(child_stack_buf);
     int child_tid_val = 0;

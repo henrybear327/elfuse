@@ -1,4 +1,5 @@
-/* Core I/O syscall handlers
+/*
+ * Core I/O syscall handlers
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

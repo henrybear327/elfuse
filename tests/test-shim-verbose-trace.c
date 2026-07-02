@@ -1,4 +1,5 @@
-/* test-shim-verbose-trace.c -- fixture for verbose tracing of shim fast paths
+/*
+ * test-shim-verbose-trace.c -- fixture for verbose tracing of shim fast paths
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

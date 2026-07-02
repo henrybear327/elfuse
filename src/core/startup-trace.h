@@ -1,4 +1,5 @@
-/* Startup tracing helpers
+/*
+ * Startup tracing helpers
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -32,9 +33,9 @@
 #include <time.h>
 
 /* File-scope cache (one copy per translation unit including this header).
- * pthread_once serializes concurrent first callers and supplies the
- * memory ordering that makes the cached value safely visible to all
- * subsequent readers without explicit atomics.
+ * pthread_once serializes concurrent first callers and supplies the memory
+ * ordering that makes the cached value safely visible to all subsequent readers
+ * without explicit atomics.
  */
 static pthread_once_t startup_trace_once = PTHREAD_ONCE_INIT;
 static bool startup_trace_value;
@@ -62,10 +63,9 @@ static inline void startup_trace_resolve(void)
     const char *v = getenv("ELFUSE_STARTUP_TRACE");
     if (!v || !v[0] || !strcmp(v, "0"))
         return;
-    /* The legacy "1" knob enables steps. Recognize it both as the whole
-     * value and as a token so compound forms like "1,syscalls" still
-     * keep the step trace on alongside the histogram, instead of
-     * silently dropping it.
+    /* The legacy "1" knob enables steps. Recognize it both as the whole value
+     * and as a token so compound forms like "1,syscalls" still keep the step
+     * trace on alongside the histogram, instead of silently dropping it.
      */
     if (!strcmp(v, "1") || startup_trace_env_has(v, "1") ||
         startup_trace_env_has(v, "steps") || startup_trace_env_has(v, "all"))

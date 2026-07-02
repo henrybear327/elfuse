@@ -331,7 +331,7 @@ pid_t proc_guest_to_host_pid(int64_t gpid)
     return result;
 }
 
-/* Build the path to the cross-process signal-transport file for host_pid.
+/* Build the path to the cross-process signal-transport file for @host_pid.
  *
  * Files live in the per-user private temp directory macOS provisions (mode
  * 0700, owned by the invoking uid) rather than world-writable /tmp, so another
@@ -574,9 +574,9 @@ static int write_rusage_to_guest(guest_t *g,
     return guest_write_small(g, gva, &lru, sizeof(lru));
 }
 
-/* Deactivate the wait4 process-table slot iff it still holds host_pid.
+/* Deactivate the wait4 process-table slot iff it still holds @host_pid.
  * sys_wait4 releases pid_lock across the host wait4 call, so another reaper
- * thread may have recycled the slot in the meantime; the host_pid re-check
+ * thread may have recycled the slot in the meantime; the @host_pid re-check
  * guards against clobbering an unrelated child that took the slot. pid_lock
  * must not be held.
  */

@@ -1,4 +1,5 @@
-/* Signal delivery
+/*
+ * Signal delivery
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -119,8 +120,7 @@ typedef struct {
 #define LINUX_SEGV_MAPERR 1 /* Address not mapped to object */
 #define LINUX_SEGV_ACCERR 2 /* Invalid permissions for mapped object */
 
-/* Linux sigcontext (aarch64). */
-/* From arch/arm64/include/uapi/asm/sigcontext.h */
+/* Linux sigcontext (aarch64). From arch/arm64/include/uapi/asm/sigcontext.h */
 typedef struct {
     uint64_t fault_address;
     uint64_t regs[31]; /* X0-X30 */
@@ -153,15 +153,15 @@ typedef struct {
     linux_sigcontext_t uc_mcontext;
 } linux_ucontext_t;
 
-/* Linux rt_sigframe (pushed onto guest stack). */
-/* From arch/arm64/kernel/signal.c: this is what setup_rt_frame() builds. */
+/* Linux rt_sigframe (pushed onto guest stack). From arch/arm64/kernel/signal.c:
+ * this is what setup_rt_frame() builds.
+ */
 typedef struct {
     linux_siginfo_t info;
     linux_ucontext_t uc;
 } linux_rt_sigframe_t;
 
-/* RT signal queue. */
-/* Maximum queued instances per RT signal. POSIX says at least
+/* RT signal queue. Maximum queued instances per RT signal. POSIX says at least
  * _POSIX_SIGQUEUE_MAX (32); Linux defaults to ~1024 per user.
  */
 #define RT_SIGQUEUE_MAX 32
@@ -235,7 +235,7 @@ void signal_queue_info(int signum,
  * populates si_code, si_addr, fault_address, and ESR context from these values
  * instead of using the default SI_USER/si_pid fields. Consumed (cleared) after
  * one delivery. Used for synchronous faults: BRK->SIGTRAP, SIGSEGV, etc. The
- * esr parameter is the raw ESR_EL1 value; if non-zero, an esr_context block is
+ * @esr parameter is the raw ESR_EL1 value; if non-zero, an esr_context block is
  * appended to __reserved after FPSIMD.
  */
 void signal_set_fault_info(int si_code, uint64_t addr, uint64_t esr);

@@ -1,4 +1,5 @@
-/* Test socket syscalls (AF_UNIX socketpair)
+/*
+ * Test socket syscalls (AF_UNIX socketpair)
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -11,10 +12,16 @@
  * 1. socketpair(AF_UNIX, SOCK_STREAM) creates two connected fds
  * 2. write/read through socketpair transfers data correctly
  * 3. getsockopt(SO_TYPE) returns SOCK_STREAM
- * 4. sendmsg/recvmsg transfers a single iovec payload
- * 5. sendmsg/recvmsg transfers a two-iovec payload
- * 6. sendmmsg/recvmmsg transfers a single message
- * 7. shutdown(SHUT_WR) causes read to return 0 (EOF)
+ * 4. getsockname/getpeername return the socketpair addresses
+ * 5. sendmsg/recvmsg transfers a single iovec payload
+ * 6. sendmsg/recvmsg transfers a two-iovec payload
+ * 7. sendmmsg/recvmmsg transfers a single message
+ * 8. sendto/recvfrom over an AF_UNIX datagram pair
+ * 9. recvmsg single iovec preserves MSG_TRUNC
+ * 10. getsockopt(SO_ERROR) read-and-clear
+ * 11. shutdown(SHUT_WR) causes read to return 0 (EOF)
+ * 12. socketpair(AF_UNIX, SOCK_SEQPACKET)
+ * 13. socket(AF_UNIX, SOCK_SEQPACKET)
  */
 
 #include <stdio.h>

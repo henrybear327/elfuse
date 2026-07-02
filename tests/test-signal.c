@@ -1,4 +1,5 @@
-/* Test signal delivery and rt_sigreturn
+/*
+ * Test signal delivery and rt_sigreturn
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -9,7 +10,7 @@
  * 2. kill(getpid(), SIGUSR1) delivers the signal
  * 3. Handler fires with correct signum
  * 4. rt_sigreturn restores all callee-saved registers
- *    (aarch64: X19-X28, x86_64: rbx/r12-r15/rbp)
+ *    (aarch64: X19-X28, x86_64: rbx/r12-r15)
  * 5. sigprocmask blocks/unblocks signals correctly
  */
 

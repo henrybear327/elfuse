@@ -1,4 +1,5 @@
-/* ELF64 parser and loader
+/*
+ * ELF64 parser and loader
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -136,13 +137,13 @@ void elf_resolve_interp(const char *sysroot,
                         char *out,
                         size_t out_sz);
 
-/* Read, probe, and parse a shebang script header from host_path.
- * Writes interpreter path to interp_out and the single optional argument
- * (if present) to arg_out. arg_out will be set to an empty string if there
- * is no optional argument.
+/* Read, probe, and parse a shebang script header from host_path. Writes
+ * interpreter path to interp_out and the single optional argument (if present)
+ * to arg_out. arg_out will be set to an empty string if there is no optional
+ * argument.
  *
- * Supports LF (\n), CRLF (\r\n), and CR (\r) line endings. If the shebang
- * line is not terminated within the 511-byte buffer limit, returns -ENOEXEC.
+ * Supports LF (\n), CRLF (\r\n), and CR (\r) line endings. If the shebang line
+ * is not terminated within the 511-byte buffer limit, returns -ENOEXEC.
  *
  * Returns:
  *   1 if a shebang script was successfully parsed

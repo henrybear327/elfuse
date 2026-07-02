@@ -1,4 +1,5 @@
-/* Per-thread state for Linux threading support
+/*
+ * Per-thread state for Linux threading support
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -197,8 +198,8 @@ void thread_deactivate(thread_entry_t *t)
     /* If this is a VM-clone child, mark it as exited and wake the tracer/parent
      * so wait4 can collect the exit status. Must happen BEFORE destroying the
      * condvars, since broadcasting a destroyed condvar is undefined behavior.
+     * Guard against double-deactivation: if already inactive, skip.
      */
-    /* Guard against double-deactivation: if already inactive, skip. */
     if (!t->active) {
         pthread_mutex_unlock(&thread_lock);
         return;

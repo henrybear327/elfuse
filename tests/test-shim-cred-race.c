@@ -1,4 +1,5 @@
-/* test-shim-cred-race.c -- shim identity cache stays consistent under
+/*
+ * test-shim-cred-race.c -- shim identity cache stays consistent under
  * concurrent setuid traffic.
  *
  * Copyright 2026 elfuse contributors

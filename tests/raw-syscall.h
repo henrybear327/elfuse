@@ -1,4 +1,5 @@
-/* Portable inline syscall wrappers for aarch64 and x86_64
+/*
+ * Portable inline syscall wrappers for aarch64 and x86_64
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

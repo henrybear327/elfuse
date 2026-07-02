@@ -1,4 +1,5 @@
-/* FIOASYNC ioctl + F_SETOWN/F_GETOWN fcntl regression test
+/*
+ * FIOASYNC ioctl + F_SETOWN/F_GETOWN fcntl regression test
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -38,7 +39,8 @@
 #endif
 
 /* struct f_owner_ex is _GNU_SOURCE-gated; declare a layout-compatible struct
- * locally so the test does not depend on glibc feature macros. */
+ * locally so the test does not depend on glibc feature macros.
+ */
 struct elfuse_f_owner_ex {
     int type;
     int pid;
@@ -60,8 +62,9 @@ static void check_async_owner(int fd, const char *what)
     TEST(label);
     EXPECT_EQ(fcntl(fd, F_SETOWN, getpid()), 0, "F_SETOWN rejected");
 
-    /* F_SETOWN_EX takes a struct f_owner_ex* and is the variant glibc uses
-     * when targeting a thread/pgrp; a valid pointer is accepted as a no-op. */
+    /* F_SETOWN_EX takes a struct f_owner_ex* and is the variant glibc uses when
+     * targeting a thread/pgrp; a valid pointer is accepted as a no-op.
+     */
     struct elfuse_f_owner_ex owner = {F_OWNER_PID, getpid()};
     snprintf(label, sizeof(label), "%s: fcntl(F_SETOWN_EX) valid -> 0", what);
     TEST(label);
@@ -69,7 +72,8 @@ static void check_async_owner(int fd, const char *what)
 
     /* F_GETOWN reports the owner; elfuse tracks none, so 0 (no error). glibc
      * may probe F_GETOWN_EX first and fall back to plain F_GETOWN on EINVAL --
-     * either way the visible result must not be a failure. */
+     * either way the visible result must not be a failure.
+     */
     snprintf(label, sizeof(label), "%s: fcntl(F_GETOWN) -> not an error", what);
     TEST(label);
     EXPECT_TRUE(fcntl(fd, F_GETOWN) >= 0, "F_GETOWN returned an error");
@@ -86,7 +90,8 @@ int main(void)
 
     /* nginx's channel is an AF_UNIX SOCK_STREAM socketpair; FIOASYNC/F_SETOWN
      * are applied to channel[0] (nginx also marks it non-blocking via FIONBIO
-     * first, which this test omits to stay focused on the calls added here). */
+     * first, which this test omits to stay focused on the calls added here).
+     */
     int sp[2];
     TEST("socketpair(AF_UNIX, SOCK_STREAM)");
     EXPECT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sp), 0, "socketpair failed");

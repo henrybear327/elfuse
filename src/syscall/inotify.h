@@ -1,4 +1,5 @@
-/* Linux inotify emulation via kqueue EVFILT_VNODE for elfuse
+/*
+ * Linux inotify emulation via kqueue EVFILT_VNODE for elfuse
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

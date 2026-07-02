@@ -1,4 +1,5 @@
-/* Level-based diagnostic logging
+/*
+ * Level-based diagnostic logging
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

@@ -1,4 +1,5 @@
-/* Direct syscall smoke coverage for less frequently hit dispatch entries
+/*
+ * Direct syscall smoke coverage for less frequently hit dispatch entries
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -507,7 +508,8 @@ static void test_process_query_stubs(void)
     if (caps == 0) {
         if (getuid() == 0) {
             /* Under fakeroot, effective and permitted should be non-zero (full
-             * caps) */
+             * caps)
+             */
             caps_ok = (data[0].effective != 0);
         } else {
             caps_ok = (data[0].effective == 0);
@@ -924,7 +926,8 @@ static void test_sync_file_range(void)
     /* 1. Test basic success case with valid flags (SYNC_FILE_RANGE_WRITE, etc.)
      */
     /* Note: SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE |
-     * SYNC_FILE_RANGE_WAIT_AFTER is 7 */
+     * SYNC_FILE_RANGE_WAIT_AFTER is 7
+     */
     if (syscall(SYS_sync_file_range, fd, (off64_t) 0, (off64_t) 0, 7) != 0) {
         FAIL("sync_file_range basic");
         close(fd);
@@ -970,7 +973,8 @@ static void test_sync_file_range(void)
     }
 
     /* 6. SYNC_FILE_RANGE_WRITE only (async hint) returns 0 without blocking.
-     * Covers the deliberate-divergence branch. */
+     * Covers the deliberate-divergence branch.
+     */
     if (syscall(SYS_sync_file_range, fd, (off64_t) 0, (off64_t) 0, 2) != 0) {
         FAIL("sync_file_range write-only");
         close(fd);

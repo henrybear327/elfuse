@@ -1,4 +1,5 @@
-/* Run aarch64-linux ELF binaries on macOS Apple Silicon
+/*
+ * Run aarch64-linux ELF binaries on macOS Apple Silicon
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

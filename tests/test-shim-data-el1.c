@@ -1,4 +1,5 @@
-/* test-shim-data-el1.c -- guest EL0 cannot read or write shim_data.
+/*
+ * test-shim-data-el1.c -- guest EL0 cannot read or write shim_data.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

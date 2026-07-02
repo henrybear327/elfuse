@@ -1,4 +1,5 @@
-/* Abstract AF_UNIX emulation helpers
+/*
+ * Abstract AF_UNIX emulation helpers
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

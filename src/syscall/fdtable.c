@@ -1,4 +1,5 @@
-/* FD table: bitmap allocator, alloc/close/snapshot helpers
+/*
+ * FD table: bitmap allocator, alloc/close/snapshot helpers
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -34,9 +35,9 @@ pthread_mutex_t fd_lock = PTHREAD_MUTEX_INITIALIZER; /* Lock order: 3 */
 fd_entry_t fd_table[FD_TABLE_SIZE];
 static uint64_t fd_next_generation = 1;
 
-/* RLIMIT_NOFILE tracking. */
-/* Guest-side soft limit for RLIMIT_NOFILE. fd_alloc checks this. Default
- * matches typical Linux default (1024). Updated by prlimit64.
+/* RLIMIT_NOFILE tracking. Guest-side soft limit for RLIMIT_NOFILE. fd_alloc
+ * checks this. Default matches typical Linux default (1024). Updated by
+ * prlimit64.
  */
 static _Atomic int rlimit_nofile_cur = FD_TABLE_SIZE;
 

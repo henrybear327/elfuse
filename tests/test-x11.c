@@ -1,4 +1,5 @@
-/* Test X11 connectivity via raw wire protocol
+/*
+ * Test X11 connectivity via raw wire protocol
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

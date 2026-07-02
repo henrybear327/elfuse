@@ -1,4 +1,5 @@
-/* Test POSIX advisory record locking via fcntl(F_SETLK/F_GETLK/F_SETLKW)
+/*
+ * Test POSIX advisory record locking via fcntl(F_SETLK/F_GETLK/F_SETLKW)
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

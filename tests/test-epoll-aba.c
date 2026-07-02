@@ -1,4 +1,5 @@
-/* epoll_ctl close+reopen ABA regression test
+/*
+ * epoll_ctl close+reopen ABA regression test
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

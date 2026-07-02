@@ -1,4 +1,5 @@
-/* FIOCLEX/FIONCLEX ioctl close-on-exec regression test
+/*
+ * FIOCLEX/FIONCLEX ioctl close-on-exec regression test
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

@@ -1,4 +1,5 @@
-/* file write+read roundtrip test
+/*
+ * file write+read roundtrip test
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

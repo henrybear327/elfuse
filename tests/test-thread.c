@@ -1,4 +1,5 @@
-/* Test clone(CLONE_THREAD) + futex in elfuse
+/*
+ * Test clone(CLONE_THREAD) + futex in elfuse
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -89,7 +90,8 @@ static void test_clone_thread(void)
 
     /* CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD |
      * CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
-     * CLONE_CHILD_CLEARTID
+     * CLONE_CHILD_CLEARTID | CLONE_DETACHED (0x7d0f00; DETACHED is a legacy
+     * no-op on modern Linux)
      */
     unsigned long flags = 0x7d0f00;
     void *stack_top = child_stack_buf + sizeof(child_stack_buf);
@@ -111,8 +113,7 @@ static void test_clone_thread(void)
         return;
     }
 
-    /* Parent: ret = child TID */
-    /* Wait for child to signal completion */
+    /* Parent: ret = child TID Wait for child to signal completion */
     while (done_flag == 0) {
         raw_futex_wait((int *) &done_flag, 0);
     }
@@ -130,8 +131,9 @@ static void test_parent_settid(void)
 {
     TEST("CLONE_PARENT_SETTID");
 
-    /* child_tid was set by CLONE_PARENT_SETTID in test_clone_thread */
-    /* Wait for child to fully exit (CLONE_CHILD_CLEARTID clears it) */
+    /* child_tid was set by CLONE_PARENT_SETTID in test_clone_thread Wait for
+     * child to fully exit (CLONE_CHILD_CLEARTID clears it)
+     */
     while (child_tid != 0) {
         raw_futex_wait((int *) &child_tid, child_tid);
     }

@@ -1,4 +1,5 @@
-/* test-shim-urandom-toctou.c -- urandom EL1 fault recovery survives concurrent
+/*
+ * test-shim-urandom-toctou.c -- urandom EL1 fault recovery survives concurrent
  * mprotect(PROT_NONE) of the read buffer.
  *
  * Copyright 2026 elfuse contributors

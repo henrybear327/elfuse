@@ -118,8 +118,8 @@ static void termios_copy_cc_to_linux(uint8_t linux_cc[19], const cc_t mac_cc[])
 {
     for (int i = 0; i < 19; i++) {
         int mac_idx = linux_mac_cc[i];
-        /* cppcheck-suppress negativeIndex RANGE_CHECK guards mac_idx >= 0
-         * before the array access.
+        /* cppcheck-suppress negativeIndex
+         * RANGE_CHECK guards mac_idx >= 0 before the array access.
          */
         linux_cc[i] = RANGE_CHECK(mac_idx, 0, NCCS) ? mac_cc[mac_idx] : 0;
     }
@@ -702,7 +702,7 @@ static uint32_t mac_lflag_to_linux(tcflag_t mf)
  * fd_lock for thread safety.
  *
  * Returns -LINUX_EBADF for path-only or closed fds, -LINUX_EPERM for
- * write-sealed fds (when check_seal is set), or 0 on success.
+ * write-sealed fds (when check_write_seal is set), or 0 on success.
  */
 static int64_t host_fd_ref_open_checked(int guest_fd,
                                         host_fd_ref_t *ref,

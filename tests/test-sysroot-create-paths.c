@@ -1,4 +1,5 @@
-/* Sysroot create-path routing regression tests
+/*
+ * Sysroot create-path routing regression tests
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

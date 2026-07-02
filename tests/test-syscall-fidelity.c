@@ -1,4 +1,5 @@
-/* Linux syscall fidelity tests
+/*
+ * Linux syscall fidelity tests
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

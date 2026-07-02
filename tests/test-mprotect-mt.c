@@ -1,4 +1,5 @@
-/* Multi-vCPU concurrent mprotect stress
+/*
+ * Multi-vCPU concurrent mprotect stress
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

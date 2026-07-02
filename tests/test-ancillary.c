@@ -1,4 +1,5 @@
-/* Test ancillary data: SCM_RIGHTS and MSG_CTRUNC
+/*
+ * Test ancillary data: SCM_RIGHTS and MSG_CTRUNC
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

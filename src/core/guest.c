@@ -1,4 +1,5 @@
-/* Guest memory management
+/*
+ * Guest memory management
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -1842,8 +1843,9 @@ static void try_merge_left(guest_t *g, int i)
 {
     if (i <= 0 || i >= g->nregions)
         return;
-    /* nregions is bounded by GUEST_MAX_REGIONS so i is in range. */
-    /* cppcheck-suppress arrayIndexOutOfBoundsCond */
+    /* cppcheck-suppress arrayIndexOutOfBoundsCond
+     * nregions is bounded by GUEST_MAX_REGIONS so i is in range.
+     */
     if (!regions_mergeable(&g->regions[i - 1], &g->regions[i]))
         return;
 
@@ -2725,15 +2727,14 @@ int guest_extend_page_tables(guest_t *g,
         /* Only map if not already mapped. A negative TLB entry from a prior
          * translation fault is possible only for VAs that were unmapped at the
          * time of the fault, so the TLBI is only needed for blocks actually
-         * installed by this call.
-         */
-        /* At L2 a valid descriptor is either a 2 MiB block (bits[1:0] = 01) or
-         * a table descriptor pointing to an L3 page table (bits[1:0] = 11).
-         * Both indicate the slot is already mapped at some granule, so the
-         * extend has nothing to install; skip without flushing. The previous "&
-         * PT_BLOCK" test relied on PT_BLOCK == PT_VALID == bit 0 to cover both
-         * cases by coincidence -- write it as an explicit PT_VALID test so the
-         * intent survives a future descriptor-bit renumbering.
+         * installed by this call. At L2 a valid descriptor is either a 2 MiB
+         * block (bits[1:0] = 01) or a table descriptor pointing to an L3 page
+         * table (bits[1:0] = 11). Both indicate the slot is already mapped at
+         * some granule, so the extend has nothing to install; skip without
+         * flushing. The previous "& PT_BLOCK" test relied on PT_BLOCK ==
+         * PT_VALID == bit 0 to cover both cases by coincidence -- write it as
+         * an explicit PT_VALID test so the intent survives a future
+         * descriptor-bit renumbering.
          */
         if (l2[l2_idx] & PT_VALID)
             continue;

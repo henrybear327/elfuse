@@ -198,7 +198,7 @@ typedef struct {
 #define FUSE_MAX_PENDING 128
 /* Per-session capacity for held lookup references. Sized for recursive
  * directory walks (ls -R style) without pushing the per-session struct into
- * multi-page territory; sizeof(struct) at the chosen cap stays under 80 KiB.
+ * multi-page territory; node_refs at this cap is ~96 KiB, kept off the stack.
  * Beyond this, fuse_lookup_locked() emits a compensating FORGET to keep the
  * daemon balanced instead of leaking a reference.
  */
@@ -1929,11 +1929,11 @@ typedef struct {
 } fuse_file_snap_t;
 
 /* Acquire exclusive offset-affecting access to a FUSE file, bump the file and
- * session refcounts, and snapshot the identity into snap. Stream reads (and
- * readdir) pass serialize=true so concurrent read() calls on the same fd are
+ * session refcounts, and snapshot the identity into @snap. Stream reads (and
+ * readdir) pass @serialize=true so concurrent read() calls on the same fd are
  * serialized via io_in_progress, matching Linux f_pos_lock semantics.
  * pread/getattr-style operations that do not touch the stream offset pass
- * serialize=false.
+ * @serialize=false.
  *
  * Returns 0 on success or a negative Linux errno.
  */
@@ -2018,9 +2018,9 @@ int fuse_materialize_fd(int fd, char *out_path, size_t outsz)
 }
 
 /* Read up to count bytes from a FUSE-backed file or directory at offset. Writes
- * the daemon's reply into the guest buffer at buf_gva. Updates the stream
- * offset on success when advance_offset is true and the fd still references the
- * same (session, mount_id, nodeid) identity (post-close races leave offsets
+ * the daemon's reply into the guest buffer at @buf_gva. Updates the stream
+ * offset on success when @advance_offset is true and the fd still references
+ * the same (session, mount_id, nodeid) identity (post-close races leave offsets
  * untouched).
  */
 static int64_t fuse_read_common(guest_t *g,

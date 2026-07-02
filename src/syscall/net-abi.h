@@ -1,4 +1,5 @@
-/* Socket ABI translation helpers
+/*
+ * Socket ABI translation helpers
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

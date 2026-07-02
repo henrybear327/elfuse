@@ -1,4 +1,5 @@
-/* x86_64-rosetta-msync.c - msync(MS_SYNC/MS_ASYNC) on high-VA regions
+/*
+ * x86_64-rosetta-msync.c - msync(MS_SYNC/MS_ASYNC) on high-VA regions
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -11,7 +12,7 @@
  * lists with MAP_SHARED and periodically msyncs them, so under an x86_64 guest
  * the spurious ENOMEM surfaced as:
  *     E: Unable to synchronize mmap - msync (12: Cannot allocate memory)
- * and aborted `apt update` / `apt upgrade` at package-list parsing.
+ * and aborted "apt update" / "apt upgrade" at package-list parsing.
  *
  * The fix admits high-VA ranges the region tracker records as mapped and
  * resolves the write-back / refresh host pointers through host_ptr_for_gpa
@@ -41,19 +42,21 @@ static int fails;
 
 /* The primary IPA window is a handful of GiB; Rosetta places guest mappings at
  * their native x86_64 VAs far above it. Anything past 4 GiB is the high-VA
- * window that exercises the regression. */
+ * window that exercises the regression.
+ */
 static int is_high_va(const void *p)
 {
     return (uint64_t) (uintptr_t) p > 0x100000000ULL;
 }
 
-/* Create a zero-filled backing file of `sz` bytes, returning an open O_RDWR fd
+/* Create a zero-filled backing file of @sz bytes, returning an open O_RDWR fd
  * (unlinked so it cleans up on close). -1 on error.
  *
  * Backed by /dev/shm, not host-passthrough /tmp: elfuse refuses mmap on
  * FUSE-served fds (ENODEV), and /dev/shm is the mmap-able tmpfs the aarch64
- * test-msync uses too. `slot` disambiguates concurrent subtests. glibc static
- * shm_open is unreliable, so open the path directly. */
+ * test-msync uses too. @slot disambiguates concurrent subtests. glibc static
+ * shm_open is unreliable, so open the path directly.
+ */
 static int make_backing(size_t sz, int slot)
 {
     char path[64];
@@ -70,9 +73,10 @@ static int make_backing(size_t sz, int slot)
     return fd;
 }
 
-/* Read `sz` bytes at file offset 0 through a fresh fd (so the check reflects
+/* Read @sz bytes at file offset 0 through a fresh fd (so the check reflects
  * what actually reached the backing file, not the mapping) and confirm every
- * byte equals `want`. */
+ * byte equals @want.
+ */
 static int file_all_equal(int fd,
                           size_t sz,
                           unsigned char want,
@@ -99,7 +103,8 @@ static int file_all_equal(int fd,
 }
 
 /* MS_SYNC on a single writable high-VA MAP_SHARED page returns 0 and the write
- * reaches the backing file. */
+ * reaches the backing file.
+ */
 static void test_msync_writeback_single(void)
 {
     const char *tag = "msync-writeback-single";
@@ -189,7 +194,8 @@ static void test_msync_writeback_multi(void)
 }
 
 /* MS_ASYNC on a high-VA mapping returns 0 (the primary #108 symptom is the
- * -ENOMEM admission failure, which is flag-independent). */
+ * -ENOMEM admission failure, which is flag-independent).
+ */
 static void test_msync_async(void)
 {
     const char *tag = "msync-async";

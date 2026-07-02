@@ -1,4 +1,5 @@
-/* Process identity and session state
+/*
+ * Process identity and session state
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

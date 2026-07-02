@@ -1,4 +1,5 @@
-/* Dynamic-linker startup syscall histogram
+/*
+ * Dynamic-linker startup syscall histogram
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -28,13 +29,17 @@
 void syscall_hist_init(void);
 
 /* Fast probe used by syscall_dispatch to decide whether to grab a start
- * timestamp. Returns false after syscall_hist_freeze() so the recording
- * stops cleanly at the first execve.
+ * timestamp.
+ *
+ * Returns false after syscall_hist_freeze() so the recording stops cleanly at
+ * the first execve.
  */
 bool syscall_hist_enabled(void);
 
-/* Monotonic timestamp source. Returns 0 when the histogram is disabled so
- * the caller can short-circuit without a branch on the env-var cache.
+/* Monotonic timestamp source.
+ *
+ * Returns 0 when the histogram is disabled so the caller can short-circuit
+ * without a branch on the env-var cache.
  */
 uint64_t syscall_hist_now_ns(void);
 
@@ -45,23 +50,23 @@ uint64_t syscall_hist_now_ns(void);
 void syscall_hist_record(int nr, uint64_t ns);
 
 /* Stop recording but keep the captured data ready to dump. Called from the
- * successful-execve path so steady-state syscall traffic does not pollute
- * the startup picture. The reason string survives until syscall_hist_dump
- * runs and appears in the dump header.
+ * successful-execve path so steady-state syscall traffic does not pollute the
+ * startup picture. The reason string survives until syscall_hist_dump runs and
+ * appears in the dump header.
  */
 void syscall_hist_freeze(const char *reason);
 
-/* Force-disable the histogram in this process even if ELFUSE_STARTUP_TRACE
- * is set. Used by fork-child bring-up: the child resumes from a parent
- * snapshot, so its first syscalls are steady-state, not dynamic-linker
- * bring-up. Without this, the inherited env var would trigger lazy init in
- * the child and pollute the parent's dump if both share stderr.
+/* Force-disable the histogram in this process even if ELFUSE_STARTUP_TRACE is
+ * set. Used by fork-child bring-up: the child resumes from a parent snapshot,
+ * so its first syscalls are steady-state, not dynamic-linker bring-up. Without
+ * this, the inherited env var would trigger lazy init in the child and pollute
+ * the parent's dump if both share stderr.
  */
 void syscall_hist_disable(void);
 
 /* Emit a human-readable summary to stderr, sorted by total ns descending.
- * Idempotent: subsequent calls are no-ops. Safe to call from cleanup paths
- * that may run more than once.
+ * Idempotent: subsequent calls are no-ops. Safe to call from cleanup paths that
+ * may run more than once.
  */
 void syscall_hist_dump(void);
 

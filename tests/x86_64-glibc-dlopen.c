@@ -1,4 +1,5 @@
-/* x86_64-glibc-dlopen.c - Runtime dlopen probe for the Rosetta gate
+/*
+ * x86_64-glibc-dlopen.c - Runtime dlopen probe for the Rosetta gate
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

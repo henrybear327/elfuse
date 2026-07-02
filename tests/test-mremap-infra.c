@@ -1,4 +1,5 @@
-/* test-mremap-infra.c -- mremap/madvise must reject ranges hitting infra
+/*
+ * test-mremap-infra.c -- mremap/madvise must reject ranges hitting infra
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

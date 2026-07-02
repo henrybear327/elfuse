@@ -1,4 +1,5 @@
-/* EL1 shim globals (identity cache + attention flag)
+/*
+ * EL1 shim globals (identity cache + attention flag)
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -15,14 +16,15 @@
  *   - sys_munmap and sys_mprotect reject infra ranges
  *   - sys_mremap (all variants) and sys_madvise reject infra ranges
  *
- * Not yet defended: direct EL0 store to the cache GVA. The shim_data block is
- * mapped PT_AP_RW_EL0 (RW at both ELs), and /proc/self/maps exposes
- * [shim-data]. A guest that knows the layout can store the cache base into a
- * register and write spoofed values directly. This is documented as out of
- * scope; closing it requires a new AP[2:1]=00 permission level (RW at EL1, no
- * EL0 access) which is a separate hardening item. The elfuse threat model
- * treats the guest as the user's own binary, not adversarial, so direct-write
- * spoofing is a defense-in-depth gap rather than an active vulnerability.
+ * Direct EL0 store to the cache GVA is defended: the shim_data block is mapped
+ * AP[2:1]=00 (RW at EL1, no EL0 access), so a guest EL0 dereference of the
+ * cache base faults to the SIGSEGV path rather than spoofing values.
+ * gva_translate_perm refuses MEM_PERM_EL1_ONLY descriptors on EL0-behalf walks,
+ * and the EL1 shim retains full RW. /proc/self/maps still lists [shim-data] but
+ * reports it PROT_NONE (region tracking is independent of EL0 access), so the
+ * layout is disclosed without granting a usable mapping. The elfuse threat
+ * model treats the guest as the user's own binary, not adversarial; this
+ * mapping closes the direct-write spoofing gap as defense in depth.
  *
  * The shim addresses the cache via TPIDR_EL1, which the host sets at every vCPU
  * init point (bootstrap, fork-child, CLONE_THREAD, exec re-init). TPIDR_EL1 is

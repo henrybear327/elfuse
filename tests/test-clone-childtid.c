@@ -1,14 +1,15 @@
-/* Test CLONE_CHILD_SETTID / CLONE_CHILD_CLEARTID on the fork (posix_spawn) path
+/*
+ * Test CLONE_CHILD_SETTID / CLONE_CHILD_CLEARTID on the fork (posix_spawn) path
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * Issue #99: glibc's fork wrapper clones with CLONE_CHILD_SETTID |
- * CLONE_CHILD_CLEARTID | SIGCHLD. The child's TID must be written into the
- * ctid address so glibc's TCB caches the right value. This calls clone()
- * directly with those exact flags (no CLONE_VM/THREAD/VFORK, so elfuse takes
- * the fork helper-process path) and checks the child observes its own TID at
- * the ctid slot -- glibc-version-independent, unlike the canary symptom.
+ * CLONE_CHILD_CLEARTID | SIGCHLD. The child's TID must be written into the ctid
+ * address so glibc's TCB caches the right value. This calls clone() directly
+ * with those exact flags (no CLONE_VM/THREAD/VFORK, so elfuse takes the fork
+ * helper-process path) and checks the child observes its own TID at the ctid
+ * slot -- glibc-version-independent, unlike the canary symptom.
  *
  * Raw syscall throughout: glibc's own clone wrapper does not expose the ctid
  * arg, and we want to exercise elfuse's handling rather than libc's.

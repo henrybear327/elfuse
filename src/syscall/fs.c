@@ -1,4 +1,5 @@
-/* Filesystem syscall handlers
+/*
+ * Filesystem syscall handlers
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -1123,13 +1124,14 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
          * elfuse does not deliver host SIGIO into the guest (see LINUX_FIOASYNC
          * in sys_ioctl), so no owner is tracked: accept the request as a no-op.
          * F_SETOWN's arg is the owner pid passed by value, so there is no user
-         * pointer to validate. */
+         * pointer to validate.
+         */
         return 0;
     case 15: { /* F_SETOWN_EX */
-        /* Same no-op owner semantics as F_SETOWN, but the arg is a
-         * struct f_owner_ex { int type; int pid; } pointer that Linux reads
-         * before applying. Read it through so a bad guest pointer faults with
-         * EFAULT rather than silently succeeding; the value is then discarded.
+        /* Same no-op owner semantics as F_SETOWN, but the arg is a struct
+         * f_owner_ex { int type; int pid; } pointer that Linux reads before
+         * applying. Read it through so a bad guest pointer faults with EFAULT
+         * rather than silently succeeding; the value is then discarded.
          */
         int32_t owner_ex[2];
         if (guest_read_small(g, arg, owner_ex, sizeof(owner_ex)) < 0)
@@ -1144,7 +1146,8 @@ int64_t sys_fcntl(guest_t *g, int fd, int cmd, uint64_t arg)
          * answer coherently with the F_SETOWN no-op above rather than EINVAL
          * (which would make F_GETOWN fail under glibc). Report "owned by no
          * specific process": struct f_owner_ex { int type; int pid; } with
-         * type=F_OWNER_PID(1), pid=0. */
+         * type=F_OWNER_PID(1), pid=0.
+         */
         int32_t owner_ex[2] = {1 /* F_OWNER_PID */, 0 /* pid */};
         if (guest_write_small(g, arg, owner_ex, sizeof(owner_ex)) < 0)
             return -LINUX_EFAULT;
@@ -1700,10 +1703,10 @@ int64_t sys_renameat2(guest_t *g,
         return -LINUX_EBADF;
     }
 
-    /* Apply sysroot resolution for absolute paths */
-    /* RENAME_NOREPLACE: fail if destination exists. macOS renamex_np supports
-     * RENAME_EXCL for the same semantics. Only supported for AT_FDCWD paths
-     * (renamex_np does not take dirfd arguments).
+    /* Apply sysroot resolution for absolute paths RENAME_NOREPLACE: fail if
+     * destination exists. macOS renamex_np supports RENAME_EXCL for the same
+     * semantics. Only supported for AT_FDCWD paths (renamex_np does not take
+     * dirfd arguments).
      */
     if (flags & LINUX_RENAME_NOREPLACE) {
         if (olddirfd == LINUX_AT_FDCWD && newdirfd == LINUX_AT_FDCWD) {
@@ -1796,7 +1799,9 @@ int64_t sys_mknodat(guest_t *g, int dirfd, uint64_t path_gva, int mode, int dev)
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
-    /* Only support FIFO creation; other node types need root */
+    /* FIFO via mkfifoat and regular files via openat are supported; device
+     * nodes need root
+     */
     if (S_ISFIFO(mode)) {
         if (mkfifoat(dir_ref.fd, tx.host_path, mode & 0777) < 0) {
             host_fd_ref_close(&dir_ref);

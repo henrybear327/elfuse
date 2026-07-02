@@ -1,4 +1,5 @@
-/* GDB RSP transport and hex helpers
+/*
+ * GDB RSP transport and hex helpers
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -140,6 +141,14 @@ void gdb_rsp_set_noack(gdb_rsp_ctx_t *ctx, bool enabled)
     ctx->no_ack_mode = enabled;
 }
 
+/* Read one RSP packet from the client into @buf. Strips $...# framing and
+ * verifies the checksum, sending + acknowledgment on success. Returns packet
+ * length, 0 on EOF, -1 on error. Also handles bare 0x03 (Ctrl+C) by returning
+ * "\x03" as a 1-byte packet.
+ *
+ * Uses a static read buffer to batch socket reads instead of reading one byte
+ * at a time. Packets exceeding @bufsz are rejected with E00.
+ */
 int gdb_rsp_recv(gdb_rsp_ctx_t *ctx, int fd, char *buf, size_t bufsz)
 {
     if (bufsz == 0) {

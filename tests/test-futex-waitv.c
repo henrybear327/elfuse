@@ -1,4 +1,5 @@
-/* futex_waitv (SYS 449) regression
+/*
+ * futex_waitv (SYS 449) regression
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

@@ -1,4 +1,5 @@
-/* Test eventfd2 syscall emulation
+/*
+ * Test eventfd2 syscall emulation
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

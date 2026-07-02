@@ -1,4 +1,5 @@
-/* Native-host unit test for the TLBI RVAE1IS operand encoder.
+/*
+ * Native-host unit test for the TLBI RVAE1IS operand encoder.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

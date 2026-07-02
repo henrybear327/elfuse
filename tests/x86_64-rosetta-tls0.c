@@ -1,4 +1,5 @@
-/* x86_64-rosetta-tls0.c - CLONE_SETTLS tls=0 reproducer for Rosetta
+/*
+ * x86_64-rosetta-tls0.c - CLONE_SETTLS tls=0 reproducer for Rosetta
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

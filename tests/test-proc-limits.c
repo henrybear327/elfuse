@@ -1,4 +1,5 @@
-/* Test /proc/self/limits synthetic file
+/*
+ * Test /proc/self/limits synthetic file
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

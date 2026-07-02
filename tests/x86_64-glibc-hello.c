@@ -1,4 +1,5 @@
-/* x86_64-glibc-hello.c - Minimal glibc dynamic hello for Rosetta smoke
+/*
+ * x86_64-glibc-hello.c - Minimal glibc dynamic hello for Rosetta smoke
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

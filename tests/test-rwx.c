@@ -1,4 +1,5 @@
-/* Verify whether Apple HVF allows RWX page table entries
+/*
+ * Verify whether Apple HVF allows RWX page table entries
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

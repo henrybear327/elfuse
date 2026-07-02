@@ -1,4 +1,5 @@
-/* test-vdso.c -- vDSO ELF correctness and symbol-resolution probe
+/*
+ * test-vdso.c -- vDSO ELF correctness and symbol-resolution probe
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -6,7 +7,7 @@
  * Confirms the synthetic vDSO emitted by src/core/vdso.c:
  *   1. is published via AT_SYSINFO_EHDR
  *   2. parses as a valid ELF shared object
- *   3. exports the four __kernel_* symbols at addresses inside the page
+ *   3. exports the five __kernel_* symbols at addresses inside the page
  *   4. carries GNU symbol versioning naming LINUX_2.6.39 so glibc/musl
  *      dl_vdso_vsym() can resolve unversioned lookups
  *   5. trampolines actually execute (call __kernel_clock_gettime and

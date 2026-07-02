@@ -1,4 +1,5 @@
-/* direct write(2) hello world
+/*
+ * direct write(2) hello world
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

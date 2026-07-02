@@ -1,20 +1,20 @@
-/* getdents64 overlong-UTF-8 dirent skip regression
+/*
+ * getdents64 overlong-UTF-8 dirent skip regression
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * macOS APFS lets filenames exceed Linux NAME_MAX (255 bytes) on the
- * UTF-8 byte axis: ~90 CJK codepoints already crosses the cap while
- * staying under APFS's per-component character limit. The guest
- * cannot create such a name through Linux syscalls (NAME_MAX is
- * enforced at openat), so the surrounding harness builds the fixture
- * host-side and passes the directory path as argv[1].
+ * macOS APFS lets filenames exceed Linux NAME_MAX (255 bytes) on the UTF-8 byte
+ * axis: ~90 CJK codepoints already crosses the cap while staying under APFS's
+ * per-component character limit. The guest cannot create such a name through
+ * Linux syscalls (NAME_MAX is enforced at openat), so the surrounding harness
+ * builds the fixture host-side and passes the directory path as argv[1].
  *
- * Pre-fix behavior: sys_getdents64 aborted the whole stream with
- * ENAMETOOLONG the first time path_translate_dirent_name reported an
- * oversize entry, truncating ls / find / coreutils listings.
- * Post-fix: the overlong entry is skipped and the rest of the stream
- * is delivered, matching what real Linux does on the same input.
+ * Pre-fix behavior: sys_getdents64 aborted the whole stream with ENAMETOOLONG
+ * the first time path_translate_dirent_name reported an oversize entry,
+ * truncating ls / find / coreutils listings. Post-fix: the overlong entry is
+ * skipped and the rest of the stream is delivered, matching what real Linux
+ * does on the same input.
  */
 
 #include <dirent.h>
@@ -49,13 +49,12 @@ static const char EXPECTED_NAME[] = "expected.txt";
  * Returns -errno on the first non-EOF failure so the caller can tell a
  * mid-stream ENAMETOOLONG from an empty directory.
  *
- * The buffer is sized just past a single small dirent so each call
- * returns at most one entry. With multiple overlong files in the
- * fixture, this guarantees at least one call starts fresh (guest_pos
- * == 0) on an overlong entry, which is the exact condition under
- * which the pre-fix code returns -ENAMETOOLONG to userspace and
- * truncates the listing for ls / find. Larger buffers can mask the
- * bug because APFS hash order may bury every overlong after a
+ * The buffer is sized just past a single small dirent so each call returns at
+ * most one entry. With multiple overlong files in the fixture, this guarantees
+ * at least one call starts fresh (guest_pos == 0) on an overlong entry, which
+ * is the exact condition under which the pre-fix code returns -ENAMETOOLONG to
+ * userspace and truncates the listing for ls / find. Larger buffers can mask
+ * the bug because APFS hash order may bury every overlong after a
  * partial-return point.
  */
 static int scan_directory(const char *path,
@@ -69,13 +68,12 @@ static int scan_directory(const char *path,
     if (fd < 0)
         return -errno;
 
-    /* 64 bytes caps each call at one entry for the visible names
-     * (reclen 24 for ".", 24 for "..", 32 for "expected.txt"; ". + .."
-     * could pack into 48, but five overlong files outnumber three
-     * visible normals so at least one call still starts fresh on an
-     * overlong entry with guest_pos == 0 -- the exact condition under
-     * which pre-fix sys_getdents64 returned -ENAMETOOLONG to userspace
-     * and truncated the listing).
+    /* 64 bytes caps each call at one entry for the visible names (reclen 24 for
+     * ".", 24 for "..", 32 for "expected.txt"; ". + .." could pack into 48, but
+     * five overlong files outnumber three visible normals so at least one call
+     * still starts fresh on an overlong entry with guest_pos == 0 -- the exact
+     * condition under which pre-fix sys_getdents64 returned -ENAMETOOLONG to
+     * userspace and truncated the listing).
      */
     char buf[64];
     for (;;) {
@@ -88,9 +86,9 @@ static int scan_directory(const char *path,
         if (n == 0)
             break;
 
-        /* Validate the binary ABI strictly: an unterminated d_name or a
-         * forged d_reclen could otherwise let strcmp walk off the buffer.
-         * Header is 19 bytes; max valid record fits in n-off.
+        /* Validate the binary ABI strictly: an unterminated d_name or a forged
+         * d_reclen could otherwise let strcmp walk off the buffer. Header is 19
+         * bytes; max valid record fits in n-off.
          */
         for (long off = 0; off < n;) {
             linux_dirent64_t *de = (linux_dirent64_t *) (buf + off);
@@ -152,8 +150,8 @@ int main(int argc, char **argv)
     }
 
     TEST("listing has only the normal entry");
-    /* The overlong file is present on disk but must be silently
-     * skipped, so the visible-entry count is exactly 1.
+    /* The overlong file is present on disk but must be silently skipped, so the
+     * visible-entry count is exactly 1.
      */
     if (rc < 0) {
         errno = -rc;

@@ -85,7 +85,8 @@ static _Atomic int futex_interrupt_requested = 0;
 #define FUTEX_BITSET_MATCH_ANY 0xFFFFFFFFU
 
 /* PI futex word layout (bits):
- *   0-30: TID of lock holder (0 = unlocked)
+ *   0-29: TID of lock holder (0 = unlocked)
+ *   30:   FUTEX_OWNER_DIED (set by robust_list_walk on thread exit)
  *   31:   FUTEX_WAITERS (at least one thread is blocked)
  *
  * Linux kernel: FUTEX_WAITERS=0x80000000 (bit 31), FUTEX_OWNER_DIED=0x40000000
@@ -1051,7 +1052,8 @@ static int64_t futex_wake_op(guest_t *g,
 /* PI (Priority-Inheritance) futex.
  *
  * PI futexes use the futex word itself as an atomic lock:
- *   bits 0-30 = owner TID (FUTEX_TID_MASK), bit 31 = FUTEX_WAITERS
+ *   bits 0-29 = owner TID (FUTEX_TID_MASK), bit 30 = FUTEX_OWNER_DIED,
+ *   bit 31 = FUTEX_WAITERS
  *
  * Futex emulation does not implement real priority inheritance (boosting the
  * holder's priority to the highest waiter's), but it implements the locking
@@ -1063,7 +1065,7 @@ static int64_t futex_wake_op(guest_t *g,
 
 /* FUTEX_LOCK_PI: Block until the lock at uaddr can be acquired.
  *
- * The PI futex word stores the owner TID in bits 0-30 and a WAITERS flag in bit
+ * The PI futex word stores the owner TID in bits 0-29 and a WAITERS flag in bit
  * 31. The kernel emulation sets FUTEX_WAITERS when a thread blocks, so the
  * current owner knows to call FUTEX_UNLOCK_PI instead of releasing the word
  * with the uncontended userspace CAS(TID->0) path.

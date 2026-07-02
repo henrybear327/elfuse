@@ -1,4 +1,5 @@
-/* x86_64-stress.c - High-VA mmap stress for x86_64-via-Rosetta
+/*
+ * x86_64-stress.c - High-VA mmap stress for x86_64-via-Rosetta
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

@@ -1,4 +1,5 @@
-/* Linux aarch64 syscall dispatch
+/*
+ * Linux aarch64 syscall dispatch
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -417,12 +418,10 @@ SC_FORWARD(sc_futex, sys_futex(g, x0, (int) x1, (uint32_t) x2, x3, x4, (uint32_t
  * dups outside any guest lock so a slow disk cannot stall concurrent mmap/fd
  * operations on other threads. fsync on non-regular fds returns EINVAL on
  * macOS, which is benign and ignored. Always returns 0 to mirror sync(2)'s
- * "void" spirit.
- */
-/* Inline fallback: under malloc failure the bulk-dup path cannot proceed, so
- * iterate one fd at a time, dupping under the matching lock and fsync outside
- * it. Slower (acquires/releases fd_lock per regular fd) but keeps sync(2)
- * honest under memory pressure instead of silently no-opping.
+ * "void" spirit. Inline fallback: under malloc failure the bulk-dup path cannot
+ * proceed, so iterate one fd at a time, dupping under the matching lock and
+ * fsync outside it. Slower (acquires/releases fd_lock per regular fd) but keeps
+ * sync(2) honest under memory pressure instead of silently no-opping.
  */
 static void sc_sync_fdtable_inline(void)
 {
@@ -1276,8 +1275,7 @@ static int64_t sc_sync_file_range(guest_t *g,
         return -LINUX_EINVAL;
     }
 
-    /*
-     * If the flags only ask to initiate asynchronous write-out without waiting
+    /* If the flags only ask to initiate asynchronous write-out without waiting
      * (i.e. SYNC_FILE_RANGE_WRITE (2)), we return 0 immediately to avoid
      * blocking. The host OS's background page-out daemon will handle flushing
      * dirty buffers. WAIT_BEFORE (1) and WAIT_AFTER (4) require blocking until
@@ -1322,9 +1320,10 @@ static int64_t sc_syncfs(guest_t *g,
         return err;
     host_fd_ref_close(&host_ref);
 
-    /* macOS does not have syncfs. We fall back to sync() which synchronizes
-     * all mounted filesystems, satisfying the filesystem-level consistency
-     * guarantee of syncfs. */
+    /* macOS does not have syncfs. We fall back to sync() which synchronizes all
+     * mounted filesystems, satisfying the filesystem-level consistency
+     * guarantee of syncfs.
+     */
     sync();
     return 0;
 }
@@ -2064,8 +2063,7 @@ int syscall_dispatch(hv_vcpu_t vcpu, guest_t *g, int *exit_code, bool verbose)
 slow_path:
     entry = RANGE_CHECK(nr, 0, SC_TABLE_SIZE) ? &syscall_table[nr] : NULL;
 
-/*
- * Private embedder pseudo-syscall for translated guests.
+/* Private embedder pseudo-syscall for translated guests.
  *
  * This is not a Linux syscall number. Translated x86_64 guests cannot issue
  * native AArch64 HVC instructions, so elfuse uses this private build-selected

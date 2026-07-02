@@ -1,4 +1,5 @@
-/* Linux aarch64 syscall dispatch
+/*
+ * Linux aarch64 syscall dispatch
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -13,8 +14,7 @@
 #include "core/guest.h"
 #include "core/elf.h"
 
-/* Linux aarch64 syscall numbers. */
-/* Sorted numerically for easy lookup. Reference:
+/* Linux aarch64 syscall numbers. Sorted numerically for easy lookup. Reference:
  * include/uapi/asm-generic/unistd.h in Linux source.
  */
 #define SYS_io_destroy 1
@@ -345,7 +345,7 @@ typedef struct {
 /* Linux ioctl constants. Linux and macOS use different ioctl numbers for the
  * same operations. Linux terminal ioctls use 0x54xx (from
  * asm-generic/ioctls.h). macOS equivalents are in <sys/ioctl.h> and
- * <sys/ttycom.h>. Translation is done in syscall_io.c:sys_ioctl().
+ * <sys/ttycom.h>. Translation is done in io.c:sys_ioctl().
  */
 #define LINUX_TCGETS 0x5401     /* -> macOS TIOCGETA (tcgetattr) */
 #define LINUX_TCSETS 0x5402     /* -> macOS TIOCSETA (tcsetattr TCSANOW) */
@@ -583,10 +583,9 @@ typedef struct {
     uint64_t rlim_cur, rlim_max;
 } linux_rlimit64_t;
 
-/* Linux struct utmpx (aarch64 LP64). */
-/* Matches musl's struct utmpx layout. Used for /var/run/utmp synthesis. On
- * LP64: short=2, int=4, long=8, sizeof(struct timeval)=16.
- * sizeof(linux_utmpx_t) == 400 (396 data + 4 trailing padding).
+/* Linux struct utmpx (aarch64 LP64). Matches musl's struct utmpx layout. Used
+ * for /var/run/utmp synthesis. On LP64: short=2, int=4, long=8, sizeof(struct
+ * timeval)=16. sizeof(linux_utmpx_t) == 400 (396 data + 4 trailing padding).
  */
 #define LINUX_UT_LINESIZE 32
 #define LINUX_UT_NAMESIZE 32

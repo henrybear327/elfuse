@@ -1,4 +1,5 @@
-/* Host-side unit test for ELFUSE_FAKEROOT environment overrides.
+/*
+ * Host-side unit test for ELFUSE_FAKEROOT environment overrides.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -14,7 +15,8 @@
 #include "syscall/abi.h"
 
 /* Mock shim_globals_publish_pgsid to avoid linking the entire guest shim
- * subsystem */
+ * subsystem
+ */
 void shim_globals_publish_pgsid(guest_t *g, int64_t pgid, int64_t sid);
 void shim_globals_publish_pgsid(guest_t *g, int64_t pgid, int64_t sid)
 {

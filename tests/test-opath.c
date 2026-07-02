@@ -1,4 +1,5 @@
-/* O_PATH semantics tests
+/*
+ * O_PATH semantics tests
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

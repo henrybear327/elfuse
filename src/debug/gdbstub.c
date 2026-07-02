@@ -1,4 +1,5 @@
-/* GDB Remote Serial Protocol stub for guest debugging
+/*
+ * GDB Remote Serial Protocol stub for guest debugging
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -193,14 +194,6 @@ static int rsp_reply_error(int errnum)
     return rsp_reply(buf);
 }
 
-/* Read one RSP packet from the client. Strips $...# framing and verifies
- * checksum. Sends + acknowledgment on success.
- * Returns packet length, 0 on EOF, -1 on error. Also handles bare 0x03 (Ctrl+C)
- * by returning "\x03" as a 1-byte packet.
- *
- * Uses a static read buffer to batch socket reads instead of reading one byte
- * at a time. Packets exceeding bufsz are rejected with E00.
- */
 /* Breakpoint / watchpoint management. */
 
 /* BAS (Byte Address Select) for a watchpoint of given length aligned to the
@@ -416,12 +409,9 @@ static void build_stop_reply(char *buf, size_t bufsz)
 
 /* Packet handlers. */
 
-/* Return the snapshot offset and byte size for a GDB register number.
- * Returns 0 on success, -1 for invalid register. The two regular families
- * (X0-X30, V0-V31) use closed-form math; the five irregular slots live in a
- * sparse table so each one is a data entry instead of a switch case.
+/* Handle 'g': read all registers from the snapshot for current_g_tid and reply
+ * with the full register hex dump.
  */
-/* Handle 'g': read all registers from snapshot for current_g_tid. */
 static void handle_read_regs(void)
 {
     const thread_entry_t *t = find_thread_for_tid(gdb.current_g_tid);
@@ -670,8 +660,8 @@ static void handle_breakpoint(const char *pkt, int insert)
     case 0:
         /* Software breakpoint: for MVP, treat as hardware breakpoint since
          * hardware support is available and this avoids I-cache issues
+         * fallthrough
          */
-        /* fallthrough */
     case 1:
         /* Hardware breakpoint */
         if (insert)

@@ -1,4 +1,5 @@
-/* /proc/self/{auxv,environ} exec refresh regression test
+/*
+ * /proc/self/{auxv,environ} exec refresh regression test
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

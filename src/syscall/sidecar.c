@@ -1,4 +1,5 @@
-/* Case-folding fallback VFS helpers
+/*
+ * Case-folding fallback VFS helpers
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -242,10 +243,10 @@ static void sidecar_index_free(sidecar_index_t *index)
     index->count = 0;
 }
 
-/* Deep-copy src into dst so the caller can mutate dst freely and still recover
- * src for rollback.
+/* Deep-copy @src into @dst so the caller can mutate @dst freely and still
+ * recover @src for rollback.
  *
- * Returns 0 on success, -1 with errno on alloc failure (dst is left empty in
+ * Returns 0 on success, -1 with errno on alloc failure (@dst is left empty in
  * that case).
  */
 static int sidecar_index_clone(const sidecar_index_t *src, sidecar_index_t *dst)
@@ -610,16 +611,16 @@ int sidecar_translate_lookup_at(guest_fd_t dirfd,
     if (sidecar_open_base(dirfd, path, out, outsz, &cur_fd, &absolute) < 0)
         return -1;
 
-    /* Sidecar only speaks for entries that live inside the sysroot tree (or
-     * are reachable through an index mapping). The sysroot resolver
+    /* Sidecar only speaks for entries that live inside the sysroot tree (or are
+     * reachable through an index mapping). The sysroot resolver
      * (proc_resolve_sysroot_path_flags) falls back to the literal host path
      * when the guest path does not exist under the sysroot; a walk that
      * unconditionally re-anchored such paths at the sysroot would veto that
      * fallback and break host-resource access (mktemp dirs, /etc/resolv.conf).
      * Track whether any component actually consulted an index mapping: with a
-     * mapped prefix the sysroot view is authoritative and missing suffixes
-     * must surface as ENOENT against the translated path; without one, a walk
-     * that leaves the tree simply is not sidecar's business (return 0).
+     * mapped prefix the sysroot view is authoritative and missing suffixes must
+     * surface as ENOENT against the translated path; without one, a walk that
+     * leaves the tree simply is not sidecar's business (return 0).
      */
     bool used_mapping = false;
     size_t out_len = strlen(out);
@@ -1049,9 +1050,10 @@ static int sidecar_write_all(int fd, const char *buf, size_t len)
     return 0;
 }
 
-/* Serialize the index into a malloc'd buffer. *out_len receives the byte count.
+/* Serialize the index into a malloc'd buffer. *@out_len receives the byte
+ * count.
  *
- * Returns 0 on success, -1 with errno on error; *out is NULL on failure.
+ * Returns 0 on success, -1 with errno on error; *@out is NULL on failure.
  */
 static int sidecar_serialize_index(const sidecar_index_t *index,
                                    char **out,
@@ -1214,7 +1216,7 @@ static int sidecar_generate_token(char token[SIDECAR_TOKEN_NAME_LEN + 1])
     return 0;
 }
 
-/* Open the parent directory sidecar would maintain an index in for `path`.
+/* Open the parent directory sidecar would maintain an index in for @path.
  * Returns 0 with parent->dirfd open on success, -1 on error, and 1 when the
  * parent resolves outside the sysroot: such paths follow the resolver's
  * host-literal fallback (proc_resolve_sysroot_path_flags) and carry no index,

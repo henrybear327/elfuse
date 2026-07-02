@@ -1,4 +1,5 @@
-/* x86_64-rosetta-audit.c - Rosetta thread/signal acceptance smoke
+/*
+ * x86_64-rosetta-audit.c - Rosetta thread/signal acceptance smoke
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

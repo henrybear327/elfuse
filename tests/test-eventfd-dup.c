@@ -1,4 +1,5 @@
-/* test-eventfd-dup.c -- dup of eventfd shares state (Linux contract)
+/*
+ * test-eventfd-dup.c -- dup of eventfd shares state (Linux contract)
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

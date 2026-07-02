@@ -1,4 +1,5 @@
-/* x86_64-via-Apple-Rosetta translator setup for elfuse.
+/*
+ * x86_64-via-Apple-Rosetta translator setup for elfuse.
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

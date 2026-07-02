@@ -1,4 +1,5 @@
-/* GDB register snapshot helpers
+/*
+ * GDB register snapshot helpers
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -96,6 +97,13 @@ void gdb_restore_vcpu(thread_entry_t *t, int tde_stop)
     t->gdb_regs_dirty = false;
 }
 
+/* Return the snapshot offset and byte size for a GDB register number via
+ * @out_off and @out_size.
+ *
+ * Returns 0 on success, -1 for an invalid register. The two regular families
+ * (X0-X30, V0-V31) use closed-form math; the five irregular slots live in a
+ * sparse table so each one is a data entry instead of a switch case.
+ */
 int gdb_reg_offset(uint64_t regnum, int *out_off, int *out_size)
 {
     if (regnum < 31) {

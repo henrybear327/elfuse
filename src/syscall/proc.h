@@ -1,4 +1,5 @@
-/* Process state and management
+/*
+ * Process state and management
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -175,10 +176,10 @@ uint32_t proc_get_gid(void);
 uint32_t proc_get_egid(void);
 uint32_t proc_get_sgid(void);
 
-/* Linux setuid semantics for non-root processes: setuid(uid) : set euid; if uid
- * == ruid or suid, also set ruid+suid setreuid(r,e) : swap real/effective
- * within {ruid, euid, suid} setresuid(r,e,s) : set any combination within
- * {ruid, euid, suid}
+/* Linux setuid semantics for non-root processes: setuid(@uid) : set euid only
+ * (non-root cannot change ruid/suid) setreuid(r,e) : swap real/effective within
+ * {ruid, euid, suid} setresuid(r,e,s) : set any combination within {ruid, euid,
+ * suid}
  * Returns 0 on success, -EPERM if transition is not allowed.
  */
 int64_t proc_sys_setuid(uint32_t uid);

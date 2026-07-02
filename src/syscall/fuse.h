@@ -60,9 +60,9 @@ bool fuse_fd_refuse_mmap(int fd);
 
 /* Move the per-fd offset for a FUSE-backed regular file.
  *
- * Returns the new offset on success or a negative Linux errno. /dev/fuse and
- * FUSE-backed directories return -ESPIPE/-EINVAL to match Linux semantics for
- * fds that do not support absolute seeking.
+ * Returns the new offset on success or a negative Linux errno. /dev/fuse
+ * returns -ESPIPE (stream-like, no absolute position); FUSE-backed regular
+ * files and directories are seekable.
  */
 int64_t fuse_lseek_fd(int fd, int64_t offset, int whence);
 int64_t fuse_fchdir(int fd);

@@ -1,11 +1,12 @@
-/* Native-host unit test for fork IPC protocol identity.
+/*
+ * Native-host unit test for fork IPC protocol identity.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * The fork child is spawned from elfuse_path, so a long-running parent can
- * handshake with a newer on-disk child after an upgrade. The first header
- * word is therefore the protocol identity, not just a frame delimiter.
+ * handshake with a newer on-disk child after an upgrade. The first header word
+ * is therefore the protocol identity, not just a frame delimiter.
  */
 
 #include <stdbool.h>
@@ -41,8 +42,8 @@ _Static_assert(_Generic(((ipc_header_t *) 0)->has_shm, bool: 1, default: 0),
 _Static_assert(_Generic(((ipc_header_t *) 0)->is_rosetta, bool: 1, default: 0),
                "is_rosetta must remain a bool field");
 /* The wire is private to one build (FORK_IPC_PROTOCOL_MAGIC bumps on every
- * incompatible layout change), but parent and child still need to agree on
- * the width of the bool flags they exchange. Pin the assumption so a future
+ * incompatible layout change), but parent and child still need to agree on the
+ * width of the bool flags they exchange. Pin the assumption so a future
  * toolchain that widens _Bool fails the build instead of silently desyncing.
  */
 _Static_assert(sizeof(bool) == 1,

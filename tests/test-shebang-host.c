@@ -1,4 +1,5 @@
-/* Native-host unit test for shebang parsing.
+/*
+ * Native-host unit test for shebang parsing.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -122,7 +123,8 @@ int main(void)
     test_case(case7, sizeof(case7) - 1, 0, "", "");
 
     /* 8. Over-long/unterminated shebang line (exactly 511 bytes of 'a' without
-     * EOL) */
+     * EOL)
+     */
     char case8[512];
     case8[0] = '#';
     case8[1] = '!';

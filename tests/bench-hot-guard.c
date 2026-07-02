@@ -1,4 +1,5 @@
-/* Hot-syscall guardrail bench
+/*
+ * Hot-syscall guardrail bench
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -12,7 +13,7 @@
  *
  * Built twice from this single source:
  *   build/bench-hot-guard       -- static glibc. Compiled without
- *       -DGUARD_USE_LIBC_CG: `clock_gettime` calls the vDSO trampoline
+ *       -DGUARD_USE_LIBC_CG: clock_gettime calls the vDSO trampoline
  *       directly via its function-pointer address resolved through
  *       AT_SYSINFO_EHDR. Static glibc never initializes
  *       dl_sysinfo_dso, so its libc clock_gettime wrapper falls back
@@ -21,7 +22,7 @@
  *       have nothing to do with the vDSO. Direct call isolates the
  *       trampoline.
  *   build/bench-hot-guard-glibc -- dynamic glibc. Compiled with
- *       -DGUARD_USE_LIBC_CG so `clock_gettime` invokes the libc
+ *       -DGUARD_USE_LIBC_CG so clock_gettime invokes the libc
  *       wrapper, which on glibc 2.41 + a correctly-stamped vDSO
  *       (NT_GNU_ABI_TAG present, LINUX_2.6.39 versioning) routes the
  *       call through the same trampoline. The guardrail's 50 ns
@@ -154,16 +155,16 @@ static long bench_clock_gettime(void *ctx)
 {
     cg_ctx_t *c = ctx;
 #ifdef GUARD_USE_LIBC_CG
-    /* Dynamic glibc build: exercise the libc wrapper so the
-     * NT_GNU_ABI_TAG / LINUX_2.6.39 vDSO routing is validated end to
-     * end. If glibc falls back to SVC (broken note / version regress)
-     * this measurement jumps to ~2000 ns and the guardrail fails.
+    /* Dynamic glibc build: exercise the libc wrapper so the NT_GNU_ABI_TAG /
+     * LINUX_2.6.39 vDSO routing is validated end to end. If glibc falls back to
+     * SVC (broken note / version regress) this measurement jumps to ~2000 ns
+     * and the guardrail fails.
      */
     (void) c->fn;
     return clock_gettime(CLOCK_MONOTONIC, &c->ts);
 #else
-    /* Static build (no dl_sysinfo_dso): call the trampoline directly
-     * via the resolved function pointer.
+    /* Static build (no dl_sysinfo_dso): call the trampoline directly via the
+     * resolved function pointer.
      */
     return c->fn(CLOCK_MONOTONIC, &c->ts);
 #endif

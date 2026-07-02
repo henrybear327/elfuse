@@ -1,4 +1,5 @@
-/* Test EPOLLET edge-trigger fidelity (kqueue EV_CLEAR backend)
+/*
+ * Test EPOLLET edge-trigger fidelity (kqueue EV_CLEAR backend)
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

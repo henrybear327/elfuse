@@ -1,4 +1,5 @@
-/* mremap syscall tests
+/*
+ * mremap syscall tests
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

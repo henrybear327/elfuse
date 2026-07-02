@@ -1,4 +1,5 @@
-/* test-shim-urandom-smp.c -- multi-thread urandom-read stress.
+/*
+ * test-shim-urandom-smp.c -- multi-thread urandom-read stress.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

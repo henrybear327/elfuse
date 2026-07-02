@@ -1,4 +1,5 @@
-/* Test musl pthread_create/pthread_join in elfuse
+/*
+ * Test musl pthread_create/pthread_join in elfuse
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.

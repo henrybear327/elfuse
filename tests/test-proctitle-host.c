@@ -1,4 +1,5 @@
-/* Host-side regression for runtime_set_process_title.
+/*
+ * Host-side regression for runtime_set_process_title.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

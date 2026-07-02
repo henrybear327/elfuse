@@ -1,4 +1,5 @@
-/* Process metadata state helpers
+/*
+ * Process metadata state helpers
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -441,9 +442,9 @@ bool proc_sysroot_casefold_enabled(void)
     return enabled;
 }
 
-/* Confirm resolved_path canonicalizes inside sysroot. This is a check-then-use
- * sequence: callers issue the actual syscall after this returns, so a symlink
- * swapped in between will not be re-validated. openat2
+/* Confirm @resolved_path canonicalizes inside @sysroot. This is a
+ * check-then-use sequence: callers issue the actual syscall after this returns,
+ * so a symlink swapped in between will not be re-validated. openat2
  * RESOLVE_{BENEATH,IN_ROOT} close that race for callers willing to opt in. For
  * the legacy *at() surface this is best-effort defense at the boundary; the
  * guest is in the host user's trust domain.

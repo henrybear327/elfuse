@@ -1,4 +1,5 @@
-/* MAP_SHARED msync tests
+/*
+ * MAP_SHARED msync tests
  *
  * Copyright 2026 elfuse contributors
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
@@ -547,8 +548,8 @@ out:
  * even when a previous shared mmap split an HVF stage-2 segment. The overlay
  * path tolerates multi-segment ranges and the gap finder keeps shared
  * file-backed allocations aligned to 2 MiB so subsequent mmaps do not re-split
- * mid-segment. Cover both: each chunk must mmap, accept guest writes, and
- * stay backed by its own memfd.
+ * mid-segment. Cover both: each chunk must mmap, accept guest writes, and stay
+ * backed by its own memfd.
  */
 static void test_shared_back_to_back_memfd_mappings(void)
 {

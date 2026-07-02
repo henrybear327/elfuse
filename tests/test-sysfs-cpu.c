@@ -1,4 +1,5 @@
-/* Test /sys/devices/system/cpu emulation
+/*
+ * Test /sys/devices/system/cpu emulation
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

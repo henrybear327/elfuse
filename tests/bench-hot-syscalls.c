@@ -1,4 +1,5 @@
-/* Guest microbenchmark for hot Linux syscalls.
+/*
+ * Guest microbenchmark for hot Linux syscalls.
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

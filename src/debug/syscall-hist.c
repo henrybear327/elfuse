@@ -1,4 +1,5 @@
-/* Dynamic-linker startup syscall histogram
+/*
+ * Dynamic-linker startup syscall histogram
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0

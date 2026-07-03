@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/attr.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -565,6 +566,72 @@ static int sidecar_open_base(guest_fd_t dirfd,
     return *base_fd < 0 ? -1 : 0;
 }
 
+static int sidecar_exact_name_exists(int dirfd, const char *name);
+
+/* Verdicts for the byte-exact on-disk spelling probe. */
+typedef enum {
+    SIDECAR_NAME_ERROR = -1, /* probe failed, errno set */
+    SIDECAR_NAME_EXACT = 0,
+    SIDECAR_NAME_ABSENT = 1,
+    SIDECAR_NAME_CASEFOLD = 2,
+} sidecar_name_verdict_t;
+
+/* Probe whether @name exists in @dirfd spelled exactly as given. APFS and
+ * HFS+ resolve names case- and normalization-insensitively, so a plain
+ * openat/fstatat existence probe cannot tell "entry exists as spelled" from
+ * "entry exists under a folded spelling"; Linux path resolution is byte-exact
+ * and must report ENOENT for the latter. getattrlistat(ATTR_CMN_NAME) goes
+ * through the same folding lookup but returns the on-disk spelling for a
+ * byte comparison. FSOPT_NOFOLLOW keeps the probe on the entry itself so a
+ * symlink component is verified by its own name, not its target's. The name
+ * buffer covers the APFS maximum (255 UTF-16 units, up to 765 UTF-8 bytes),
+ * so a returned name never truncates into a false mismatch.
+ *
+ * Returns a SIDECAR_NAME_* verdict; SIDECAR_NAME_ERROR carries errno.
+ * Filesystems that do not return ATTR_CMN_NAME fall back to the readdir
+ * scan, with a folded fstatat to separate ABSENT from CASEFOLD.
+ */
+static sidecar_name_verdict_t sidecar_probe_exact_name(int dirfd,
+                                                       const char *name)
+{
+    struct attrlist al = {
+        .bitmapcount = ATTR_BIT_MAP_COUNT,
+        .commonattr = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME,
+    };
+    struct {
+        u_int32_t length;
+        attribute_set_t returned;
+        attrreference_t name_ref;
+        char name[768];
+    } __attribute__((aligned(4), packed)) attr_buf;
+
+    int rc = getattrlistat(dirfd, name, &al, &attr_buf, sizeof(attr_buf),
+                           FSOPT_NOFOLLOW);
+    if (rc == 0 && (attr_buf.returned.commonattr & ATTR_CMN_NAME)) {
+        const char *disk_name = (const char *) &attr_buf.name_ref +
+                                attr_buf.name_ref.attr_dataoffset;
+        return strcmp(disk_name, name) == 0 ? SIDECAR_NAME_EXACT
+                                            : SIDECAR_NAME_CASEFOLD;
+    }
+    if (rc < 0) {
+        if (errno == ENOENT || errno == ENOTDIR)
+            return SIDECAR_NAME_ABSENT;
+        if (errno != ENOTSUP && errno != EINVAL)
+            return SIDECAR_NAME_ERROR;
+    }
+
+    int exists = sidecar_exact_name_exists(dirfd, name);
+    if (exists < 0)
+        return SIDECAR_NAME_ERROR;
+    if (exists == 1)
+        return SIDECAR_NAME_EXACT;
+    struct stat st;
+    if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) == 0)
+        return SIDECAR_NAME_CASEFOLD;
+    return (errno == ENOENT || errno == ENOTDIR) ? SIDECAR_NAME_ABSENT
+                                                 : SIDECAR_NAME_ERROR;
+}
+
 int sidecar_translate_lookup_at(guest_fd_t dirfd,
                                 const char *path,
                                 char *out,
@@ -691,22 +758,56 @@ int sidecar_translate_lookup_at(guest_fd_t dirfd,
         while (*peek == '/')
             peek++;
         if (*peek == '\0') {
-            /* Final component: an unmapped walk is the identity translation
-             * ${sysroot}${path}; claim it only if the entry actually exists
-             * there so the resolver's host-literal fallback stands otherwise.
+            /* Final component. Index-mapped components are byte-exact by
+             * construction. An unmapped one must exist under its exact
+             * spelling: a folded match is a Linux ENOENT and must veto the
+             * resolver's host-literal fallback outright, which would fold the
+             * same way against the host tree. A genuinely absent entry defers
+             * to that fallback when no mapping was consulted, and under a
+             * mapped prefix keeps the translated path so the actual syscall
+             * surfaces ENOENT.
              */
-            if (!used_mapping) {
-                struct stat st;
-                if (fstatat(cur_fd, host_comp, &st, AT_SYMLINK_NOFOLLOW) < 0) {
+            if (!mapped) {
+                sidecar_name_verdict_t probe =
+                    sidecar_probe_exact_name(cur_fd, host_comp);
+                if (probe == SIDECAR_NAME_ERROR) {
                     int saved_errno = errno;
                     close(cur_fd);
-                    if (saved_errno == ENOENT || saved_errno == ENOTDIR)
-                        return 0;
                     errno = saved_errno;
                     return -1;
                 }
+                if (probe == SIDECAR_NAME_CASEFOLD) {
+                    close(cur_fd);
+                    errno = ENOENT;
+                    return -1;
+                }
+                if (probe == SIDECAR_NAME_ABSENT && !used_mapping) {
+                    close(cur_fd);
+                    return 0;
+                }
             }
             break;
+        }
+
+        /* Intermediate components resolve through openat, which folds case on
+         * APFS: reject folded matches here for the same reason as above.
+         * Absent entries proceed to the openat below, whose ENOENT handling
+         * distinguishes the fallback and mapped-prefix flows.
+         */
+        if (!mapped) {
+            sidecar_name_verdict_t probe =
+                sidecar_probe_exact_name(cur_fd, host_comp);
+            if (probe == SIDECAR_NAME_ERROR) {
+                int saved_errno = errno;
+                close(cur_fd);
+                errno = saved_errno;
+                return -1;
+            }
+            if (probe == SIDECAR_NAME_CASEFOLD) {
+                close(cur_fd);
+                errno = ENOENT;
+                return -1;
+            }
         }
 
         int next_fd =

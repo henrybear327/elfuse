@@ -11,7 +11,7 @@
         test-matrix test-matrix-elfuse-aarch64 test-matrix-qemu-aarch64 \
         test-full test-multi-vcpu test-rwx test-sysroot-rename \
         test-case-collision test-case-collision-fallback test-getdents64-overlong \
-        test-sysroot-host-fallback \
+        test-sysroot-host-fallback test-sysroot-case-exact \
         test-sysroot-create-paths test-fork-ipc-protocol-host test-identity-override-host \
         test-proctitle-host test-proctitle-low-stack \
         test-sysroot-procfs-exec test-timeout-disable test-fuse-alpine \
@@ -63,6 +63,8 @@ check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
 	@$(MAKE) --no-print-directory test-getdents64-overlong
 	@printf "\n$(BLUE)━━━ sysroot host-fallback validation ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-sysroot-host-fallback
+	@printf "\n$(BLUE)━━━ sysroot byte-exact lookup validation ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-sysroot-case-exact
 	@printf "\n$(BLUE)━━━ Alpine sysroot FUSE validation ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-fuse-alpine
 	@printf "\n$(BLUE)━━━ timeout=0 validation ━━━$(RESET)\n"
@@ -154,6 +156,31 @@ test-sysroot-host-fallback: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-host-fallbac
 	$(ELFUSE_BIN) --sysroot "$$sysroot" \
 	    $(BUILD_DIR)/test-sysroot-host-fallback \
 	    "$$hostdir" "$$mirror/final.txt" "$$mirror/both.txt"
+
+## Wrong-case (and wrong-normalization) lookups must fail with ENOENT:
+## Linux treats names as byte strings, while APFS resolves them case- and
+## normalization-insensitively. The sidecar walk verifies the on-disk
+## spelling of every unmapped component instead of trusting the folded
+## probe. Stages exact-case fixtures host-side; the guest asserts folded
+## spellings do not resolve. The normalization probes require the sidecar,
+## so the guest skips them when the staging volume is case-sensitive.
+test-sysroot-case-exact: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-case-exact
+	@set -e; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	sysroot="$$tmpdir/sysroot"; \
+	mkdir -p "$$sysroot/data/sub"; \
+	printf 'exact\n' > "$$sysroot/data/Makefile"; \
+	printf 'sub\n' > "$$sysroot/data/sub/f.txt"; \
+	printf 'nfc\n' > "$$sysroot/data/caf$$(printf '\303\251')"; \
+	mode=cs; \
+	if [ -e "$$sysroot/data/MAKEFILE" ]; then mode=ci; fi; \
+	$(ELFUSE_BIN) --sysroot "$$sysroot" \
+	    $(BUILD_DIR)/test-sysroot-case-exact "$$mode"; \
+	if [ ! -e "$$sysroot/data/Makefile" ]; then \
+		printf "$(RED)FAIL$(RESET) wrong-case op removed the exact entry\n"; \
+		exit 1; \
+	fi
 
 # Build APFS-side dirents whose UTF-8 byte length exceeds Linux
 # NAME_MAX (255). 89 copies of U+3042 (3-byte UTF-8) plus a 1-byte

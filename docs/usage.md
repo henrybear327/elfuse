@@ -158,7 +158,10 @@ Practical notes:
 - The sysroot setting is preserved across guest `fork` and `execve`, so spawned
   children see the same view of the filesystem.
 - On case-insensitive macOS volumes, `elfuse` maintains per-directory
-  sidecar token files so case-colliding Linux names remain distinct.
+  sidecar token files so case-colliding Linux names remain distinct, and
+  lookups verify the on-disk spelling byte-for-byte: a name that differs
+  from an existing entry only by case (or Unicode normalization form)
+  reports `ENOENT`, matching Linux semantics instead of APFS's folding.
 - Use `--create-sysroot PATH` if the host filesystem is case-insensitive
   (default APFS) and the sysroot is being provisioned for the first
   time; `elfuse` creates a case-sensitive APFS sparsebundle, mounts it

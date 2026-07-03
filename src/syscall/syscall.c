@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <sys/file.h> /* flock() */
 #include <dirent.h>
@@ -2118,6 +2119,25 @@ int syscall_dispatch(hv_vcpu_t vcpu, guest_t *g, int *exit_code, bool verbose)
             if (!buf || avail < count) {
                 host_fd_ref_close(&host_ref);
                 goto slow_path;
+            }
+
+            /* A blocking read on a pipe/stdio fd would park this vCPU thread in
+             * an uninterruptible host read(), where the preempt thread's
+             * hv_vcpus_exit cannot reach it. Probe non-blocking: if nothing is
+             * ready the read would block, so divert to the slow path where
+             * sys_read waits interruptibly (poll + wakeup pipe). Regular files
+             * never block and stay on the fast path.
+             */
+            if (nr == SYS_read && (tp == FD_PIPE || tp == FD_STDIO)) {
+                struct pollfd pfd = {.fd = host_ref.fd, .events = POLLIN};
+                /* Divert on not-ready (0) or probe error (< 0, e.g. EINTR): a
+                 * blocking read here cannot be preempted, so let the
+                 * interruptible slow path handle both.
+                 */
+                if (poll(&pfd, 1, 0) <= 0) {
+                    host_fd_ref_close(&host_ref);
+                    goto slow_path;
+                }
             }
 
             ssize_t ret = (nr == SYS_read) ? read(host_ref.fd, buf, count)

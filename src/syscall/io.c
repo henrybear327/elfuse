@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <sys/ioctl.h>
+#include <poll.h>
 #include <termios.h>
 
 #include "utils.h"
@@ -33,6 +34,7 @@
 #include "core/shim-globals.h"
 #include "hvutil.h"
 #include "runtime/procemu.h"
+#include "runtime/futex.h"
 #include "runtime/thread.h"
 
 #include "syscall/abi.h"
@@ -42,6 +44,7 @@
 #include "syscall/inotify.h"
 #include "syscall/io.h"
 #include "syscall/net.h"
+#include "syscall/poll.h"
 #include "syscall/proc.h"
 #include "syscall/signal.h"
 
@@ -145,6 +148,42 @@ static int64_t io_return_zero(host_fd_ref_t *host_ref)
 {
     host_fd_ref_close(host_ref);
     return 0;
+}
+
+static int64_t wait_readable_or_interrupted(int host_fd)
+{
+    int wake_fd = wakeup_pipe_read_fd();
+
+    /* poll() ignores entries with a negative fd, so a missing wakeup pipe just
+     * drops the second slot.
+     */
+    struct pollfd fds[2] = {
+        {.fd = host_fd, .events = POLLIN},
+        {.fd = wake_fd, .events = POLLIN},
+    };
+
+    for (;;) {
+        /* Ignored/default-ignore signals do not interrupt; restartable handlers
+         * still need to run promptly through the syscall epilogue.
+         */
+        if (proc_exit_group_requested() || futex_interrupt_consume() ||
+            signal_pending_interruption(NULL))
+            return -LINUX_EINTR;
+
+        /* Bounded wait even when the wakeup pipe exists: the pipe is a
+         * single-consumer channel, so a sibling thread blocked in read/poll can
+         * drain the byte meant to wake this one. The 200 ms recheck guarantees
+         * every waiter re-evaluates its own interrupt conditions.
+         */
+        int ret = poll(fds, 2, 200);
+        if (ret < 0)
+            return linux_errno();
+
+        if (wake_fd >= 0 && (fds[1].revents & POLLIN))
+            wakeup_pipe_drain();
+        if (fds[0].revents)
+            return 0;
+    }
 }
 
 void urandom_fd_reset_cache(int guest_fd)
@@ -942,6 +981,20 @@ int64_t sys_read(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
         if (intercepted != INT64_MIN) {
             host_fd_ref_close(&host_ref);
             return intercepted;
+        }
+    }
+
+    int flags = fcntl(host_ref.fd, F_GETFL);
+    /* Only wait when the fd can actually become readable. A write-only fd (e.g.
+     * the write end of a pipe) never signals POLLIN, so waiting would hang;
+     * fall straight through to read(), which returns EBADF like Linux.
+     */
+    if ((type == FD_PIPE || type == FD_STDIO) && flags >= 0 &&
+        !(flags & O_NONBLOCK) && (flags & O_ACCMODE) != O_WRONLY) {
+        int64_t wait = wait_readable_or_interrupted(host_ref.fd);
+        if (wait < 0) {
+            host_fd_ref_close(&host_ref);
+            return wait;
         }
     }
 

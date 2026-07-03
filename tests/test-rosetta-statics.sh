@@ -232,6 +232,27 @@ else
     report_fail "env-execve: rc=$env_rc (expected 0)"
 fi
 
+# Re-run the same execve with the rosettad AOT cache now warm for this digest.
+# The warm path returns from rosettad almost immediately, which historically
+# left stale TLB walk-cache entries alive across the exec page-table rebuild
+# and crashed the re-entry with an EL1 instruction abort (BAD_EXCEPTION
+# vec=0x200, exit 128). Guards the MMU-off _start re-entry in sys_execve.
+total=$((total + 1))
+set +e
+env_warm_rc=$(
+    "$TIMEOUT" 10 "$ELFUSE" "${STATICBIN}/env" "${STATICBIN}/true" \
+        > /dev/null 2>&1
+    printf '%s' "$?"
+)
+set -e
+if [ "$env_warm_rc" = "0" ]; then
+    report_pass "env-execve-warm (stale-TLB regression)"
+elif [ "$env_warm_rc" = "124" ]; then
+    report_fail "env-execve-warm: timed out (likely hang in re-bootstrap)"
+else
+    report_fail "env-execve-warm: rc=$env_warm_rc (expected 0)"
+fi
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

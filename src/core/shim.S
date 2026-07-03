@@ -282,8 +282,18 @@ _start:
     /* Save SCTLR value from host (passed in X0) */
     mov x9, x0
 
-    /* TLB invalidation: ensure clean TLB state before enabling MMU */
+    /* TLB + I-cache invalidation: ensure clean translation state before
+     * enabling the MMU. Runs with SCTLR.M=0, so this fetch cannot be
+     * misdirected by stale TLB state -- which is exactly why the execve
+     * re-entry path lands here instead of resuming the interrupted
+     * svc_handler frame: after guest_reset recycles the PT pool in place,
+     * stale walk-cache entries can poison any translated fetch, and the
+     * only architecturally safe point to drop them is before MMU-on.
+     * IC IALLUIS covers stale I-cache lines from a pre-exec image that
+     * loaded code at the same addresses (no-op cost at cold boot).
+     */
     tlbi vmalle1is
+    ic ialluis
     dsb ish
     isb
 

@@ -60,7 +60,47 @@ static void exec_sync_vcpu_regs(hv_vcpu_t vcpu)
     (void) vcpu_get_sysreg(vcpu, HV_SYS_REG_ELR_EL1);
     (void) vcpu_get_sysreg(vcpu, HV_SYS_REG_SP_EL0);
     (void) vcpu_get_sysreg(vcpu, HV_SYS_REG_SPSR_EL1);
-    (void) vcpu_get_reg(vcpu, HV_REG_X8);
+    (void) vcpu_get_reg(vcpu, HV_REG_PC);
+}
+
+/* Re-enter the replacement image through the shim's _start cold-boot protocol
+ * instead of resuming the interrupted svc_handler frame.
+ *
+ * guest_reset recycles the PT pool in place, so after the rebuild the vCPU's
+ * hardware TLB can still hold walk-cache entries that point into recycled
+ * page-table pages. Resuming a translated fetch through that state is unsound:
+ * the walk can read a rewritten page and either fault (transient EL1
+ * instruction abort at the shim, observed as BAD_EXCEPTION vec=0x200) or
+ * silently translate to the wrong IPA. The TLBI VMALLE1IS in exec_drop_frame
+ * came too late -- fetching the instructions leading up to it already required
+ * translation.
+ *
+ * The only architecturally safe sequence is the one cold boot already uses:
+ * enter _start with SCTLR.M=0 (instruction fetches use flat IPA addressing and
+ * cannot be misdirected), let it TLBI + IC with the MMU off, then enable the
+ * MMU via HVC #4 and ERET to ELR_EL1. This mirrors the staging in
+ * guest_bootstrap_create_vcpu; the caller must have set TTBR0/TCR/TTBR1/
+ * ELR_EL1/SP_EL0/SPSR_EL1/TPIDR_EL0 for the new image beforehand.
+ */
+static void exec_stage_mmu_off_reentry(hv_vcpu_t vcpu, guest_t *g)
+{
+    uint64_t shim_ipa = guest_ipa(g, g->shim_base);
+    uint64_t el1_sp = guest_ipa(g, g->shim_data_base + BLOCK_2MIB);
+    uint64_t sctlr =
+        SCTLR_RES1 | SCTLR_C | SCTLR_I | SCTLR_DZE | SCTLR_UCT | SCTLR_UCI;
+
+    /* The old syscall frame on the EL1 stack is dead; _start never pops it,
+     * so reset SP_EL1 to the stack top as cold boot does. HV_CHECK on every
+     * write for parity with guest_bootstrap_create_vcpu: past the point of no
+     * return a silent HVF failure would resume the vCPU on half-staged
+     * register state, so abort instead.
+     */
+    HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, el1_sp));
+    HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, sctlr));
+    HV_CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, shim_ipa));
+    HV_CHECK(hv_vcpu_set_reg(vcpu, HV_REG_CPSR, 0x3c5));
+    vcpu_zero_gprs(vcpu);
+    HV_CHECK(hv_vcpu_set_reg(vcpu, HV_REG_X0, sctlr | SCTLR_M));
 }
 
 static void exec_republish_shim_globals_or_die(hv_vcpu_t vcpu,
@@ -746,8 +786,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL0, sp_ipa);
         hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, 0x0);
         hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_TPIDR_EL0, 0);
-        vcpu_zero_gprs(vcpu);
-        hv_vcpu_set_reg(vcpu, HV_REG_X8, 2);
+        exec_stage_mmu_off_reentry(vcpu, g);
         tlbi_request_clear();
 
         exec_sync_vcpu_regs(vcpu);
@@ -1045,17 +1084,10 @@ int64_t sys_execve(hv_vcpu_t vcpu,
      */
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_TPIDR_EL0, 0);
 
-    /* Drop all register contents from the old image; X8 is set below as the
-     * shim control code.
+    /* Drop all register contents from the old image and re-enter through the
+     * shim's MMU-off _start protocol (TLBI before any translated fetch).
      */
-    vcpu_zero_gprs(vcpu);
-
-    /* Tell the shim that execve replaced the full guest register state. X8=2
-     * means: flush TLB, discard the old syscall frame, and return without
-     * restoring pre-exec registers. This bypasses the normal syscall epilogue,
-     * which would otherwise overwrite X8 from cpu_tlbi_req.
-     */
-    hv_vcpu_set_reg(vcpu, HV_REG_X8, 2);
+    exec_stage_mmu_off_reentry(vcpu, g);
     tlbi_request_clear();
 
     exec_sync_vcpu_regs(vcpu);

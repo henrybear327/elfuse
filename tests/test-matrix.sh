@@ -654,6 +654,10 @@ run_rosetta_x86_64_suites()
         run_summary_suite "rosetta-jit" \
             bash "${REPO_ROOT}/tests/test-rosetta-jit.sh" "$ELFUSE" || rc=1
 
+        printf "\nRosetta execve fd preservation\n"
+        run_summary_suite "rosetta-execfd" \
+            bash "${REPO_ROOT}/tests/test-rosetta-execfd.sh" "$ELFUSE" || rc=1
+
         printf "\nRosetta glibc dynamic\n"
         run_summary_suite "rosetta-glibc" \
             bash "${REPO_ROOT}/tests/test-rosetta-glibc.sh" "$ELFUSE" || rc=1
@@ -672,7 +676,8 @@ run_rosetta_x86_64_suites()
     else
         local suite
         for suite in rosetta-statics rosetta-alpine rosetta-audit rosetta-jit \
-            rosetta-glibc rosetta-madvise rosetta-msync rosetta-mremap; do
+            rosetta-execfd rosetta-glibc rosetta-madvise rosetta-msync \
+            rosetta-mremap; do
             skip_suite "$suite" "Rosetta translator not installed"
         done
     fi

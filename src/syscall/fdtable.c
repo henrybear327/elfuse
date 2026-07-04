@@ -229,6 +229,39 @@ int fd_alloc_from_relaxed(int minfd,
     return fd_alloc_locked(minfd, type, host_fd, cleanup);
 }
 
+/* Report whether a guest fd slot >= minfd will be free for a fresh allocation
+ * once execve's CLOEXEC sweep has run. rosetta_finalize claims that slot for
+ * the pre-opened x86_64 binary past execve's point of no return, where an
+ * EMFILE is fatal; sys_execve calls this before guest_reset so an exhausted
+ * table fails gracefully with -EMFILE instead. The guest fd ceiling
+ * (FD_TABLE_SIZE) sits far below the host RLIMIT_NOFILE, so a guest can fill
+ * its table while the host still has fds, meaning the host open in elf_load
+ * does not catch this first.
+ *
+ * A slot qualifies if it is free now, or if it is open but CLOEXEC (the sweep
+ * closes it before rosetta_finalize allocates). Returns true if at least one
+ * such slot exists within RLIMIT_NOFILE.
+ */
+bool fd_reexec_slot_available(int minfd)
+{
+    if (minfd < 0)
+        minfd = 0;
+    pthread_mutex_lock(&fd_lock);
+    int limit = rlimit_nofile_cur;
+    if (limit > FD_TABLE_SIZE)
+        limit = FD_TABLE_SIZE;
+    bool available = false;
+    for (int i = minfd; i < limit; i++) {
+        if (fd_table[i].type == FD_CLOSED ||
+            (fd_table[i].linux_flags & LINUX_O_CLOEXEC)) {
+            available = true;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&fd_lock);
+    return available;
+}
+
 /* Allocate a specific FD slot. Enforces RLIMIT_NOFILE. Properly cleans up any
  * existing entry (including DIR* for directory FDs) before overwriting.
  *

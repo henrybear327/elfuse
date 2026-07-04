@@ -524,8 +524,8 @@ int guest_bootstrap_prepare(guest_t *g,
     if (want_rosetta) {
         /* /proc/self/maps for a rosetta guest reports the rosetta translator as
          * a single anonymous region covering [VA, VA+size). The original x86_64
-         * binary is not loaded into guest memory; rosetta exposes it via fd 3
-         * once rosetta_finalize pre-opens it.
+         * binary is not loaded into guest memory; rosetta exposes it via the
+         * guest fd rosetta_finalize pre-opens (published as AT_EXECFD).
          */
         register_elf_segment_regions(g, &rr.rosetta_info, 0,
                                      g->rosetta_guest_base - g->rosetta_va_base,
@@ -572,19 +572,22 @@ int guest_bootstrap_prepare(guest_t *g,
         proc_set_sysroot(sysroot);
     startup_trace_step("runtime_init", t0);
 
-    /* rosetta_finalize pre-opens the x86_64 binary at fd 3, constructs the
-     * binfmt_misc argv ([ROSETTA_PATH, binary, original_argv[1..]]), refreshes
+    /* rosetta_finalize pre-opens the x86_64 binary at the lowest free guest fd
+     * >= 3 (published as AT_EXECFD), constructs the binfmt_misc argv
+     * ([ROSETTA_PATH, binary, original_argv[1..]]), refreshes
      * /proc/self/cmdline, and installs the TTBR0 kbuf alias. The aarch64 path
      * uses the caller's argv directly. The remaining Rosetta runtime blocker is
      * high-VA mmap support for the translator's own slab and JIT allocations.
      */
     int rosetta_argc = 0;
     const char **rosetta_argv = NULL;
+    int rosetta_execfd = -1;
     if (want_rosetta) {
         t0 = startup_trace_now_ns();
         if (rosetta_finalize(g, 0, elf_host_path, elf_host_path_temp,
                              elf_guest_path, guest_argc, guest_argv, &rr,
-                             verbose, &rosetta_argc, &rosetta_argv, NULL) < 0) {
+                             verbose, &rosetta_argc, &rosetta_argv, NULL,
+                             &rosetta_execfd) < 0) {
             log_error("rosetta_finalize failed");
             return -1;
         }
@@ -607,8 +610,8 @@ int guest_bootstrap_prepare(guest_t *g,
     t0 = startup_trace_now_ns();
     boot->stack_pointer = build_linux_stack(
         g, g->stack_top, stack_argc, stack_argv, (const char **) environ,
-        stack_elf, stack_elf_load_base, stack_interp_base, native_vdso, -1,
-        &auxv);
+        stack_elf, stack_elf_load_base, stack_interp_base, native_vdso,
+        rosetta_execfd, &auxv);
     if (boot->stack_pointer == 0) {
         log_error("failed to build initial stack");
         free(rosetta_argv);
@@ -843,9 +846,11 @@ int guest_bootstrap_rosetta_post_reset(guest_t *g,
 
     int rosetta_argc = 0;
     const char **rosetta_argv = NULL;
+    int rosetta_execfd = -1;
     if (rosetta_finalize(g, 0, elf_host_path, elf_host_path_temp,
                          elf_guest_path, guest_argc, guest_argv, &rr, verbose,
-                         &rosetta_argc, &rosetta_argv, NULL) < 0) {
+                         &rosetta_argc, &rosetta_argv, NULL,
+                         &rosetta_execfd) < 0) {
         log_error("rosetta_finalize failed during exec re-bootstrap");
         return -1;
     }
@@ -855,9 +860,9 @@ int guest_bootstrap_rosetta_post_reset(guest_t *g,
 
     uint64_t native_vdso = vdso_build(g);
     linux_stack_auxv_t auxv;
-    uint64_t sp = build_linux_stack(
-        g, g->stack_top, rosetta_argc, rosetta_argv, (const char **) environ,
-        &rr.rosetta_info, 0, 0, native_vdso, -1 /* AT_EXECFD absent */, &auxv);
+    uint64_t sp = build_linux_stack(g, g->stack_top, rosetta_argc, rosetta_argv,
+                                    (const char **) environ, &rr.rosetta_info,
+                                    0, 0, native_vdso, rosetta_execfd, &auxv);
     free(rosetta_argv);
     if (sp == 0) {
         log_error("build_linux_stack failed during exec re-bootstrap");

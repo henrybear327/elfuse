@@ -68,12 +68,12 @@ int guest_bootstrap_create_vcpu(guest_t *g,
  *
  * The helper runs rosetta_prepare, appends every region the page-table builder
  * needs, rebuilds page tables, registers guest_region_t entries for
- * /proc/self/maps, runs rosetta_finalize (pre-opens fd 3, installs the kbuf
- * user alias, publishes the binfmt-misc argv via proc_set_cmdline), and builds
- * the initial Linux stack using the rosetta image as the AT_PHDR/AT_BASE ELF
- * metadata. It does NOT touch the vCPU sysregs -- the caller writes TCR_EL1,
- * TTBR0_EL1, TTBR1_EL1, ELR_EL1, SP_EL0, and PC itself once the out_* fields
- * are returned.
+ * /proc/self/maps, runs rosetta_finalize (pre-opens the binary at the lowest
+ * free guest fd >= 3, published as AT_EXECFD; installs the kbuf user alias,
+ * publishes the binfmt-misc argv via proc_set_cmdline), and builds the initial
+ * Linux stack using the rosetta image as the AT_PHDR/AT_BASE ELF metadata. It
+ * does NOT touch the vCPU sysregs; the caller writes TCR_EL1, TTBR0_EL1,
+ * TTBR1_EL1, ELR_EL1, SP_EL0, and PC itself once the out_* fields are returned.
  *
  * Returns 0 on success with out_entry_point, out_stack_pointer, out_ttbr0 set.
  *

@@ -569,6 +569,18 @@ int64_t sys_execve(hv_vcpu_t vcpu,
             err = -LINUX_ENOEXEC;
             goto fail;
         }
+        /* rosetta_finalize pre-opens the x86_64 binary at a guest fd >= 3 past
+         * the point of no return, where an EMFILE would be fatal. The guest fd
+         * ceiling is far below the host limit, so a guest can fill its table
+         * without the pre-PNR elf_load host open failing first. Reject here
+         * (recoverably) when no slot >= 3 will survive the CLOEXEC sweep below.
+         */
+        if (!fd_reexec_slot_available(3)) {
+            log_error("execve: no free guest fd for the Rosetta binary: %s",
+                      path);
+            err = -LINUX_EMFILE;
+            goto fail;
+        }
         target_is_rosetta = true;
     }
 

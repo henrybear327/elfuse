@@ -89,6 +89,13 @@ int fd_alloc_at(int fd, int type, int host_fd, void (*cleanup)(int));
  */
 int fd_alloc_at_relaxed(int fd, int type, int host_fd, void (*cleanup)(int));
 
+/* Report whether a guest FD slot >= minfd will be free after execve's CLOEXEC
+ * sweep runs (free now, or open-but-CLOEXEC). sys_execve uses this before
+ * guest_reset so a Rosetta re-bootstrap that would fail fd_alloc_from past the
+ * point of no return is rejected gracefully with -EMFILE instead.
+ */
+bool fd_reexec_slot_available(int minfd);
+
 /* Look up a guest FD.
  *
  * Returns host FD or -1 if invalid. Unsafe for concurrent use; see

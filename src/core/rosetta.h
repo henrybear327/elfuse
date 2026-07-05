@@ -15,13 +15,13 @@
  *   bits on M1), so a separate high-IPA mapping is not viable.
  * - rosetta_finalize() runs after guest_build_page_tables(), installing TTBR0
  *   kbuf user-VA alias, builds the vDSO, registers semantic regions for
- *   /proc/self/maps, pre-opens the x86_64 binary at fd 3, constructs
- *   binfmt_misc-style argv, and refreshes proc state.
+ *   /proc/self/maps, pre-opens the x86_64 binary at the lowest free guest fd
+ *   >= 3, constructs binfmt_misc-style argv, and refreshes proc state.
  *
- * Bootstrap-side wiring (placement, kbuf, page-tables, fd 3, binfmt argv, TTBR0
- * kbuf alias, VZ probe ioctls, rosettad socket bridge and AOT cache) is in. The
- * runtime still depends on the high-VA mmap body refactor for Rosetta's own
- * fixed-address slab and JIT allocations.
+ * Bootstrap-side wiring (placement, kbuf, page-tables, binary fd, binfmt argv,
+ * TTBR0 kbuf alias, VZ probe ioctls, rosettad socket bridge and AOT cache) is
+ * in. The runtime still depends on the high-VA mmap body refactor for Rosetta's
+ * own fixed-address slab and JIT allocations.
  */
 
 #pragma once
@@ -76,7 +76,9 @@
  * - The host-side translate subprocess needs the full original path. Subsequent
  * calls overwrite the previous value (execve into a different x86_64 binary).
  */
-void rosettad_set_binary_path(const char *path, bool take_ownership);
+void rosettad_set_binary_path(const char *path,
+                              bool take_ownership,
+                              int bin_guest_fd);
 void rosettad_clear_binary_path(void);
 
 /* Snapshot the published paths into caller-supplied buffers under the setter's
@@ -189,8 +191,9 @@ int rosetta_prepare(guest_t *g,
                     rosetta_result_t *result);
 
 /* Second-pass rosetta setup, runs after guest_build_page_tables(): install the
- * TTBR0 user-VA alias for the kbuf, pre-open the x86_64 binary at fd 3, build
- * the binfmt_misc argv ([ROSETTA_PATH, binary, original argv[1..]]) for
+ * TTBR0 user-VA alias for the kbuf, pre-open the x86_64 binary at the lowest
+ * free guest fd >= 3 (returned via out_execfd for AT_EXECFD), build the
+ * binfmt_misc argv ([ROSETTA_PATH, binary, original argv[1..]]) for
  * build_linux_stack to consume, and refresh proc state. The remaining runtime
  * blocker after this stage is high-VA mmap support for Rosetta's own internal
  * fixed-address allocations.
@@ -206,4 +209,5 @@ int rosetta_finalize(guest_t *g,
                      bool verbose,
                      int *out_argc,
                      const char ***out_argv,
-                     uint64_t *out_vdso_addr);
+                     uint64_t *out_vdso_addr,
+                     int *out_execfd);

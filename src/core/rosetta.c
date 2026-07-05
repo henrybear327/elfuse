@@ -9,7 +9,7 @@
  * low GPA and exposes it at its statically-linked high VA (0x800000000000) via
  * a non-identity mem_region_t.va_base. The TTBR1 kbuf is initialized at a 256
  * MiB window just below the rosetta image. rosetta_finalize wires the
- * bootstrap-visible pieces needed to enter the translator: fd 3 setup,
+ * bootstrap-visible pieces needed to enter the translator: binary fd setup,
  * binfmt-style argv construction, cmdline refresh, and the TTBR0 kbuf alias.
  * The runtime still depends on the high-VA mmap path in mem.c for Rosetta's own
  * slab and JIT allocations.
@@ -46,8 +46,8 @@
 #include "debug/log.h"
 #include "hvutil.h"
 #include "utils.h"
-#include "syscall/internal.h" /* fd_alloc_at, FD_REGULAR */
-#include "syscall/proc.h"     /* proc_set_cmdline */
+#include "syscall/internal.h" /* fd_alloc_from, fd_publish_linux_flags, FD_REGULAR */
+#include "syscall/proc.h" /* proc_set_cmdline */
 
 /* Round a guest virtual address (or size) up to the next 2 MiB boundary. */
 static inline uint64_t align2m_up(uint64_t v)
@@ -61,13 +61,13 @@ static inline uint64_t align2m_down(uint64_t v)
 }
 
 /* The VZ_CAPS payload only has room for a 42-byte inline path. Publish
- * /proc/self/fd/3 there when the real host path is longer so rosetta sees a
- * valid reopenable path without truncation, while the host-side translator
- * subprocess still retains the full original binary path. Both buffers are read
- * by the VZ_CAPS ioctl handler from any vCPU; writes happen during
- * rosetta_finalize on execve. A pthread_mutex covers both setter and snapshot
- * reader so a multi-vCPU guest doing concurrent execves cannot observe a torn
- * or stale string.
+ * /proc/self/fd/<bin_guest_fd> there when the real host path is longer so
+ * rosetta sees a valid reopenable path without truncation, while the host-side
+ * translator subprocess still retains the full original binary path. Both
+ * buffers are read by the VZ_CAPS ioctl handler from any vCPU; writes happen
+ * during rosetta_finalize on execve. A pthread_mutex covers both setter and
+ * snapshot reader so a multi-vCPU guest doing concurrent execves cannot observe
+ * a torn or stale string.
  */
 static pthread_mutex_t rosettad_path_lock = PTHREAD_MUTEX_INITIALIZER;
 static char rosettad_binary_path[PATH_MAX];
@@ -92,7 +92,9 @@ static bool rosettad_drain_owned_path_locked(char out[PATH_MAX])
     return true;
 }
 
-void rosettad_set_binary_path(const char *path, bool take_ownership)
+void rosettad_set_binary_path(const char *path,
+                              bool take_ownership,
+                              int bin_guest_fd)
 {
     if (!path)
         path = "";
@@ -114,8 +116,10 @@ void rosettad_set_binary_path(const char *path, bool take_ownership)
     rosettad_binary_path[full_n] = '\0';
 
     const char *caps_path = path;
+    char fd_path[sizeof("/proc/self/fd/") + 11];
     if (n >= sizeof(rosettad_caps_binary_path)) {
-        caps_path = "/proc/self/fd/3";
+        snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", bin_guest_fd);
+        caps_path = fd_path;
         log_debug("rosetta: using %s as caps binary path for long target %s",
                   caps_path, path);
     }
@@ -392,31 +396,36 @@ int rosetta_finalize(guest_t *g,
                      bool verbose,
                      int *out_argc,
                      const char ***out_argv,
-                     uint64_t *out_vdso_addr)
+                     uint64_t *out_vdso_addr,
+                     int *out_execfd)
 {
     (void) vcpu;          /* TCR_EL1 / TTBR1_EL1 set in bootstrap_create_vcpu */
     (void) out_vdso_addr; /* bootstrap drives vdso_build directly */
 
     if (!g || !binary_host_path || !binary_guest_path || !rr || !out_argc ||
-        !out_argv)
+        !out_argv || !out_execfd)
         return -1;
     *out_argc = 0;
     *out_argv = NULL;
+    *out_execfd = -1;
 
-    /* Defer every externally-visible state change (guest fd 3, cmdline,
+    /* Defer every externally-visible state change (guest binary fd, cmdline,
      * out_argc/out_argv) until after every fallible setup step succeeds. Any
      * failure before commit goes through the fail label and tears down only the
      * host-local resources allocated so far.
      */
-    int bin_host_fd;
     const char **rosetta_argv = NULL;
     int rosetta_argc = 0;
 
-    /* Pre-open the x86_64 binary so it can be installed at guest fd 3 once the
-     * full setup succeeds. Rosetta locates its target via /proc/self/fd/3
-     * (binfmt_misc convention).
+    /* Pre-open the x86_64 binary so it can be installed at a guest fd once the
+     * full setup succeeds. Rosetta locates its target via the VZ_CAPS binary
+     * path (the full guest path, or /proc/self/fd/<execfd> when that path does
+     * not fit the 42-byte inline field) plus AT_EXECFD (binfmt_misc
+     * convention). This is the first fallible step, so every goto fail below
+     * sees bin_host_fd already set (open returns -1 on failure, which the fail
+     * label treats as nothing to close).
      */
-    bin_host_fd = open(binary_host_path, O_RDONLY);
+    int bin_host_fd = open(binary_host_path, O_RDONLY);
     if (bin_host_fd < 0) {
         log_error("rosetta_finalize: failed to open binary '%s': %s",
                   binary_host_path, strerror(errno));
@@ -468,33 +477,52 @@ int rosetta_finalize(guest_t *g,
         goto fail;
     }
 
-    /* Install guest fd 3 last so any earlier failure unwinds without needing to
-     * roll back the ownership transfer. fd_alloc_at(3) is the final fallible
-     * step; once it succeeds, the host fd is owned by the guest fd table and no
-     * goto fail must be introduced below, or the fail handler would
-     * double-close it.
+    /* Install the guest binary fd last so any earlier failure unwinds without
+     * needing to roll back the ownership transfer. fd_alloc_from is the final
+     * fallible step; once it succeeds, the host fd is owned by the guest fd
+     * table and no goto fail must be introduced below, or the fail handler
+     * would double-close it.
+     *
+     * Use the lowest free non-stdio slot rather than a hardcoded fd 3: at
+     * initial launch only stdio (0-2) is open, so this still lands on 3, but on
+     * an execve re-bootstrap the guest may already hold fd 3 for its own use
+     * (apt hands gpgv a status pipe on fd 3). Evicting it would break the
+     * child; the dynamic slot steps over whatever the guest already opened.
+     *
+     * On an exec re-bootstrap this runs past execve's point of no return, where
+     * an fd_alloc_from failure would be fatal. sys_execve preflights slot
+     * availability via fd_reexec_slot_available(3) before guest_reset and
+     * returns -EMFILE there, so an exhausted table fails gracefully instead of
+     * aborting mid-exec. The guest fd ceiling sits below the host
+     * RLIMIT_NOFILE, so the pre-PNR elf_load host open does not catch this
+     * first; the preflight is the real guard and this branch is the backstop.
      */
-    int bin_guest_fd = fd_alloc_at(3, FD_REGULAR, bin_host_fd, NULL);
+    int bin_guest_fd = fd_alloc_from(3, FD_REGULAR, bin_host_fd, NULL);
     if (bin_guest_fd < 0) {
-        log_error("rosetta_finalize: fd_alloc_at(3) failed");
+        log_error("rosetta_finalize: fd_alloc_from(3) failed");
         goto fail;
     }
 
     /* Ownership of bin_host_fd is now held by the guest fd table. Mark the
      * rosetta target fd CLOEXEC so a rosetta-to-native execve does not leak it
-     * into the new image. fd_alloc_at clears linux_flags, so the OR is safe.
+     * into the new image. Publish through the fd_lock helper rather than a bare
+     * store so this writer stays on the same lock domain as every other
+     * linux_flags mutator; fd_alloc_from zero-initialized the slot, so setting
+     * the flag outright is correct.
      */
-    fd_table[bin_guest_fd].linux_flags |= LINUX_O_CLOEXEC;
+    fd_publish_linux_flags(bin_guest_fd, LINUX_O_CLOEXEC);
 
-    rosettad_set_binary_path(binary_host_path, binary_host_path_temp);
+    rosettad_set_binary_path(binary_host_path, binary_host_path_temp,
+                             bin_guest_fd);
     proc_set_cmdline(rosetta_argc, rosetta_argv);
 
     if (verbose)
-        log_debug("rosetta_finalize: argv=[%s, %s, ...], target_fd=3",
-                  rosetta_argv[0], rosetta_argv[1]);
+        log_debug("rosetta_finalize: argv=[%s, %s, ...], target_fd=%d",
+                  rosetta_argv[0], rosetta_argv[1], bin_guest_fd);
 
     *out_argc = rosetta_argc;
     *out_argv = rosetta_argv;
+    *out_execfd = bin_guest_fd;
 
     /* The VZ ioctl trio is in; the rosettad translate pipeline and the mem.c
      * body refactor for rosetta high-VA mmap allocations are still pending.

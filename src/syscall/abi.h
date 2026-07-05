@@ -100,6 +100,7 @@
 #define SYS_sched_get_priority_min 126
 #define SYS_sched_rr_get_interval 127
 #define SYS_kill 129
+#define SYS_tkill 130
 #define SYS_tgkill 131
 #define SYS_sigaltstack 132
 #define SYS_rt_sigsuspend 133
@@ -736,7 +737,8 @@ typedef struct {
     uint64_t generation; /* Bumped each time this guest fd slot is reused. Lets
                           * long-lived references (e.g. epoll registrations)
                           * detect a close+reopen ABA where the slot now holds a
-                          * different open file. */
+                          * different open file.
+                          */
     int linux_flags;     /* Linux open flags (for CLOEXEC tracking) */
     void *dir;           /* DIR* for FD_DIR entries (NULL otherwise) */
     char proc_path[FD_VIRTUAL_PATH_MAX]; /* Virtual /proc dir root for *at */

@@ -1325,7 +1325,7 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                             "%s: post-sigreturn state: "
                             "pending=0x%llx global_blocked=0x%llx "
                             "thread_blocked=0x%llx signal_pending=%d",
-                            prefix, (unsigned long long) ss->pending,
+                            prefix, (unsigned long long) ss->shared.pending,
                             (unsigned long long) ss->blocked,
                             (unsigned long long) tblocked, signal_pending());
                     }
@@ -1691,7 +1691,7 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                                 "pending=0x%llx",
                                 prefix, (unsigned long long) thread_blocked,
                                 (unsigned long long) signal_get_state()
-                                    ->pending);
+                                    ->shared.pending);
                         }
                         int sig_ret = signal_deliver_fault(
                             vcpu, g, LINUX_SIGTRAP, &exit_code);

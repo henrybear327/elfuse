@@ -107,6 +107,7 @@ SYS_membarrier sc_membarrier 0
 
 # Signals
 SYS_kill sc_kill 0
+SYS_tkill sc_tkill 0
 SYS_tgkill sc_tgkill 0
 SYS_sigaltstack sc_sigaltstack 1
 SYS_rt_sigsuspend sc_rt_sigsuspend 1

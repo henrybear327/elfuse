@@ -174,61 +174,99 @@ static signal_rt_info_t signal_default_info(int signum)
     };
 }
 
-static void signal_standard_enqueue_locked(int signum,
+static void signal_standard_enqueue_locked(signal_pending_t *p,
+                                           int signum,
                                            const signal_rt_info_t *info)
 {
     int idx = signum - 1;
     uint64_t bit = sig_bit(signum);
 
-    if (!(sig_state.pending & bit)) {
-        sig_state.std_info[idx] = info ? *info : signal_default_info(signum);
-        sig_state.std_info_valid[idx] = info != NULL;
+    if (!(p->pending & bit)) {
+        p->std_info[idx] = info ? *info : signal_default_info(signum);
+        p->std_info_valid[idx] = info != NULL;
     }
-    sig_state.pending |= bit;
+    p->pending |= bit;
 }
 
-static signal_rt_info_t signal_standard_peek_locked(int signum)
+static signal_rt_info_t signal_standard_peek_locked(signal_pending_t *p,
+                                                    int signum)
 {
     int idx = signum - 1;
-    if (sig_state.std_info_valid[idx])
-        return sig_state.std_info[idx];
+    if (p->std_info_valid[idx])
+        return p->std_info[idx];
     return signal_default_info(signum);
 }
 
-static void signal_rt_enqueue_locked(int signum, const signal_rt_info_t *info)
+static void signal_rt_enqueue_locked(signal_pending_t *p,
+                                     int signum,
+                                     const signal_rt_info_t *info)
 {
     int idx = signum - LINUX_SIGRTMIN;
     signal_rt_info_t fallback = signal_default_info(signum);
     const signal_rt_info_t *entry = info ? info : &fallback;
 
-    sig_state.pending |= sig_bit(signum);
-    if (sig_state.rt_queue[idx] >= RT_SIGQUEUE_MAX)
+    p->pending |= sig_bit(signum);
+    if (p->rt_queue[idx] >= RT_SIGQUEUE_MAX)
         return;
 
-    int tail =
-        (sig_state.rt_head[idx] + sig_state.rt_queue[idx]) % RT_SIGQUEUE_MAX;
-    sig_state.rt_info[idx][tail] = *entry;
-    sig_state.rt_queue[idx]++;
+    int tail = (p->rt_head[idx] + p->rt_queue[idx]) % RT_SIGQUEUE_MAX;
+    p->rt_info[idx][tail] = *entry;
+    p->rt_queue[idx]++;
 }
 
-static int signal_rt_dequeue_locked(int signum, signal_rt_info_t *out)
+static int signal_rt_dequeue_locked(signal_pending_t *p,
+                                    int signum,
+                                    signal_rt_info_t *out)
 {
     int idx = signum - LINUX_SIGRTMIN;
-    if (sig_state.rt_queue[idx] <= 0) {
-        sig_state.pending &= ~sig_bit(signum);
+    if (p->rt_queue[idx] <= 0) {
+        p->pending &= ~sig_bit(signum);
         return 0;
     }
 
     if (out)
-        *out = sig_state.rt_info[idx][sig_state.rt_head[idx]];
-    sig_state.rt_head[idx] =
-        (uint8_t) ((sig_state.rt_head[idx] + 1) % RT_SIGQUEUE_MAX);
-    sig_state.rt_queue[idx]--;
-    if (sig_state.rt_queue[idx] == 0) {
-        sig_state.pending &= ~sig_bit(signum);
-        sig_state.rt_head[idx] = 0;
+        *out = p->rt_info[idx][p->rt_head[idx]];
+    p->rt_head[idx] = (uint8_t) ((p->rt_head[idx] + 1) % RT_SIGQUEUE_MAX);
+    p->rt_queue[idx]--;
+    if (p->rt_queue[idx] == 0) {
+        p->pending &= ~sig_bit(signum);
+        p->rt_head[idx] = 0;
     }
     return 1;
+}
+
+/* Route a signal into a specific pending set (shared or a thread's private). */
+static void signal_enqueue_locked(signal_pending_t *p,
+                                  int signum,
+                                  const signal_rt_info_t *info)
+{
+    if (signum >= LINUX_SIGRTMIN)
+        signal_rt_enqueue_locked(p, signum, info);
+    else
+        signal_standard_enqueue_locked(p, signum, info);
+}
+
+/* Recompute the global "maybe pending" hint from the shared set plus every
+ * thread's private set. Caller holds sig_lock. The hint never produces a false
+ * negative (a real pending bit is always represented), so signal_pending()'s
+ * lock-free fast path can trust a zero result; false positives only cost one
+ * extra locked recheck.
+ */
+static void refresh_pending_hint_locked(void)
+{
+    uint64_t hint = sig_state.shared.pending | thread_pending_union();
+    atomic_store_explicit(&sig_pending_hint, hint, memory_order_release);
+}
+
+/* Signals pending for the current thread: its private (thread-directed) set
+ * unioned with the shared (process-directed) set. Caller holds sig_lock.
+ */
+static inline uint64_t self_pending_locked(void)
+{
+    uint64_t pending = sig_state.shared.pending;
+    if (current_thread)
+        pending |= current_thread->tpending.pending;
+    return pending;
 }
 
 /* Per-thread signal mask accessors. POSIX requires each thread to have its own
@@ -306,9 +344,9 @@ void signal_set_shim_globals_guest(guest_t *g)
  * callers only need this single helper.
  *
  * Also poke the wakeup pipe so a thread parked in a host poll/select/epoll/read
- * wait -- which hv_vcpus_exit cannot reach because it is not inside
- * hv_vcpu_run -- wakes and rechecks signal_pending(). Matches how exit_group
- * and futex_interrupt already signal the pipe.
+ * wait -- which hv_vcpus_exit cannot reach because it is not inside hv_vcpu_run
+ * -- wakes and rechecks signal_pending(). Matches how exit_group and
+ * futex_interrupt already signal the pipe.
  */
 static inline void attention_raise(void)
 {
@@ -373,13 +411,9 @@ void signal_queue(int signum)
     if (signum < 1 || signum > LINUX_NSIG)
         return;
     pthread_mutex_lock(&sig_lock);
-    if (signum >= LINUX_SIGRTMIN)
-        signal_rt_enqueue_locked(signum, NULL);
-    else
-        signal_standard_enqueue_locked(signum, NULL);
+    signal_enqueue_locked(&sig_state.shared, signum, NULL);
     /* Publish hint before releasing lock so vCPU hot path sees it. */
-    atomic_store_explicit(&sig_pending_hint, sig_state.pending,
-                          memory_order_release);
+    refresh_pending_hint_locked();
     pthread_mutex_unlock(&sig_lock);
 
     /* Notify any signalfd instances whose mask includes this signal. This makes
@@ -432,12 +466,8 @@ void signal_queue_info(int signum,
         .si_int = si_int,
         .si_ptr = si_ptr,
     };
-    if (signum >= LINUX_SIGRTMIN)
-        signal_rt_enqueue_locked(signum, &info);
-    else
-        signal_standard_enqueue_locked(signum, &info);
-    atomic_store_explicit(&sig_pending_hint, sig_state.pending,
-                          memory_order_release);
+    signal_enqueue_locked(&sig_state.shared, signum, &info);
+    refresh_pending_hint_locked();
     pthread_mutex_unlock(&sig_lock);
     signalfd_notify(signum);
     /* Same shim-globals attention raise as signal_queue: force the fast path
@@ -445,6 +475,83 @@ void signal_queue_info(int signum,
      */
     if (signal_should_interrupt(signum))
         attention_raise();
+}
+
+/* Thread-directed queueing (tgkill/tkill/pthread_kill). The signal lands in the
+ * target thread's private pending set, so only that thread consumes it and
+ * standard signals do not coalesce across threads. The target is resolved and
+ * the enqueue performed while holding thread_lock so a concurrent thread exit
+ * or slot reuse cannot misroute the signal.
+ *
+ * Returns true if the target was found. Lock order: sig_lock (4) then
+ * thread_lock (5).
+ */
+static bool signal_queue_thread_common(int64_t tid,
+                                       int signum,
+                                       const signal_rt_info_t *info)
+{
+    if (signum < 1 || signum > LINUX_NSIG)
+        return false;
+
+    bool found = false;
+    uint64_t blocked = 0;
+    pthread_mutex_lock(&sig_lock);
+    pthread_mutex_lock(thread_get_lock());
+    thread_entry_t *t = thread_find_locked(tid);
+    if (t) {
+        signal_enqueue_locked(&t->tpending, signum, info);
+        refresh_pending_hint_locked();
+        blocked = __atomic_load_n(&t->blocked, __ATOMIC_ACQUIRE);
+        found = true;
+    }
+    pthread_mutex_unlock(thread_get_lock());
+    pthread_mutex_unlock(&sig_lock);
+
+    if (!found)
+        return false;
+
+    /* Wake signalfd waiters. Linux backs every signalfd with the one shared
+     * sighand wait queue, so a queued signal (directed or not) wakes it and
+     * each reader re-evaluates against its own pending: the target thread finds
+     * the signal (its private set), a sibling finds nothing and reads EAGAIN.
+     * Skipping this for directed signals would leave the target thread's own
+     * signalfd wait unwoken -- the standard "block the signal, drain it via
+     * signalfd" pattern -- which matters far more than sparing a sibling a
+     * spurious wake.
+     */
+    signalfd_notify(signum);
+
+    /* Interrupt only if the signal can actually reach the target: uncatchable
+     * signals always, otherwise the target must not block it. A concurrent
+     * rt_sigprocmask unblock re-checks pending afterwards.
+     */
+    if (sig_uncatchable(signum) || !(blocked & sig_bit(signum)))
+        attention_raise();
+    return true;
+}
+
+bool signal_queue_thread(int64_t tid, int signum)
+{
+    return signal_queue_thread_common(tid, signum, NULL);
+}
+
+bool signal_queue_thread_info(int64_t tid,
+                              int signum,
+                              int32_t si_code,
+                              int32_t si_pid,
+                              uint32_t si_uid,
+                              int32_t si_int,
+                              uint64_t si_ptr)
+{
+    signal_rt_info_t info = {
+        .signum = signum,
+        .si_code = si_code,
+        .si_pid = si_pid,
+        .si_uid = si_uid,
+        .si_int = si_int,
+        .si_ptr = si_ptr,
+    };
+    return signal_queue_thread_common(tid, signum, &info);
 }
 
 void signal_set_fault_info(int si_code, uint64_t addr, uint64_t esr)
@@ -468,10 +575,12 @@ int signal_pending(void)
     if ((hint & ~blocked) == 0)
         return 0;
 
-    /* Slow path: confirm under lock */
+    /* Slow path: confirm under lock. Deliverable = this thread's private set
+     * (thread-directed) plus the shared set (process-directed), minus blocked.
+     */
     pthread_mutex_lock(&sig_lock);
     blocked = __atomic_load_n(thread_blocked_ptr(), __ATOMIC_ACQUIRE);
-    int result = (sig_state.pending & ~blocked) != 0;
+    int result = (self_pending_locked() & ~blocked) != 0;
     pthread_mutex_unlock(&sig_lock);
     return result;
 }
@@ -503,7 +612,7 @@ bool signal_pending_interruption(bool *restart_out)
 {
     pthread_mutex_lock(&sig_lock);
     uint64_t blocked = __atomic_load_n(thread_blocked_ptr(), __ATOMIC_ACQUIRE);
-    uint64_t deliverable = sig_state.pending & ~blocked;
+    uint64_t deliverable = self_pending_locked() & ~blocked;
     if (deliverable == 0) {
         pthread_mutex_unlock(&sig_lock);
         if (restart_out)
@@ -594,78 +703,95 @@ void signal_set_state(const signal_state_t *state)
     pthread_mutex_unlock(&sig_lock);
 }
 
-static size_t signal_collect_signalfd(uint64_t mask,
-                                      signal_rt_info_t *out,
-                                      size_t max,
-                                      int consume)
+size_t signal_peek_signalfd(uint64_t mask,
+                            signal_rt_info_t *out,
+                            uint8_t *src,
+                            size_t max)
 {
     size_t total = 0;
-    int rt_offset[RT_SIGNAL_COUNT] = {0};
+    /* Per-set RT read cursor so a peek does not re-report the same queued
+     * instance.
+     */
+    int rt_offset[RT_SIGNAL_COUNT];
+
+    /* signalfd observes the reading thread's private (thread-directed) set and
+     * the shared (process-directed) set, in Linux dequeue order: task->pending
+     * is drained before shared_pending. Iterate sets outer, signums inner so
+     * every private signal precedes every shared one. Consumption is a separate
+     * step (signal_take_signalfd_exact), so this only reads.
+     */
+    signal_pending_t *sets[2];
+    size_t nsets = 0;
+    if (current_thread)
+        sets[nsets++] = &current_thread->tpending;
+    sets[nsets++] = &sig_state.shared;
 
     pthread_mutex_lock(&sig_lock);
-    uint64_t deliverable = sig_state.pending & mask;
-    /* signum runs 1..LINUX_NSIG inclusive (64 is the highest valid RT signal on
-     * aarch64 Linux). Bare-musl applications can target SIGRTMAX directly, so
-     * the inclusive bound matters even though glibc reserves the top of the RT
-     * range for itself.
-     */
-    for (int signum = 1; signum <= LINUX_NSIG && total < max; signum++) {
-        uint64_t bit = BIT64(signum - 1);
-        if (!(deliverable & bit))
-            continue;
+    for (size_t s = 0; s < nsets && total < max; s++) {
+        signal_pending_t *sp = sets[s];
+        memset(rt_offset, 0, sizeof(rt_offset));
+        /* signum runs 1..LINUX_NSIG inclusive (64 is the highest valid RT
+         * signal on aarch64 Linux). Bare-musl applications can target SIGRTMAX
+         * directly, so the inclusive bound matters even though glibc reserves
+         * the top of the RT range for itself.
+         */
+        for (int signum = 1; signum <= LINUX_NSIG && total < max; signum++) {
+            uint64_t bit = BIT64(signum - 1);
+            if (!(mask & bit) || !(sp->pending & bit))
+                continue;
 
-        if (signum >= LINUX_SIGRTMIN) {
-            int idx = signum - LINUX_SIGRTMIN;
-            while (sig_state.rt_queue[idx] > 0 && total < max) {
-                signal_rt_info_t info;
-                if (consume) {
-                    info = (signal_rt_info_t) {
-                        .signum = signum,
-                        .si_code = LINUX_SI_USER,
-                        .si_pid = (int32_t) proc_get_pid(),
-                        .si_uid = proc_get_uid(),
-                    };
-                    signal_rt_dequeue_locked(signum, &info);
-                } else {
-                    if (rt_offset[idx] >= sig_state.rt_queue[idx])
-                        break;
-                    int head = sig_state.rt_head[idx];
+            if (signum >= LINUX_SIGRTMIN) {
+                int idx = signum - LINUX_SIGRTMIN;
+                while (rt_offset[idx] < sp->rt_queue[idx] && total < max) {
+                    int head = sp->rt_head[idx];
                     int slot = (head + rt_offset[idx]) % RT_SIGQUEUE_MAX;
-                    info = sig_state.rt_info[idx][slot];
+                    if (out)
+                        out[total] = sp->rt_info[idx][slot];
+                    if (src)
+                        src[total] = (uint8_t) s;
                     rt_offset[idx]++;
+                    total++;
                 }
+            } else {
                 if (out)
-                    out[total] = info;
+                    out[total] = signal_standard_peek_locked(sp, signum);
+                if (src)
+                    src[total] = (uint8_t) s;
                 total++;
             }
-        } else {
-            signal_rt_info_t info = signal_standard_peek_locked(signum);
-            if (consume)
-                sig_state.std_info_valid[signum - 1] = false;
-            if (consume)
-                sig_state.pending &= ~bit;
-            if (out)
-                out[total] = info;
-            total++;
         }
-    }
-    if (consume) {
-        atomic_store_explicit(&sig_pending_hint, sig_state.pending,
-                              memory_order_release);
     }
     pthread_mutex_unlock(&sig_lock);
 
     return total;
 }
 
-size_t signal_peek_signalfd(uint64_t mask, signal_rt_info_t *out, size_t max)
+uint64_t signal_signalfd_pending_mask(void)
 {
-    return signal_collect_signalfd(mask, out, max, 0);
+    pthread_mutex_lock(&sig_lock);
+    uint64_t m = self_pending_locked();
+    pthread_mutex_unlock(&sig_lock);
+    return m;
 }
 
-size_t signal_take_signalfd_exact(const signal_rt_info_t *expected, size_t max)
+void signal_refresh_pending_hint(void)
+{
+    pthread_mutex_lock(&sig_lock);
+    refresh_pending_hint_locked();
+    pthread_mutex_unlock(&sig_lock);
+}
+
+size_t signal_take_signalfd_exact(const signal_rt_info_t *expected,
+                                  const uint8_t *src,
+                                  size_t max)
 {
     size_t total = 0;
+
+    signal_pending_t *sets[2];
+    size_t nsets = 0;
+    if (current_thread)
+        sets[nsets++] = &current_thread->tpending;
+    sets[nsets++] = &sig_state.shared;
 
     pthread_mutex_lock(&sig_lock);
     for (; total < max; total++) {
@@ -673,17 +799,24 @@ size_t signal_take_signalfd_exact(const signal_rt_info_t *expected, size_t max)
         if (signum <= 0 || signum > LINUX_NSIG)
             break;
 
+        /* Consume from the exact set this entry was peeked from. A same-valued
+         * instance in the other set must not be substituted -- that would drop
+         * a signal the reader never returned.
+         */
+        size_t s = src[total];
+        if (s >= nsets)
+            break;
+        signal_pending_t *sp = sets[s];
         uint64_t bit = sig_bit(signum);
-        if (!(sig_state.pending & bit))
+        if (!(sp->pending & bit))
             break;
 
+        const signal_rt_info_t *want = &expected[total];
         if (signum >= LINUX_SIGRTMIN) {
             int idx = signum - LINUX_SIGRTMIN;
-            if (sig_state.rt_queue[idx] <= 0)
+            if (sp->rt_queue[idx] <= 0)
                 break;
-            const signal_rt_info_t *head =
-                &sig_state.rt_info[idx][sig_state.rt_head[idx]];
-            const signal_rt_info_t *want = &expected[total];
+            const signal_rt_info_t *head = &sp->rt_info[idx][sp->rt_head[idx]];
             /* Compare field by field; signal_rt_info_t has padding between
              * si_int and si_ptr that memcmp would treat as significant.
              */
@@ -692,23 +825,21 @@ size_t signal_take_signalfd_exact(const signal_rt_info_t *expected, size_t max)
                 head->si_pid != want->si_pid || head->si_uid != want->si_uid ||
                 head->si_int != want->si_int || head->si_ptr != want->si_ptr)
                 break;
-            signal_rt_dequeue_locked(signum, NULL);
-            continue;
+            signal_rt_dequeue_locked(sp, signum, NULL);
+        } else {
+            signal_rt_info_t current = signal_standard_peek_locked(sp, signum);
+            if (current.signum != want->signum ||
+                current.si_code != want->si_code ||
+                current.si_pid != want->si_pid ||
+                current.si_uid != want->si_uid ||
+                current.si_int != want->si_int ||
+                current.si_ptr != want->si_ptr)
+                break;
+            sp->std_info_valid[signum - 1] = false;
+            sp->pending &= ~bit;
         }
-
-        signal_rt_info_t current = signal_standard_peek_locked(signum);
-        const signal_rt_info_t *want = &expected[total];
-        if (current.signum != want->signum ||
-            current.si_code != want->si_code ||
-            current.si_pid != want->si_pid || current.si_uid != want->si_uid ||
-            current.si_int != want->si_int || current.si_ptr != want->si_ptr)
-            break;
-
-        sig_state.std_info_valid[signum - 1] = false;
-        sig_state.pending &= ~bit;
     }
-    atomic_store_explicit(&sig_pending_hint, sig_state.pending,
-                          memory_order_release);
+    refresh_pending_hint_locked();
     pthread_mutex_unlock(&sig_lock);
 
     return total;
@@ -1119,10 +1250,8 @@ int64_t signal_rt_sigprocmask(guest_t *g,
          * unblocked it.
          */
         uint64_t newly_unblocked = old_blocked & ~*blocked;
-        if (newly_unblocked & sig_state.pending) {
-            atomic_store_explicit(&sig_pending_hint, sig_state.pending,
-                                  memory_order_release);
-        }
+        if (newly_unblocked & self_pending_locked())
+            refresh_pending_hint_locked();
     }
 
     pthread_mutex_unlock(&sig_lock);
@@ -1159,7 +1288,7 @@ int64_t signal_rt_sigsuspend(guest_t *g, uint64_t mask_gva, uint64_t sigsetsize)
          * If yes, the vCPU loop will deliver it. If no, restore the mask; the
          * caller will loop (musl retries on -EINTR).
          */
-        if (!(sig_state.pending & ~*blocked)) {
+        if (!(self_pending_locked() & ~*blocked)) {
             *blocked = saved_blocked;
         }
         /* If a signal IS pending, the mask stays temporarily modified.
@@ -1190,11 +1319,12 @@ int64_t signal_rt_sigpending(guest_t *g, uint64_t set_gva, uint64_t sigsetsize)
         return -LINUX_EFAULT;
 
     pthread_mutex_lock(&sig_lock);
-    /* Return all pending signals (matching Linux kernel do_sigpending). In
-     * practice unblocked signals are delivered before sigpending can observe
-     * them, but returning the full set is strictly correct.
+    /* Return all pending signals (matching Linux kernel do_sigpending): the
+     * calling thread's private set unioned with the shared set. In practice
+     * unblocked signals are delivered before sigpending can observe them, but
+     * returning the full set is strictly correct.
      */
-    uint64_t result = sig_state.pending;
+    uint64_t result = self_pending_locked();
     pthread_mutex_unlock(&sig_lock);
 
     if (guest_write_small(g, set_gva, &result, sizeof(result)) < 0)
@@ -1317,9 +1447,10 @@ static void build_sigcontext_reserved(uint8_t *reserved,
  * signal_deliver() (signal selected from the process-wide pending set) and
  * signal_deliver_fault() (synchronous fault forced onto the faulting thread).
  * rt_info supplies si_code/si_pid/sigval when no thread-local pending_fault is
- * set; the pending_fault is consumed (one-shot) when valid. Returns 1 if a
- * handler frame was installed, 0 if the signal was ignored, and -1 (with
- * *exit_code set) when the default disposition terminates the guest.
+ * set; the pending_fault is consumed (one-shot) when valid.
+ *
+ * Returns 1 if a handler frame was installed, 0 if the signal was ignored, and
+ * -1 (with *exit_code set) when the default disposition terminates the guest.
  */
 static int deliver_signal_locked(hv_vcpu_t vcpu,
                                  guest_t *g,
@@ -1619,27 +1750,49 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
 {
     pthread_mutex_lock(&sig_lock);
     uint64_t *blocked = thread_blocked_ptr();
-    uint64_t deliverable = sig_state.pending & ~*blocked;
-    if (deliverable == 0) {
+    /* Consider this thread's private (thread-directed) set plus the shared
+     * (process-directed) set. Linux dequeue_signal() drains task->pending
+     * before signal->shared_pending, so for a given signum the private instance
+     * wins.
+     */
+    signal_pending_t *tp = current_thread ? &current_thread->tpending : NULL;
+    uint64_t thread_d = tp ? (tp->pending & ~*blocked) : 0;
+    uint64_t shared_d = sig_state.shared.pending & ~*blocked;
+    if ((thread_d | shared_d) == 0) {
         pthread_mutex_unlock(&sig_lock);
         return 0;
     }
 
-    /* Find lowest pending unblocked signal */
-    int signum = bit_ctz64(deliverable) + 1;
+    /* Linux dequeue_signal() drains task->pending before shared_pending, so the
+     * private set wins even when the shared set holds a lower signal number.
+     * Within the chosen set, pick the lowest pending unblocked signal.
+     */
+    int signum;
+    signal_pending_t *src;
+    if (thread_d) {
+        signum = bit_ctz64(thread_d) + 1;
+        src = tp;
+    } else {
+        signum = bit_ctz64(shared_d) + 1;
+        src = &sig_state.shared;
+    }
     signal_rt_info_t rt_info = signal_default_info(signum);
 
-    /* Dequeue: for RT signals, decrement count and only clear the
-     * pending bit when the queue is empty. Standard signals are
-     * always cleared (single instance, bitmask semantics).
+    /* Dequeue: for RT signals, decrement count and only clear the pending bit
+     * when the queue is empty. Standard signals are always cleared (single
+     * instance, bitmask semantics).
      */
     if (signum >= LINUX_SIGRTMIN) {
-        signal_rt_dequeue_locked(signum, &rt_info);
+        signal_rt_dequeue_locked(src, signum, &rt_info);
     } else {
-        rt_info = signal_standard_peek_locked(signum);
-        sig_state.std_info_valid[signum - 1] = false;
-        sig_state.pending &= ~sig_bit(signum);
+        rt_info = signal_standard_peek_locked(src, signum);
+        src->std_info_valid[signum - 1] = false;
+        src->pending &= ~sig_bit(signum);
     }
+    /* A directed dequeue cleared a bit that only this thread's set held, so the
+     * global hint must be recomputed from the surviving pending state.
+     */
+    refresh_pending_hint_locked();
 
     return deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
 }
@@ -1661,9 +1814,9 @@ int signal_deliver_fault(hv_vcpu_t vcpu, guest_t *g, int signum, int *exit_code)
     /* Linux force_sig_info_to_task(): a forced synchronous fault cannot be
      * postponed or ignored. If the disposition is SIG_IGN or the signum is
      * blocked, reset to SIG_DFL and unblock before delivery, so the default
-     * disposition terminates the process instead of resuming at the faulting
-     * PC (SIG_IGN would re-fault forever) or running a handler the guest
-     * asked to block.
+     * disposition terminates the process instead of resuming at the faulting PC
+     * (SIG_IGN would re-fault forever) or running a handler the guest asked to
+     * block.
      */
     int idx = signum - 1;
     if (RANGE_CHECK(idx, 0, LINUX_NSIG)) {

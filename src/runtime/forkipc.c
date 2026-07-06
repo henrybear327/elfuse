@@ -685,8 +685,9 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         return -LINUX_EFAULT;
     }
 
-    /* Create the host pthread (joinable; exit_group joins all workers via
-     * thread_join_workers_cb before process exit). Threads clean up their TID
+    /* Create the host pthread (joinable; teardown joins live workers via
+     * thread_join_workers, and a worker that exits on its own is joined when
+     * its table slot is reused by thread_alloc). Threads clean up their TID
      * address via CLONE_CHILD_CLEARTID + futex wake.
      */
     pthread_t host_thread;
@@ -710,7 +711,7 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         return -LINUX_EAGAIN;
     }
 
-    t->host_thread = host_thread;
+    thread_set_host_thread(t, host_thread, true);
 
     pthread_mutex_lock(&startup.lock);
     while (!startup.ready)
@@ -722,9 +723,13 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         /* Worker failed during HVF bring-up after the SETTID writes had already
          * populated the guest TID slots. Linux clone(2) does not leave a
          * live-looking TID behind for a thread that never started, so restore
-         * the slots before the parent sees the error.
+         * the slots before the parent sees the error. The worker deactivated
+         * its slot before signaling the handshake, so a concurrent clone may
+         * already have reused the slot and joined the handle at reuse time;
+         * claim the join to guarantee exactly one joiner.
          */
-        pthread_join(host_thread, NULL);
+        if (thread_claim_worker_join(t, host_thread))
+            pthread_join(host_thread, NULL);
         clone_rollback_tid_flags(g, &tid_rollback);
         return startup.startup_rc;
     }
@@ -1027,7 +1032,10 @@ static int64_t sys_clone_vm(hv_vcpu_t parent_vcpu,
         return -LINUX_EAGAIN;
     }
 
-    t->host_thread = host_thread;
+    /* Detached: the pthread runtime reclaims the thread on exit, so the handle
+     * must never be joined (host_thread_needs_join stays false).
+     */
+    thread_set_host_thread(t, host_thread, false);
 
     log_debug(
         "clone_vm: child tid=%lld created "

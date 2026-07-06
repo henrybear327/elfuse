@@ -39,6 +39,14 @@ typedef struct thread_entry {
     hv_vcpu_t vcpu;           /* HVF vCPU handle for this thread */
     hv_vcpu_exit_t *vexit;    /* vCPU exit info pointer */
     pthread_t host_thread;    /* macOS host thread running this vCPU */
+    bool host_thread_needs_join; /* host_thread was created joinable and nobody
+                                  * has joined it yet. Exactly one claimer
+                                  * clears the flag under thread_lock before
+                                  * joining: slot reuse in thread_alloc,
+                                  * teardown in thread_join_workers, or the
+                                  * clone startup-failure rollback. Never set
+                                  * for the main thread or vm-clone children
+                                  * (the latter are created detached). */
     uint64_t clear_child_tid; /* GVA for CLONE_CHILD_CLEARTID (0=none) */
     uint64_t sp_el1;          /* Per-thread EL1 stack top (IPA) */
     int sp_el1_slot;          /* Slot index in sp_el1_allocated (-1 = none).
@@ -179,6 +187,22 @@ thread_entry_t *thread_alloc(int64_t tid,
 
 /* Mark a thread as inactive and release its table slot. */
 void thread_deactivate(thread_entry_t *t);
+
+/* Record the host pthread backing this entry, under thread_lock so concurrent
+ * table readers (thread_join_workers snapshot, thread_alloc slot reuse) see a
+ * consistent handle. joinable marks the handle as needing a pthread_join
+ * before its slot can be reused; pass false for detached pthreads (vm-clone
+ * children).
+ */
+void thread_set_host_thread(thread_entry_t *t, pthread_t thr, bool joinable);
+
+/* Atomically claim the right to pthread_join a worker's handle. Returns true
+ * when the caller must join thr; false when someone else (slot reuse in
+ * thread_alloc) already claimed it, or the slot no longer holds thr. Used by
+ * the clone startup-failure rollback so the parent's join cannot race with a
+ * concurrent slot reuse joining the same terminated pthread.
+ */
+bool thread_claim_worker_join(thread_entry_t *t, pthread_t thr);
 
 /* Find a thread by guest TID. Returns NULL if not found. */
 thread_entry_t *thread_find(int64_t tid);

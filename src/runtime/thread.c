@@ -113,6 +113,7 @@ void thread_register_main(hv_vcpu_t vcpu,
     t->vcpu = vcpu;
     t->vexit = vexit;
     t->host_thread = pthread_self();
+    t->host_thread_needs_join = false; /* Never join the process main thread */
     t->clear_child_tid = 0;
     t->sp_el1 = sp_el1;
     t->sp_el1_slot = 0; /* Main thread always owns slot 0 */
@@ -142,6 +143,7 @@ thread_entry_t *thread_alloc(int64_t tid,
     thread_entry_t *result = NULL;
 
     pthread_mutex_lock(&thread_lock);
+rescan:
     THREAD_FOR_EACH (t) {
         if (__atomic_load_n(&t->active, __ATOMIC_RELAXED))
             continue;
@@ -150,6 +152,25 @@ thread_entry_t *thread_alloc(int64_t tid,
          */
         if (t->ptrace_conds_inited && t->ptrace_waiters > 0)
             continue;
+        /* Reap the previous occupant's pthread before reusing the slot.
+         * Workers that exit on their own are joinable but never joined
+         * (thread_join_workers snapshots active entries only), so dropping the
+         * handle in the memset below would leak its pthread bookkeeping for
+         * the process lifetime. active == 0 means the pthread is already past
+         * thread_deactivate, so the join blocks at most for its final
+         * wind-down -- but that wind-down can take thread_lock (the
+         * last-worker wakeup calls thread_interrupt_all), so the join must run
+         * with the lock dropped. Claim the handle first so no one else joins
+         * it, then rescan: the table may have changed while unlocked.
+         */
+        if (t->host_thread_needs_join) {
+            pthread_t stale = t->host_thread;
+            t->host_thread_needs_join = false;
+            pthread_mutex_unlock(&thread_lock);
+            pthread_join(stale, NULL);
+            pthread_mutex_lock(&thread_lock);
+            goto rescan;
+        }
         if (t->ptrace_conds_inited) {
             pthread_cond_destroy(&t->ptrace_cond);
             pthread_cond_destroy(&t->resume_cond);
@@ -198,6 +219,26 @@ static void thread_ptrace_cleanup_locked(thread_entry_t *t)
     pthread_cond_destroy(&t->resume_cond);
     t->ptrace_conds_inited = false;
     t->ptrace_cleanup_pending = false;
+}
+
+void thread_set_host_thread(thread_entry_t *t, pthread_t thr, bool joinable)
+{
+    pthread_mutex_lock(&thread_lock);
+    t->host_thread = thr;
+    t->host_thread_needs_join = joinable;
+    pthread_mutex_unlock(&thread_lock);
+}
+
+bool thread_claim_worker_join(thread_entry_t *t, pthread_t thr)
+{
+    pthread_mutex_lock(&thread_lock);
+    bool claimed =
+        t->host_thread_needs_join && pthread_equal(t->host_thread, thr);
+    if (claimed)
+        t->host_thread_needs_join = false;
+    pthread_mutex_unlock(&thread_lock);
+
+    return claimed;
 }
 
 void thread_deactivate(thread_entry_t *t)
@@ -359,20 +400,36 @@ void thread_join_workers(void)
 {
     /* Snapshot worker threads under the lock. The code needs the host_thread
      * handle and a way to check the active flag without re-locking. Storing the
-     * table entry pointer lets the loop use __atomic_load on active.
+     * table entry pointer lets the loop use __atomic_load on active. Claim each
+     * joinable handle here (clear host_thread_needs_join) so a concurrent slot
+     * reuse in thread_alloc cannot join the same pthread twice. Unclaimed
+     * entries -- vm-clone children (created detached) and the main thread's
+     * slot when a worker drives teardown -- are still polled below so teardown
+     * waits for them to leave the guest, but their handle is never joined or
+     * detached.
      */
     struct {
         pthread_t thr;
         thread_entry_t *t;
+        bool claimed;
     } workers[MAX_THREADS];
     int nworkers = 0;
 
     pthread_mutex_lock(&thread_lock);
-    THREAD_FOR_EACH_ACTIVE (t) {
+    THREAD_FOR_EACH (t) {
         if (t == current_thread)
+            continue;
+        /* Inactive slots are included when they still hold an unjoined handle:
+         * a worker that exited on its own shortly before teardown and whose
+         * slot was never reused. Its pthread has terminated (or is in final
+         * wind-down), so the join below is immediate.
+         */
+        if (!t->active && !t->host_thread_needs_join)
             continue;
         workers[nworkers].thr = t->host_thread;
         workers[nworkers].t = t;
+        workers[nworkers].claimed = t->host_thread_needs_join;
+        t->host_thread_needs_join = false;
         nworkers++;
     }
     pthread_mutex_unlock(&thread_lock);
@@ -392,6 +449,8 @@ void thread_join_workers(void)
             usleep(5000);
         }
 
+        if (!workers[w].claimed)
+            continue;
         if (!__atomic_load_n(&workers[w].t->active, __ATOMIC_ACQUIRE))
             pthread_join(workers[w].thr, NULL);
         else

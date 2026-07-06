@@ -738,7 +738,8 @@ typedef struct {
                           * detect a close+reopen ABA where the slot now holds a
                           * different open file. */
     int linux_flags;     /* Linux open flags (for CLOEXEC tracking) */
-    void *dir;           /* DIR* for FD_DIR entries (NULL otherwise) */
+    void *dir;           /* dir_stream_t* for FD_DIR entries, opaque instance
+                          * pointer for FD_EPOLL entries (NULL otherwise) */
     char proc_path[FD_VIRTUAL_PATH_MAX]; /* Virtual /proc dir root for *at */
     int seals;      /* F_SEAL_* bits (non-zero only for memfd_create fds) */
     bool can_block; /* host read/write on this fd may block (pipe, socket, fifo,

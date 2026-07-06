@@ -437,19 +437,40 @@ int fork_ipc_recv_fd_table(int ipc_fd, guest_t *g)
 
             if (fd_entries[i].type != FD_DIR)
                 continue;
+            /* Rebuild the directory stream. Every failure below must close
+             * the slot rather than leave it published as FD_DIR with
+             * dir=NULL: such a slot never faults, but sys_getdents64 would
+             * report ENOTDIR on it for the child's whole lifetime, masking
+             * the restore failure as a valid-but-broken fd. A closed slot
+             * yields EBADF, an honest signal that the fd did not survive
+             * the fork.
+             */
             int dir_fd = dup(host_fds[i]);
             if (dir_fd < 0) {
                 log_error("fork-child: dup failed for DIR gfd %d: %s", gfd,
                           strerror(errno));
+                close(host_fds[i]);
+                fd_mark_closed(gfd);
                 continue;
             }
             DIR *dir = fdopendir(dir_fd);
             if (!dir) {
                 close(dir_fd);
                 log_error("fork-child: fdopendir failed for gfd %d", gfd);
+                close(host_fds[i]);
+                fd_mark_closed(gfd);
                 continue;
             }
-            fd_table[gfd].dir = dir;
+            void *ds = dir_stream_create(dir);
+            if (!ds) {
+                closedir(dir);
+                log_error("fork-child: dir_stream_create failed for gfd %d",
+                          gfd);
+                close(host_fds[i]);
+                fd_mark_closed(gfd);
+                continue;
+            }
+            fd_table[gfd].dir = ds;
         }
     }
 

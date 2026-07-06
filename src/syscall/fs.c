@@ -215,6 +215,102 @@ static const char *proc_virtual_dir_path(const char *path,
     return virt;
 }
 
+/* Reference-counted wrapper around a directory stream. See the declaration in
+ * syscall/internal.h for why this exists: a raw DIR* stored in
+ * fd_table[fd].dir would let a sibling close()/dup2()/fork-restore free it via
+ * closedir() while sys_getdents64() is still mid-loop reading it. The struct
+ * itself is private to this file; every other module only ever sees the
+ * opaque void* that fd_table[].dir already stores.
+ */
+typedef struct {
+    DIR *dir;
+    pthread_mutex_t lock; /* Serializes the telldir/readdir/seekdir walk in
+                           * sys_getdents64. The refcount below only pins the
+                           * wrapper's lifetime; two guest threads issuing
+                           * getdents64 on the same fd would otherwise
+                           * interleave their walks on the shared DIR* and see
+                           * an undefined entry split (Linux serializes
+                           * getdents64 through the struct file's f_pos_lock).
+                           * Only ever taken by reference holders, so it is
+                           * never destroyed while held.
+                           */
+    int refcount;         /* Guarded by fd_lock. Starts at 1 (the fd-table's
+                           * own reference) and gains one per in-flight
+                           * sys_getdents64 that pinned it via
+                           * dir_stream_acquire(). Freed only when the count
+                           * reaches zero.
+                           */
+} dir_stream_t;
+
+/* Wrap an already-open DIR* for storage in fd_table[].dir. Takes ownership of
+ * dir on success. Returns NULL on allocation failure, in which case the
+ * caller still owns dir and must closedir() it.
+ */
+void *dir_stream_create(DIR *dir)
+{
+    dir_stream_t *ds = malloc(sizeof(*ds));
+    if (!ds)
+        return NULL;
+    ds->dir = dir;
+    pthread_mutex_init(&ds->lock, NULL);
+    ds->refcount = 1;
+    return ds;
+}
+
+/* Tear down a wrapper that was never published to fd_table (an allocation or
+ * install failure between dir_stream_create() and the point the pointer would
+ * have been written to fd_table[].dir). No other thread can have acquired a
+ * reference yet, so this always closes and frees unconditionally.
+ */
+static void dir_stream_discard(void *ds_ptr)
+{
+    dir_stream_t *ds = ds_ptr;
+    closedir(ds->dir);
+    pthread_mutex_destroy(&ds->lock);
+    free(ds);
+}
+
+/* Pin fd's directory stream against a concurrent close()/dup2() so
+ * sys_getdents64 can safely walk it. Returns the pinned wrapper, or NULL if
+ * fd is not (or no longer) an open FD_DIR. Balance every non-NULL return with
+ * dir_stream_release().
+ */
+static dir_stream_t *dir_stream_acquire(int fd)
+{
+    if (!RANGE_CHECK(fd, 0, FD_TABLE_SIZE))
+        return NULL;
+    pthread_mutex_lock(&fd_lock);
+    dir_stream_t *ds = NULL;
+    if (fd_table[fd].type == FD_DIR) {
+        ds = (dir_stream_t *) fd_table[fd].dir;
+        if (ds)
+            ds->refcount++;
+    }
+    pthread_mutex_unlock(&fd_lock);
+    return ds;
+}
+
+/* Drop a reference taken by dir_stream_acquire(), or the fd-table's own
+ * reference from fd_cleanup_entry(). No-op when passed NULL. The decrement
+ * happens under fd_lock; the actual closedir()/free() runs after releasing
+ * it, matching fd_cleanup_entry's own "do not hold fd_lock across slow
+ * syscalls" convention.
+ */
+void dir_stream_release(void *ds_ptr)
+{
+    dir_stream_t *ds = ds_ptr;
+    if (!ds)
+        return;
+    pthread_mutex_lock(&fd_lock);
+    bool last = --ds->refcount == 0;
+    pthread_mutex_unlock(&fd_lock);
+    if (last) {
+        closedir(ds->dir);
+        pthread_mutex_destroy(&ds->lock);
+        free(ds);
+    }
+}
+
 static int fd_alloc_opened_host(int host_fd,
                                 int type,
                                 int linux_flags,
@@ -222,16 +318,23 @@ static int fd_alloc_opened_host(int host_fd,
                                 void (*cleanup)(int),
                                 const char *virtual_path)
 {
-    DIR *dir = NULL;
+    dir_stream_t *ds = NULL;
 
     if (type == FD_DIR) {
         int dup_fd = dup(host_fd);
         if (dup_fd < 0)
             return -1;
 
-        dir = fdopendir(dup_fd);
+        DIR *dir = fdopendir(dup_fd);
         if (!dir) {
             close_keep_errno(dup_fd);
+            return -1;
+        }
+        ds = dir_stream_create(dir);
+        if (!ds) {
+            int saved_errno = errno;
+            closedir(dir);
+            errno = saved_errno;
             return -1;
         }
     }
@@ -242,8 +345,8 @@ static int fd_alloc_opened_host(int host_fd,
             : fd_alloc_from_relaxed(0, type, host_fd, cleanup);
     if (guest_fd < 0) {
         int saved_errno = errno;
-        if (dir)
-            closedir(dir);
+        if (ds)
+            dir_stream_discard(ds);
         errno = saved_errno;
         return -1;
     }
@@ -263,16 +366,16 @@ static int fd_alloc_opened_host(int host_fd,
      * tuple still matches what just got allocated; if it does not, the slot
      * belongs to a different file now and any install would clobber the
      * sibling's entry. The sibling's close path already cleaned up the host_fd
-     * of this side via fd_cleanup_entry, so this side only owns dir, which gets
-     * closed below.
+     * of this side via fd_cleanup_entry, so this side only owns ds, which gets
+     * discarded below.
      */
     bool installed = false;
     pthread_mutex_lock(&fd_lock);
     if (fd_table[guest_fd].type == type &&
         fd_table[guest_fd].host_fd == host_fd) {
         fd_table[guest_fd].linux_flags = linux_flags;
-        if (dir)
-            fd_table[guest_fd].dir = dir;
+        if (ds)
+            fd_table[guest_fd].dir = ds;
         if (have_proc_path)
             memcpy(fd_table[guest_fd].proc_path, proc_path_buf,
                    sizeof(proc_path_buf));
@@ -284,8 +387,8 @@ static int fd_alloc_opened_host(int host_fd,
     }
     pthread_mutex_unlock(&fd_lock);
 
-    if (!installed && dir)
-        closedir(dir);
+    if (!installed && ds)
+        dir_stream_discard(ds);
 
     return guest_fd;
 }
@@ -635,13 +738,13 @@ static void discard_allocated_fd(int guest_fd)
 /* Open a DIR stream over a dup of dst_host_fd if the source was an FD_DIR.
  *
  * Returns NULL on success-but-no-stream-needed (non-dir source) or on
- * dup/fdopendir failure with errno preserved. Pulled out of the critical
- * section in install_fd_alias_metadata_atomic because dup and fdopendir are
- * slow syscalls that must not hold fd_lock.
+ * dup/fdopendir/allocation failure with errno preserved. Pulled out of the
+ * critical section in install_fd_alias_metadata_atomic because dup and
+ * fdopendir are slow syscalls that must not hold fd_lock.
  */
-static DIR *clone_dir_stream(const fd_entry_t *src_snap,
-                             int dst_host_fd,
-                             bool *out_failed)
+static dir_stream_t *clone_dir_stream(const fd_entry_t *src_snap,
+                                      int dst_host_fd,
+                                      bool *out_failed)
 {
     *out_failed = false;
     if (src_snap->type != FD_DIR)
@@ -660,7 +763,15 @@ static DIR *clone_dir_stream(const fd_entry_t *src_snap,
         *out_failed = true;
         return NULL;
     }
-    return dir;
+    dir_stream_t *ds = dir_stream_create(dir);
+    if (!ds) {
+        int saved_errno = errno;
+        closedir(dir);
+        errno = saved_errno;
+        *out_failed = true;
+        return NULL;
+    }
+    return ds;
 }
 
 /* Install dup-alias metadata atomically with the slot identity. Uses the (type,
@@ -669,14 +780,14 @@ static DIR *clone_dir_stream(const fd_entry_t *src_snap,
  * the relaxed allocator's lock release and this call could otherwise clobber
  * the sibling's freshly-installed entry.
  * Returns true on successful install, false if the slot was reallocated (caller
- * must closedir any cloned dir to avoid a leak).
+ * must dir_stream_discard() any cloned ds to avoid a leak).
  */
 static bool install_fd_alias_metadata_atomic(int dst_fd,
                                              int expected_type,
                                              int expected_host_fd,
                                              const fd_entry_t *src_snap,
                                              int linux_flags,
-                                             DIR *dir)
+                                             dir_stream_t *ds)
 {
     /* LINUX_O_NONBLOCK is a file-status flag preserved by dup(2)/dup2(2).
      * Required for FD_TIMERFD (and any other type that stores NONBLOCK in
@@ -697,8 +808,8 @@ static bool install_fd_alias_metadata_atomic(int dst_fd,
         fd_table[dst_fd].seals = src_snap->seals;
         memcpy(fd_table[dst_fd].proc_path, src_snap->proc_path,
                sizeof(fd_table[dst_fd].proc_path));
-        if (dir)
-            fd_table[dst_fd].dir = dir;
+        if (ds)
+            fd_table[dst_fd].dir = ds;
         bool readable_urandom =
             expected_type == FD_URANDOM &&
             (final_flags & LINUX_O_ACCMODE) != LINUX_O_WRONLY;
@@ -795,7 +906,8 @@ static int duplicate_guest_fd(int src_fd,
      * this install land on an unrelated slot.
      */
     bool dir_clone_failed = false;
-    DIR *dir = clone_dir_stream(&src_snap, new_host_fd, &dir_clone_failed);
+    dir_stream_t *ds =
+        clone_dir_stream(&src_snap, new_host_fd, &dir_clone_failed);
     if (dir_clone_failed) {
         int saved_errno = errno;
         discard_allocated_fd(guest_fd);
@@ -804,14 +916,14 @@ static int duplicate_guest_fd(int src_fd,
     }
 
     if (!install_fd_alias_metadata_atomic(guest_fd, new_type, new_host_fd,
-                                          &src_snap, linux_flags, dir)) {
+                                          &src_snap, linux_flags, ds)) {
         /* Slot was reallocated by a sibling while metadata install was pending;
          * the sibling's close path already cleaned up new_host_fd via
          * fd_cleanup_entry, so the only resource this side still owns is the
          * cloned DIR stream.
          */
-        if (dir)
-            closedir(dir);
+        if (ds)
+            dir_stream_discard(ds);
     }
 
     return guest_fd;
@@ -1249,12 +1361,25 @@ int64_t sys_getdents64(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
     if (fd_table[fd].type == FD_PATH)
         return -LINUX_EBADF;
 
-    DIR *dir = (DIR *) fd_table[fd].dir;
-    if (!dir)
+    /* Pin the directory stream so a concurrent close()/dup2() cannot free it
+     * while this call is still walking it -- see dir_stream_t in fs.c.
+     */
+    dir_stream_t *ds = dir_stream_acquire(fd);
+    if (!ds)
         return -LINUX_ENOTDIR;
+    DIR *dir = ds->dir;
 
-    if (!guest_ptr(g, buf_gva))
-        return -LINUX_EFAULT;
+    /* Serialize the walk against a concurrent getdents64 pinning the same
+     * stream -- see the lock field in dir_stream_t.
+     */
+    pthread_mutex_lock(&ds->lock);
+
+    int64_t ret;
+
+    if (!guest_ptr(g, buf_gva)) {
+        ret = -LINUX_EFAULT;
+        goto out;
+    }
 
     size_t guest_pos = 0;
     struct dirent *de;
@@ -1306,7 +1431,8 @@ int64_t sys_getdents64(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
                         NAME_MAX, strlen(de->d_name), fd);
                 continue;
             }
-            return guest_pos > 0 ? (int64_t) guest_pos : linux_errno();
+            ret = guest_pos > 0 ? (int64_t) guest_pos : linux_errno();
+            goto out;
         }
 
         size_t name_len = strlen(guest_name);
@@ -1334,13 +1460,20 @@ int64_t sys_getdents64(guest_t *g, int fd, uint64_t buf_gva, uint64_t count)
         if (pad_start < reclen)
             memset(entry_buf + pad_start, 0, reclen - pad_start);
 
-        if (guest_write(g, buf_gva + guest_pos, entry_buf, reclen) < 0)
-            return guest_pos > 0 ? (int64_t) guest_pos : -LINUX_EFAULT;
+        if (guest_write(g, buf_gva + guest_pos, entry_buf, reclen) < 0) {
+            ret = guest_pos > 0 ? (int64_t) guest_pos : -LINUX_EFAULT;
+            goto out;
+        }
 
         guest_pos += reclen;
     }
 
-    return (int64_t) guest_pos;
+    ret = (int64_t) guest_pos;
+
+out:
+    pthread_mutex_unlock(&ds->lock);
+    dir_stream_release(ds);
+    return ret;
 }
 
 int64_t sys_chdir(guest_t *g, uint64_t path_gva)

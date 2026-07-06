@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -214,6 +215,21 @@ bool fd_close_regular_relaxed(int fd, int *host_fd_out);
  * already removed the entry from fd_table.
  */
 void fd_cleanup_entry(int guest_fd, const fd_entry_t *snap);
+
+/* Reference-counted wrapper around a directory stream, stored in
+ * fd_table[].dir for FD_DIR entries (see syscall/fs.c). A raw DIR* would let a
+ * sibling's close()/dup2()/fork-restore free it via closedir() while
+ * sys_getdents64() is still mid-loop reading it; the wrapper defers the
+ * closedir() until every acquirer -- the fd-table's own reference, plus any
+ * in-flight sys_getdents64 -- has released it. Guarded by fd_lock, mirroring
+ * poll.c's epoll_instance_t refcount.
+ *
+ * dir_stream_create() takes ownership of dir and returns the wrapper, or NULL
+ * on allocation failure (caller still owns dir and must closedir() it itself).
+ * dir_stream_release() drops a reference and is a no-op when passed NULL.
+ */
+void *dir_stream_create(DIR *dir);
+void dir_stream_release(void *ds);
 
 /* Translation helpers. */
 

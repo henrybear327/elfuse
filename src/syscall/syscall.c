@@ -898,10 +898,17 @@ static int64_t sc_exit_group(guest_t *g,
     (void) x4;
     (void) x5;
     (void) verbose;
+    /* Request + interrupt only; do NOT join here. This handler runs on
+     * whichever thread issued exit_group, so a join from here would snapshot
+     * the main thread (slot 0, never deactivates) and detach it after the
+     * poll cap, and would race the main thread's own join over the same
+     * siblings (double pthread_join is undefined). The kicked workers wind
+     * down on their own; the single authoritative join is in main() after
+     * vcpu_run_loop returns, before guest teardown.
+     */
     proc_request_exit_group((int) x0);
     wakeup_pipe_signal();
     thread_for_each(thread_force_exit_cb, NULL);
-    thread_join_workers();
     return SC_EXIT_SENTINEL | ((int) x0 & 0xFF);
 }
 

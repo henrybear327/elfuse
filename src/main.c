@@ -35,10 +35,13 @@
 #include "core/sysroot.h"
 
 #include "runtime/forkipc.h"
+#include "runtime/futex.h" /* futex_interrupt_request */
 #include "runtime/proctitle.h"
+#include "runtime/thread.h"
 
 #include "syscall/fuse.h"
 #include "syscall/path.h"
+#include "syscall/poll.h" /* wakeup_pipe_signal */
 #include "syscall/proc.h"
 
 #include "debug/gdbstub.h"
@@ -673,8 +676,37 @@ int main(int argc, char **argv)
      */
     int exit_code = vcpu_run_loop(vcpu, vexit, &g, verbose, timeout_sec);
 
-    /* Tear down debugger state before freeing guest/vCPU resources. */
+    /* Tear down debugger state before joining workers: a worker parked in
+     * gdb_stub_handle_stop() stays active (not deactivated) until this
+     * broadcasts resume_cond, so joining first would just time out and
+     * detach it while it is still paused. */
     gdb_stub_shutdown();
+
+    /* Wait for worker vCPU threads to stop before tearing down guest memory.
+     * The main thread leaves the run loop as soon as it observes the
+     * exit_group flag, but sibling vCPU threads may still be mid-iteration in
+     * their own run loops (e.g. touching shim_globals). cleanup_main_resources
+     * unmaps the guest slab via guest_destroy, so a still-running worker would
+     * fault on freed guest memory and crash the host with SIGSEGV, masking the
+     * real exit code. thread_join_workers() is a no-op once the workers have
+     * already wound down (the common single-threaded case).
+     *
+     * vcpu_run_loop can also return here without anyone having requested
+     * exit_group or kicked the siblings out of hv_vcpu_run: the alarm timeout
+     * (exit_code 124), a fatal default-disposition signal, or ELR_EL1==0 all
+     * bail out with a bare break. On those paths siblings are still spinning
+     * in the guest, so mirror guest_destroy's request-interrupt prefix before
+     * joining -- otherwise this call burns its full poll cap, detaches every
+     * worker, and guest_destroy's own request-interrupt-join (which honors
+     * join_abandoned) skips them, leaving live pthreads to fault on the
+     * imminent unmap.
+     */
+    if (!proc_exit_group_requested())
+        proc_request_exit_group(0);
+    futex_interrupt_request();
+    wakeup_pipe_signal();
+    thread_interrupt_all();
+    thread_join_workers();
 
     /* Diagnostic counter dump runs before guest_destroy so the shim_data
      * mapping is still valid. ELFUSE_SHIM_STATS is the gate; an unset variable

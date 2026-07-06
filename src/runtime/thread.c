@@ -309,6 +309,12 @@ void thread_deactivate(thread_entry_t *t)
     /* Free SP_EL1 slot so it can be reused by future threads */
     thread_free_sp_el1_locked(t);
 
+    /* Release store: everything this thread did -- including its last guest
+     * memory access -- must happen-before thread_join_workers' acquire load
+     * observing 0, or the joiner could green-light guest_destroy's unmap
+     * while stores are still in flight. The joiner polls lock-free, so the
+     * mutex held here provides no edge to it.
+     */
     __atomic_store_n(&t->active, 0, __ATOMIC_RELEASE);
     atomic_fetch_sub(&active_thread_count, 1);
 
@@ -451,19 +457,22 @@ void thread_join_workers(void)
      * entries -- vm-clone children (created detached) and the main thread's
      * slot when a worker drives teardown -- are still polled below so teardown
      * waits for them to leave the guest, but their handle is never joined or
-     * detached.
+     * detached. Entries a previous pass already detached (join_abandoned) are
+     * skipped outright: joining or detaching the same pthread twice is
+     * undefined, and main()'s join is followed by guest_destroy's internal one.
      */
     struct {
         pthread_t thr;
         thread_entry_t *t;
         uint64_t generation;
         bool claimed;
+        bool recycled;
     } workers[MAX_THREADS];
     int nworkers = 0;
 
     pthread_mutex_lock(&thread_lock);
     THREAD_FOR_EACH (t) {
-        if (t == current_thread)
+        if (t == current_thread || t->join_abandoned)
             continue;
         /* Inactive slots are included when they still hold an unjoined handle:
          * a worker that exited on its own shortly before teardown and whose
@@ -477,51 +486,70 @@ void thread_join_workers(void)
         workers[nworkers].t = t;
         workers[nworkers].generation = t->generation;
         workers[nworkers].claimed = t->host_thread_needs_join;
+        workers[nworkers].recycled = false;
         t->host_thread_needs_join = false;
         nworkers++;
     }
     pthread_mutex_unlock(&thread_lock);
 
-    /* Poll/join each worker OUTSIDE the lock. Workers that responded to
-     * hv_vcpus_exit typically finish within microseconds. Threads stuck in
-     * uninterruptible host calls (blocking read/poll) are given 100ms to
-     * finish. If still alive, detach and let process exit clean up. The vCPU is
-     * NOT destroyed here because HVF vCPUs are thread-affine, so cross-thread
-     * hv_vcpu_destroy while the owning thread may still be inside hv_vcpu_run
-     * is unsafe.
+    /* Poll under one shared 500ms deadline OUTSIDE the lock, then join or
+     * detach each worker. Workers that responded to hv_vcpus_exit typically
+     * finish within microseconds; the cap only matters for workers parked in
+     * host blocking calls, and it must exceed the worst-case teardown-flag
+     * re-check latency of every such state or a worker that WOULD wind down
+     * cleanly gets abandoned on timing alone: the interruptible io wait
+     * re-checks every 200ms (io.c wait helper) and the futex paths every 100ms
+     * (FUTEX_OS_SYNC_POLL_CAP_NS quanta), so 500ms covers the slowest bound
+     * with margin. One shared deadline keeps worst-case shutdown at the cap
+     * even with many stuck workers, rather than multiplying a per-worker cap
+     * by nworkers. A worker still alive past the cap is detached and, if this
+     * pass claimed its handle, marked join_abandoned so a later pass does not
+     * touch it again. The vCPU is NOT destroyed here because HVF vCPUs are
+     * thread-affine, so cross-thread hv_vcpu_destroy while the owning thread
+     * may still be inside hv_vcpu_run is unsafe.
      */
-    for (int w = 0; w < nworkers; w++) {
-        bool recycled = false;
-
-        for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 100; i++) {
+        bool any_active = false;
+        for (int w = 0; w < nworkers; w++) {
+            if (workers[w].recycled)
+                continue;
             if (!__atomic_load_n(&workers[w].t->active, __ATOMIC_ACQUIRE))
-                break;
+                continue;
             /* The slot may have been reused for a new logical thread while we
              * polled: thread_alloc only recycles a slot once its previous
              * occupant is inactive, so a generation bump here proves our
              * snapshotted worker already deactivated even though the slot now
-             * reads active == 1 again for the replacement thread. Stop polling
-             * immediately rather than tracking the wrong thread's active bit
-             * for the rest of the loop.
+             * reads active == 1 again for the replacement thread. Stop
+             * tracking this worker's active bit for the rest of the loop
+             * rather than following the wrong thread.
              */
             if (workers[w].t->generation != workers[w].generation) {
-                recycled = true;
-                break;
+                workers[w].recycled = true;
+                continue;
             }
-            usleep(5000);
+            any_active = true;
         }
+        if (!any_active)
+            break;
+        usleep(5000);
+    }
 
+    for (int w = 0; w < nworkers; w++) {
         if (!workers[w].claimed)
             continue;
         /* recycled short-circuits before the active re-check: once recycled,
          * that bit belongs to the replacement thread and must not influence the
          * join-vs-detach decision for our (already-terminated) handle.
          */
-        if (recycled ||
-            !__atomic_load_n(&workers[w].t->active, __ATOMIC_ACQUIRE))
+        if (workers[w].recycled ||
+            !__atomic_load_n(&workers[w].t->active, __ATOMIC_ACQUIRE)) {
             pthread_join(workers[w].thr, NULL);
-        else
+        } else {
             pthread_detach(workers[w].thr);
+            pthread_mutex_lock(&thread_lock);
+            workers[w].t->join_abandoned = true;
+            pthread_mutex_unlock(&thread_lock);
+        }
     }
 }
 

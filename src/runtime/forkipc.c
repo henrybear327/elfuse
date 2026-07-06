@@ -692,10 +692,11 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         return -LINUX_EFAULT;
     }
 
-    /* Create the host pthread (joinable; teardown joins live workers via
-     * thread_join_workers, and a worker that exits on its own is joined when
-     * its table slot is reused by thread_alloc). Threads clean up their TID
-     * address via CLONE_CHILD_CLEARTID + futex wake.
+    /* Create the host pthread (joinable; the main thread joins all live
+     * workers via thread_join_workers before guest teardown, and a worker
+     * that exits on its own is joined when its table slot is reused by
+     * thread_alloc). Threads clean up their TID address via
+     * CLONE_CHILD_CLEARTID + futex wake.
      */
     pthread_t host_thread;
     pthread_attr_t attr;

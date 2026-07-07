@@ -655,10 +655,10 @@ int fd_to_host_dup(int guest_fd)
  */
 void fd_cleanup_entry(int guest_fd, const fd_entry_t *snap)
 {
-    /* DIR* / epoll_instance_t stored in the dir field */
+    /* dir_stream_t / epoll_instance_t stored in the dir field */
     if (snap->dir) {
         if (snap->type == FD_DIR)
-            closedir((DIR *) snap->dir);
+            dir_stream_release(snap->dir);
         else if (snap->type == FD_EPOLL)
             epoll_instance_free(snap->dir);
     }

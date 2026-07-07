@@ -21,6 +21,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -741,6 +742,103 @@ static void *tid_worker(void *arg)
     return NULL;
 }
 
+/* The target thread's own signalfd must wake when it receives a blocked,
+ * thread-directed signal -- the standard "block SIGxxx, drain it via signalfd"
+ * pattern. Regression guard for the routing fix (issue #152): a directed signal
+ * has to reach the target's signalfd wait, not just process-directed kills.
+ * Linux wakes the one shared sighand wait queue, so the target's poll must fire
+ * and its read must return the directed signal.
+ */
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t ready_cv;
+    bool ready;
+    int result; /* 1 = signalfd delivered SIGUSR1, 0 = did not, -1 = setup err
+                 */
+} sfd_target_t;
+
+static void *signalfd_target_worker(void *arg)
+{
+    sfd_target_t *s = arg;
+    sigset_t block;
+    sigemptyset(&block);
+    sigaddset(&block, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &block, NULL);
+
+    int fd = signalfd(-1, &block, 0); /* blocking; poll gates the read */
+
+    pthread_mutex_lock(&s->mtx);
+    s->ready = true;
+    s->result = (fd < 0) ? -1 : 0;
+    pthread_cond_signal(&s->ready_cv);
+    pthread_mutex_unlock(&s->mtx);
+    if (fd < 0)
+        return NULL;
+
+    /* Park in poll waiting for the directed signal; the wake proves notify ran
+     * for the thread-directed path.
+     */
+    struct pollfd pfd = {.fd = fd, .events = POLLIN};
+    int pr = poll(&pfd, 1, 2000);
+    if (pr == 1 && (pfd.revents & POLLIN)) {
+        struct signalfd_siginfo si;
+        ssize_t n = read(fd, &si, sizeof(si));
+        s->result =
+            (n == (ssize_t) sizeof(si) && si.ssi_signo == (uint32_t) SIGUSR1)
+                ? 1
+                : 0;
+    }
+    close(fd);
+    return NULL;
+}
+
+static void test_directed_signal_wakes_target_signalfd(void)
+{
+    TEST("directed signal wakes the target's signalfd");
+
+    sfd_target_t s;
+    pthread_mutex_init(&s.mtx, NULL);
+    pthread_cond_init(&s.ready_cv, NULL);
+    s.ready = false;
+    s.result = 0;
+
+    pthread_t th;
+    if (pthread_create(&th, NULL, signalfd_target_worker, &s) != 0) {
+        FAIL("pthread_create");
+        return;
+    }
+
+    pthread_mutex_lock(&s.mtx);
+    while (!s.ready)
+        pthread_cond_wait(&s.ready_cv, &s.mtx);
+    int setup = s.result;
+    pthread_mutex_unlock(&s.mtx);
+
+    if (setup == -1) {
+        pthread_join(th, NULL);
+        pthread_mutex_destroy(&s.mtx);
+        pthread_cond_destroy(&s.ready_cv);
+        FAIL("signalfd");
+        return;
+    }
+
+    usleep(100000); /* let the worker reach poll() */
+    pthread_kill(th, SIGUSR1);
+    pthread_join(th, NULL);
+    pthread_mutex_destroy(&s.mtx);
+    pthread_cond_destroy(&s.ready_cv);
+
+    if (s.result != 1) {
+        printf(
+            "FAIL: target signalfd did not deliver the directed signal "
+            "(result=%d)\n",
+            s.result);
+        fails++;
+        return;
+    }
+    PASS();
+}
+
 static void test_rt_sigqueueinfo_thread_tid_routes_to_tgid(void)
 {
     /* Linux is permissive: rt_sigqueueinfo(tid_of_any_thread, ...) succeeds and
@@ -862,6 +960,7 @@ int main(void)
     test_partial_fault_returns_partial_bytes();
     test_rt_sigqueueinfo_bad_pointer_efault();
     test_rt_sigqueueinfo_rejects_foreign_pid();
+    test_directed_signal_wakes_target_signalfd();
     test_rt_sigqueueinfo_thread_tid_routes_to_tgid();
 
     SUMMARY("test-signalfd-hardening");

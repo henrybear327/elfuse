@@ -1143,19 +1143,30 @@ retry:
     signal_rt_info_t pending_stack[LINUX_NSIG];
     signal_rt_info_t *pending = pending_stack;
     signal_rt_info_t *heap = NULL;
-    size_t total = 0;
-    const signal_state_t *sig = signal_get_state();
-    /* Match pending signals against the signalfd mask. Do NOT filter by
-     * sig->blocked because signalfd is specifically designed to read signals
-     * that were blocked from normal delivery via sigprocmask().
+    /* Parallel source-set tag per peeked entry (0 = private, 1 = shared) so the
+     * take consumes each signal from the exact set it was peeked from.
      */
-    uint64_t deliverable = sig->pending & mask;
+    uint8_t src_stack[LINUX_NSIG];
+    uint8_t *src = src_stack;
+    uint8_t *src_heap = NULL;
+    size_t total = 0;
+    /* Match pending signals against the signalfd mask. Do NOT filter by the
+     * blocked mask because signalfd is specifically designed to read signals
+     * that were blocked from normal delivery via sigprocmask(). The visible set
+     * is this thread's private (thread-directed) pending plus the shared set.
+     */
+    uint64_t deliverable = signal_signalfd_pending_mask() & mask;
 
     if (max_signals > LINUX_NSIG) {
         heap = malloc(max_signals * sizeof(*pending));
-        if (!heap)
+        src_heap = malloc(max_signals * sizeof(*src));
+        if (!heap || !src_heap) {
+            free(heap);
+            free(src_heap);
             return -LINUX_ENOMEM;
+        }
         pending = heap;
+        src = src_heap;
     }
 
     if (deliverable == 0) {
@@ -1180,18 +1191,33 @@ retry:
         pthread_mutex_unlock(&sfd_lock);
         if (!still_valid) {
             free(heap);
+            free(src_heap);
             return -LINUX_EBADF;
         }
 
-        /* Re-check: a signal matching the current mask should now be pending */
-        sig = signal_get_state();
-        deliverable = sig->pending & mask;
-        if (deliverable == 0)
-            goto no_pending;
+        /* Re-check: a racing consumer may have drained the signal that woke the
+         * pipe. A blocking read must keep waiting rather than surface a
+         * spurious -EAGAIN, so loop back to re-wait.
+         */
+        deliverable = signal_signalfd_pending_mask() & mask;
+        if (deliverable == 0) {
+            free(heap);
+            free(src_heap);
+            goto retry;
+        }
     }
-    size_t peeked = signal_peek_signalfd(mask, pending, max_signals);
-    if (peeked == 0)
+    size_t peeked = signal_peek_signalfd(mask, pending, src, max_signals);
+    if (peeked == 0) {
+        /* Raced empty after a positive recheck: block-mode re-waits, nonblock
+         * reports EAGAIN.
+         */
+        if (!nonblock) {
+            free(heap);
+            free(src_heap);
+            goto retry;
+        }
         goto no_pending;
+    }
 
     /* Write-then-take. Writing first means that on a guest_write_small EFAULT
      * the rt-queue is still intact and signals are not lost: no re-queue dance,
@@ -1222,6 +1248,7 @@ retry:
                  * test_signalfd_efault_preserves_pending.
                  */
                 free(heap);
+                free(src_heap);
                 return -LINUX_EFAULT;
             }
 
@@ -1234,11 +1261,12 @@ retry:
         written++;
     }
 
-    total = signal_take_signalfd_exact(pending, written);
+    total = signal_take_signalfd_exact(pending, src, written);
     if (total == 0) {
         if (written == 0)
             goto no_pending;
         free(heap);
+        free(src_heap);
         goto retry;
     }
 
@@ -1254,15 +1282,18 @@ retry:
     }
 
     free(heap);
+    free(src_heap);
     return (int64_t) total * (int64_t) sizeof(linux_signalfd_siginfo_t);
 
 no_pending:
     free(heap);
+    free(src_heap);
     return -LINUX_EAGAIN;
 }
 
-/* Notify signalfd pipes when a signal is queued. Called from signal_queue();
- * writes a byte to make poll/epoll see readability.
+/* Notify signalfd pipes when a process-directed signal is queued. Thread-
+ * directed signals stay private to their target thread and must not wake every
+ * signalfd watching that signum.
  */
 void signalfd_notify(int signum)
 {

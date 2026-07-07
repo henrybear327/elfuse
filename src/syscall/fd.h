@@ -80,8 +80,11 @@ int64_t timerfd_read(int guest_fd,
                      uint64_t buf_gva,
                      uint64_t count);
 
-/* Notify signalfd pipes when a signal is queued. Called from signal_queue();
- * writes a byte to make poll/epoll see readability.
+/* Notify signalfd pipes when a signal is queued (process- or thread-directed),
+ * making poll/epoll/blocking-read see readability. Mirrors Linux waking the one
+ * shared sighand wait queue: every signalfd is woken and each reader
+ * re-evaluates against its own pending, so a non-target reader simply gets
+ * EAGAIN.
  */
 void signalfd_notify(int signum);
 

@@ -289,15 +289,13 @@ int fork_child_main(int ipc_fd,
     }
 
     /* POSIX: "Signals pending to the parent shall not be pending to the child."
-     * Clear pending bitmask and RT queue before applying state.
-     * signal_set_state() is deferred until after thread_register_main() so that
-     * current_thread is non-NULL and per-thread state (blocked mask, altstack)
-     * is properly restored.
+     * Clear the entire shared pending set before applying state. The child's
+     * single thread starts with an empty private set (thread_register_main
+     * zeroes the slot). signal_set_state() is deferred until after
+     * thread_register_main() so that current_thread is non-NULL and per-thread
+     * state (blocked mask, altstack) is properly restored.
      */
-    sig.pending = 0;
-    memset(sig.rt_queue, 0, sizeof(sig.rt_queue));
-    memset(sig.rt_head, 0, sizeof(sig.rt_head));
-    memset(sig.rt_info, 0, sizeof(sig.rt_info));
+    memset(&sig.shared, 0, sizeof(sig.shared));
 
     /* execve in the child needs the shim bytes after guest_reset clears memory.
      * Close IPC socket

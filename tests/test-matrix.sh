@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-#
 # Run aarch64 test suites under both elfuse and self-contained QEMU.
 #
 # Copyright 2026 elfuse contributors
@@ -24,8 +23,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIXTURES="${REPO_ROOT}/externals/test-fixtures"
-# Allow tests to point the translator probe at a missing path to exercise
-# the non-Rosetta-host skip path without uninstalling the translator.
+# Allow tests to point the translator probe at a missing path to exercise the
+# non-Rosetta-host skip path without uninstalling the translator.
 : "${MATRIX_ROSETTA_TRANSLATOR:=/Library/Apple/usr/libexec/oah/RosettaLinux/rosetta}"
 
 MODE="${1:?Usage: $0 <elfuse-aarch64|qemu-aarch64|elfuse-x86_64|all>}"
@@ -33,9 +32,8 @@ MODE="${1:?Usage: $0 <elfuse-aarch64|qemu-aarch64|elfuse-x86_64|all>}"
 # Tool paths.
 ELFUSE="${ELFUSE:-${REPO_ROOT}/build/elfuse}"
 
-# Default fixture paths.
-# Each variable points at the actual directory (or file for busybox);
-# no implicit /bin suffix is appended.
+# Default fixture paths. Each variable points at the actual directory (or file
+# for busybox); no implicit /bin suffix is appended.
 : "${GUEST_TEST_BINARIES:=${REPO_ROOT}/build}"
 : "${GUEST_COREUTILS:=${FIXTURES}/aarch64-musl/staticbin/bin}"
 : "${GUEST_BUSYBOX:=${FIXTURES}/aarch64-musl/staticbin/bin/busybox}"
@@ -45,9 +43,9 @@ ELFUSE="${ELFUSE:-${REPO_ROOT}/build/elfuse}"
 : "${GUEST_GLIBC_SYSROOT:=}"
 : "${GUEST_GLIBC_DYNAMIC_COREUTILS:=}"
 
-# x86_64-via-Rosetta fixture roots. Populated by scripts/fetch-fixtures.sh
-# once the x86_64 corpus lands. Empty defaults make the suite skip cleanly
-# on hosts where the fixtures are not yet present.
+# x86_64-via-Rosetta fixture roots. Populated by scripts/fetch-fixtures.sh once
+# the x86_64 corpus lands. Empty defaults make the suite skip cleanly on hosts
+# where the fixtures are not yet present.
 : "${GUEST_X86_64_TEST_BINARIES:=${FIXTURES}/x86_64-musl/test-bin}"
 : "${GUEST_X86_64_COREUTILS:=${FIXTURES}/x86_64-musl/staticbin/bin}"
 : "${GUEST_X86_64_BUSYBOX:=${FIXTURES}/x86_64-musl/staticbin/bin/busybox}"
@@ -57,8 +55,8 @@ ELFUSE="${ELFUSE:-${REPO_ROOT}/build/elfuse}"
 : "${GUEST_X86_64_GLIBC_SYSROOT:=}"
 : "${GUEST_X86_64_GLIBC_DYNAMIC_COREUTILS:=}"
 
-# Reuse the shared per-test reporter so the output matches 'make check'
-# (which drives tests through tests/driver.sh). TEST_LABEL_WIDTH controls the
+# Reuse the shared per-test reporter so the output matches 'make check' (which
+# drives tests through tests/driver.sh). TEST_LABEL_WIDTH controls the
 # left-aligned name column and must be set before the source so the helper
 # library picks it up.
 # shellcheck disable=SC2034  # Consumed by tests/lib/test-runner.sh.
@@ -66,8 +64,8 @@ TEST_LABEL_WIDTH=45
 # shellcheck source=tests/lib/test-runner.sh
 source "${REPO_ROOT}/tests/lib/test-runner.sh"
 
-# Globals (test-runner.sh seeds pass/fail/skip; test-matrix.sh resets them
-# per mode and tracks no extra counters).
+# Globals (test-runner.sh seeds pass/fail/skip; test-matrix.sh resets them per
+# mode and tracks no extra counters).
 pass=0
 fail=0
 skip=0
@@ -141,10 +139,9 @@ cleanup_qemu()
 
 trap 'cleanup_fixtures; cleanup_qemu' EXIT
 
-# Launch helpers.
-# When the binary being launched lives under GUEST_SYSROOT (i.e., it's a
-# dynamically-linked Alpine binary), pass --sysroot so the loader can find
-# its libc.  Static binaries from build/ run unchanged.
+# Launch helpers. When the binary being launched lives under GUEST_SYSROOT
+# (i.e., it's a dynamically-linked Alpine binary), pass --sysroot so the loader
+# can find its libc. Static binaries from build/ run unchanged.
 run_elfuse()
 {
     local first="${1:-}" args=()
@@ -158,11 +155,10 @@ run_elfuse()
 }
 
 # 'timeout' cannot wrap a shell function, so this runner inlines the path
-# rewriting + ssh invocation that qemu_exec would otherwise do.
-# Repo paths under REPO_ROOT are rewritten to /mnt/host/...; the remote
-# command is launched with cwd=/mnt/host so unqualified paths in test
-# arguments (e.g. "tests/hello.S") resolve against the
-# 9p-shared repo just like in elfuse mode.
+# rewriting + ssh invocation that qemu_exec would otherwise do. Repo paths under
+# REPO_ROOT are rewritten to /mnt/host/...; the remote command is launched with
+# cwd=/mnt/host so unqualified paths in test arguments (e.g. "tests/hello.S")
+# resolve against the 9p-shared repo just like in elfuse mode.
 run_qemu()
 {
     local args=() a
@@ -247,14 +243,13 @@ unstage_sysroot_fixtures()
 
 # Generic test helpers.
 
-# Tests that either hang under qemu-system-aarch64 on Apple Silicon
-# (raw clone / PI futex / massive thread+mmap stress) or currently diverge
-# from the Alpine linux-virt reference kernel on the deprecated oom_adj
-# procfs compatibility path exercised by test-io-opt. test-sysfs-cpu asserts
-# the elfuse stub contract (cache/topology subtree empty, possible == online,
-# cpuN count == online count) which a real kernel does not honor. All listed
-# tests still run in elfuse-aarch64 mode and in 'make check'; the qemu
-# reference run skips them.
+# Tests that either hang under qemu-system-aarch64 on Apple Silicon (raw clone /
+# PI futex / massive thread+mmap stress) or currently diverge from the Alpine
+# linux-virt reference kernel on the deprecated oom_adj procfs compatibility
+# path exercised by test-io-opt. test-sysfs-cpu asserts the elfuse stub contract
+# (cache/topology subtree empty, possible == online, cpuN count == online count)
+# which a real kernel does not honor. All listed tests still run in
+# elfuse-aarch64 mode and in 'make check'; the qemu reference run skips them.
 QEMU_SKIP="test-thread test-stress test-futex-pi test-osync-requeue test-io-opt test-sysfs-cpu"
 
 is_qemu_skipped()
@@ -266,8 +261,10 @@ is_qemu_skipped()
     esac
 }
 
-# Honor QEMU_SKIP across all test_* wrappers.  Returns 0 (and prints SKIP)
-# if the caller should not run the test; non-zero means proceed.
+# Honor QEMU_SKIP across all test_* wrappers.
+#
+# Returns 0 (and prints SKIP) if the caller should not run the test; non-zero
+# means proceed.
 maybe_qemu_skip()
 {
     local runner="$1" label="$2"
@@ -287,12 +284,12 @@ report_timeout()
     fail=$((fail + 1))
 }
 
-# Account for an optional binary or fixture being absent. The previous
-# pattern ('if [ -e "$bin/X" ]; then test_check ... fi') silently erased
-# the assertion when X was missing, so the suite summary could report
-# "all passed" while major coverage blocks never ran. require_binary
-# always increments skip and emits a skip line, so absences are visible
-# in the summary line at the bottom of each mode.
+# Account for an optional binary or fixture being absent. The previous pattern
+# ('if [ -e "$bin/X" ]; then test_check ... fi') silently erased the assertion
+# when X was missing, so the suite summary could report "all passed" while major
+# coverage blocks never ran. require_binary always increments skip and emits a
+# skip line, so absences are visible in the summary line at the bottom of each
+# mode.
 require_binary()
 {
     local label="$1" path="$2"
@@ -331,9 +328,9 @@ run_summary_suite()
     if [ -n "$fields" ]; then
         local suite_pass=0 suite_fail=0 suite_skip=0 suite_total=0
         read -r suite_pass suite_fail suite_skip suite_total <<< "$fields"
-        # Force decimal: a sub-suite that ever emits a zero-padded count
-        # ('08', '09') would otherwise trip bash's "invalid octal" error
-        # inside $((...)) and abort the matrix under 'set -e'.
+        # Force decimal: a sub-suite that ever emits a zero-padded count ('08',
+        # '09') would otherwise trip bash's "invalid octal" error inside
+        # $((...)) and abort the matrix under 'set -e'.
         pass=$((pass + 10#${suite_pass:-0}))
         fail=$((fail + 10#${suite_fail:-0}))
         skip=$((skip + 10#${suite_skip:-0}))
@@ -352,9 +349,9 @@ run_summary_suite()
     return "$rc"
 }
 
-# Suite-level analog of require_binary for whole fixture directories.
-# The label names the suite that is being skipped. Use this in place of
-# bare 'printf "SKIP\n"' lines so the skip counter reflects reality.
+# Suite-level analog of require_binary for whole fixture directories. The label
+# names the suite that is being skipped. Use this in place of bare 'printf
+# "SKIP\n"' lines so the skip counter reflects reality.
 skip_suite()
 {
     local label="$1" reason="$2"
@@ -380,11 +377,11 @@ test_check()
         report_timeout "$label"
         return
     fi
-    # Require a clean exit before trusting the regex. A crashing tool can
-    # still emit the expected substring on stdout before dying, and the
-    # earlier "regex match alone passes" behavior would have reported
-    # that as OK -- the same silent-skip shape that motivated the
-    # tightening of tests/driver.sh evaluate_result.
+    # Require a clean exit before trusting the regex. A crashing tool can still
+    # emit the expected substring on stdout before dying, and the earlier "regex
+    # match alone passes" behavior would have reported that as OK -- the same
+    # silent-skip shape that motivated the tightening of tests/driver.sh
+    # evaluate_result.
     if [ "$rc" -ne 0 ]; then
         test_report fail "$label" " (exit $rc)"
         test_excerpt "$output"
@@ -449,10 +446,9 @@ test_pipe()
         report_timeout "$label"
         return
     fi
-    # See test_check for the rc=0 precondition rationale: a non-zero
-    # exit must surface as FAIL even when the regex matches, otherwise
-    # a crashing pipeline that happens to print the expected substring
-    # would be reported OK.
+    # See test_check for the rc=0 precondition rationale: a non-zero exit must
+    # surface as FAIL even when the regex matches, otherwise a crashing pipeline
+    # that happens to print the expected substring would be reported OK.
     if [ "$rc" -ne 0 ]; then
         test_report fail "$label" " (exit $rc)"
         test_excerpt "$output"
@@ -499,6 +495,7 @@ run_unit_tests()
     printf "\nSignal tests\n"
     test_check "$runner" "test-signal" "PASS|0 failed" "$bindir/test-signal"
     test_check "$runner" "test-signal-thread" "PASS|0 failed" "$bindir/test-signal-thread"
+    test_check "$runner" "test-tgkill-directed" "0 failed" "$bindir/test-tgkill-directed"
     test_check "$runner" "test-sigill" "0 failed" "$bindir/test-sigill"
     test_check "$runner" "test-kill-broadcast" "0 failed" \
         "$bindir/test-kill-broadcast"
@@ -615,10 +612,10 @@ run_coreutils_tests()
     test_rc "$runner" "timeout" 0 "$bindir/timeout" 5 "$guest_bindir/true"
 
     printf "\nCoreutils encoding%s\n" "$_COREUTILS_SUFFIX"
-    # The if/then form contains require_binary's exit status so missing
-    # binaries do not propagate as a function-exit-1 under 'set -e'. The
-    # earlier '&& test_check' chain failed the matrix script outright
-    # whenever the LAST optional binary in a function was absent.
+    # The if/then form contains require_binary's exit status so missing binaries
+    # do not propagate as a function-exit-1 under 'set -e'. The earlier '&&
+    # test_check' chain failed the matrix script outright whenever the LAST
+    # optional binary in a function was absent.
     if require_binary "base32" "$bindir/base32"; then
         test_check "$runner" "base32" "NBSWY" "$bindir/base32" "$TEST_TMPDIR/hello.txt"
     fi
@@ -749,8 +746,8 @@ run_static_tests()
         test_check "$runner" "bash echo" "hello" "$bindir/bash" -c "echo hello"
         test_pipe "$runner" "bash subshell" "sub=25" "" "$bindir/bash" -c 'echo "sub=$(echo $((5*5)))"'
     fi
-    # lua has two acceptable names; prefer 5.4, then fall back to plain lua,
-    # and skip with accounting if neither is present.
+    # lua has two acceptable names; prefer 5.4, then fall back to plain lua, and
+    # skip with accounting if neither is present.
     if [ -e "$bindir/lua5.4" ]; then
         test_check "$runner" "lua hello" "Hello" "$bindir/lua5.4" -e 'print("Hello from " .. _VERSION)'
         test_check "$runner" "lua fib(30)" "832040" "$bindir/lua5.4" -e 'local function f(n) if n<2 then return n end; return f(n-1)+f(n-2) end; print(f(30))'
@@ -857,7 +854,8 @@ run_suite()
         # run_elfuse auto-adds --sysroot for binaries under GUEST_SYSROOT or the
         # dyn-bin dir (see its case), so tree/find/diff here run chrooted and
         # must read the fixtures from inside the sysroot, same as the dynamic
-        # coreutils run. Stage them only for elfuse runs when that trigger applies.
+        # coreutils run. Stage them only for elfuse runs when that trigger
+        # applies.
         local static_staged=0
         if [ "$mode" = "elfuse-aarch64" ] && [ -n "${GUEST_SYSROOT:-}" ]; then
             case "$GUEST_STATIC_BINS" in
@@ -875,10 +873,9 @@ run_suite()
         skip_suite "static-bins" "no $GUEST_STATIC_BINS"
     fi
 
-    # Dynamic-musl coreutils: elfuse needs --sysroot, qemu runs natively.
-    # The skip line always increments the counter so a partial fixture
-    # set surfaces in the per-mode summary instead of looking like a
-    # full pass.
+    # Dynamic-musl coreutils: elfuse needs --sysroot, qemu runs natively. The
+    # skip line always increments the counter so a partial fixture set surfaces
+    # in the per-mode summary instead of looking like a full pass.
     if [ -d "$GUEST_DYNAMIC_COREUTILS" ]; then
         if {
             [ "$mode" = "elfuse-aarch64" ] || [ "$mode" = "elfuse-x86_64" ]
@@ -942,23 +939,24 @@ run_suite()
     cleanup_fixtures
     cleanup_qemu
 
-    # Compare against the per-mode expected outcome. Return its verdict
-    # rather than the raw fail count so modes with recorded known-failure
-    # baselines still exit 0 when their observed results match the table.
+    # Compare against the per-mode expected outcome.
+    #
+    # Return its verdict rather than the raw fail count so modes with recorded
+    # known-failure baselines still exit 0 when their observed results match the
+    # table.
     verify_expected_counts "$mode"
     return $?
 }
 
-# Per-mode expected outcome envelope. Each mode lists the minimum pass
-# count and the exact failure count the matrix is allowed to report.
-# Skip counts are advisory because some skips depend on the host
-# environment (qemu running on Apple Silicon vs Linux, x86_64 fixtures
-# present or not). When the runtime advances, bump these counts in the
-# same commit that changes behaviour so reviewers see the new headline
-# numbers explicitly.
+# Per-mode expected outcome envelope. Each mode lists the minimum pass count and
+# the exact failure count the matrix is allowed to report. Skip counts are
+# advisory because some skips depend on the host environment (qemu running on
+# Apple Silicon vs Linux, x86_64 fixtures present or not). When the runtime
+# advances, bump these counts in the same commit that changes behaviour so
+# reviewers see the new headline numbers explicitly.
 #
-# elfuse-x86_64 baseline (71) is the sum of the seven Rosetta sub-suites
-# in run_rosetta_x86_64_suites:
+# elfuse-x86_64 baseline (71) is the sum of the seven Rosetta sub-suites in
+# run_rosetta_x86_64_suites:
 #   test-rosetta-cli.sh            = 4
 #   test-rosetta-failure-modes.sh  = 3
 #   test-rosetta-statics.sh        = 20
@@ -966,29 +964,27 @@ run_suite()
 #   test-rosetta-audit.sh          = 2
 #   test-rosetta-jit.sh            = 2
 #   test-rosetta-glibc.sh          = 7
-# The full per-binary inventory and the per-host capture process live
-# in docs/testing.md "x86_64 Acceptance Inventory and Per-Host
-# Baselines". Bump these counts in the same commit that grows or trims
-# any sub-suite's Results line so the matrix gate stays in sync.
+# The full per-binary inventory and the per-host capture process live in
+# docs/testing.md "x86_64 Acceptance Inventory and Per-Host Baselines". Bump
+# these counts in the same commit that grows or trims any sub-suite's Results
+# line so the matrix gate stays in sync.
 #
 # Per-mode baseline gate. Encoded as "key|min_pass|max_fail" tuples in a
-# single indexed array so stock macOS bash 3.2 (which lacks 'declare -A')
-# works the same as bash 4+.
+# single indexed array so stock macOS bash 3.2 (which lacks 'declare -A') works
+# the same as bash 4+.
 #
-# The bareword-subscript hazard the prior 'declare -A' form had to dodge
-# (shfmt rewriting [a-b] into [a - b] inside subscripts) does not apply
-# to this encoding: keys live inside a quoted string, never as a
-# subscript expression.
+# The bareword-subscript hazard the prior 'declare -A' form had to dodge (shfmt
+# rewriting [a-b] into [a - b] inside subscripts) does not apply to this
+# encoding: keys live inside a quoted string, never as a subscript expression.
 #
-# Order: aarch64 baselines first, then x86_64 baselines keyed by detected
-# host SoC class. The two M-series classes diverge inside
-# sys_mmap_fixed_high_va on IPA width (apple-m1-m2 is 36-bit, the
-# overflow-segment path; apple-m3-plus is 40-bit, the bisected-slab
-# path on M5). The seven Rosetta sub-suites currently emit fixed pass
-# counts regardless of IPA width, so both rows start at 71; an operator
-# with M3+ hardware updates the apple-m3-plus row in place when their
-# observed counts diverge. apple-unknown is the fallback row for SoC
-# strings the detector does not recognize yet.
+# Order: aarch64 baselines first, then x86_64 baselines keyed by detected host
+# SoC class. The two M-series classes diverge inside sys_mmap_fixed_high_va on
+# IPA width (apple-m1-m2 is 36-bit, the overflow-segment path; apple-m3-plus is
+# 40-bit, the bisected-slab path on M5). The seven Rosetta sub-suites currently
+# emit fixed pass counts regardless of IPA width, so both rows start at 71; an
+# operator with M3+ hardware updates the apple-m3-plus row in place when their
+# observed counts diverge. apple-unknown is the fallback row for SoC strings the
+# detector does not recognize yet.
 EXPECTED_BASELINES=(
     "elfuse-aarch64|169|0"
     "qemu-aarch64|163|0"
@@ -997,15 +993,14 @@ EXPECTED_BASELINES=(
     "elfuse-x86_64:apple-unknown|71|0"
 )
 
-# Look up the (min_pass, max_fail) baseline for a mode key. Writes the
-# values into the named output variables and returns 0 on hit, 1 on
-# miss. Callers use the rc=1 path as "no recorded baseline for this key,
-# stay silent".
+# Look up the (min_pass, max_fail) baseline for a mode key. Writes the values
+# into the named output variables and returns 0 on hit, 1 on miss. Callers use
+# the rc=1 path as "no recorded baseline for this key, stay silent".
 #
-# Parses from the right so a key containing a literal '|' would still
-# split correctly (today the schema has none, but the right-anchored
-# form is no harder to read and removes the trap). printf -v sets the
-# named output without eval; printf -v exists in bash 3.1+.
+# Parses from the right so a key containing a literal '|' would still split
+# correctly (today the schema has none, but the right-anchored form is no harder
+# to read and removes the trap). printf -v sets the named output without eval;
+# printf -v exists in bash 3.1+.
 expected_baseline_get()
 {
     local target="$1"
@@ -1027,18 +1022,16 @@ expected_baseline_get()
 }
 
 # Host SoC class detector for x86_64 baseline selection. Reads
-# machdep.cpu.brand_string (sysctl), which Apple Silicon Macs publish
-# as "Apple M1", "Apple M2 Pro", "Apple M3 Max", etc. The MATRIX_HOST
-# _CLASS_OVERRIDE env var exists so the M3+ row can be exercised from
-# an M1/M2 host (and vice versa) without modifying the detector. The
-# detector intentionally returns a stable apple-unknown rather than
-# guessing on never-seen brand strings so new SoCs do not silently
-# graft onto an existing row.
-# Validate MATRIX_HOST_CLASS_OVERRIDE at script entry. The detector is
-# invoked from $(...) inside verify_expected_counts, where an exit only
-# terminates the subshell and the parent silently sees an empty class.
-# Pre-validating here makes a typo (e.g. "apple-m3" missing -plus)
-# fail loudly before any sub-suite runs.
+# machdep.cpu.brand_string (sysctl), which Apple Silicon Macs publish as "Apple
+# M1", "Apple M2 Pro", "Apple M3 Max", etc. The MATRIX_HOST _CLASS_OVERRIDE env
+# var exists so the M3+ row can be exercised from an M1/M2 host (and vice versa)
+# without modifying the detector. The detector intentionally returns a stable
+# apple-unknown rather than guessing on never-seen brand strings so new SoCs do
+# not silently graft onto an existing row. Validate MATRIX_HOST_CLASS_OVERRIDE
+# at script entry. The detector is invoked from $(...) inside
+# verify_expected_counts, where an exit only terminates the subshell and the
+# parent silently sees an empty class. Pre-validating here makes a typo (e.g.
+# "apple-m3" missing -plus) fail loudly before any sub-suite runs.
 if [ -n "${MATRIX_HOST_CLASS_OVERRIDE:-}" ]; then
     case "$MATRIX_HOST_CLASS_OVERRIDE" in
         apple-m1-m2 | apple-m3-plus | apple-unknown) ;;
@@ -1066,23 +1059,22 @@ detect_x86_64_host_class()
     esac
 }
 
-# Known-failure annotations. These are tests that fail by design under a
-# given mode and are tracked here so the matrix runner can distinguish them
-# from real regressions in surface output. The matrix does not yet rewrite
-# their pass/fail accounting (the underlying drivers would need richer
-# reporting), but this list is the canonical reference for "expected to
-# fail" in code review and CI triage.
+# Known-failure annotations. These are tests that fail by design under a given
+# mode and are tracked here so the matrix runner can distinguish them from real
+# regressions in surface output. The matrix does not yet rewrite their pass/fail
+# accounting (the underlying drivers would need richer reporting), but this list
+# is the canonical reference for "expected to fail" in code review and CI
+# triage.
 #
-# qemu-aarch64: none. test-poll used to diverge inside the qemu reference
-# VM but now passes there (observed on the self-hosted runner and in local
-# captures); the qemu row in EXPECTED_BASELINES therefore pins exactly
-# zero failures.
+# qemu-aarch64: none. test-poll used to diverge inside the qemu reference VM but
+# now passes there (observed on the self-hosted runner and in local captures);
+# the qemu row in EXPECTED_BASELINES therefore pins exactly zero failures.
 KNOWN_FAILURES_QEMU_AARCH64=""
 # elfuse-x86_64: rosetta limitations documented in the upstream hyper-linux
 # audit. test-signal-thread fails because rosetta shadows signal state
 # internally (SA_RESETHAND not reset); test-thread / test-stress hang on
 # rosetta's TLS=0 corner case.
-KNOWN_FAILURES_ELFUSE_X86_64="test-signal-thread test-thread test-stress"
+KNOWN_FAILURES_ELFUSE_X86_64="test-signal-thread test-tgkill-directed test-thread test-stress"
 
 verify_expected_counts()
 {
@@ -1096,17 +1088,17 @@ verify_expected_counts()
 
     local exp_min="" exp_fail=""
     if ! expected_baseline_get "$key" exp_min exp_fail; then
-        # No recorded baseline for this key (experimental local mode, or
-        # an x86_64 host class the detector did not classify). Stay
-        # silent so the matrix runner remains usable as a smoke probe.
+        # No recorded baseline for this key (experimental local mode, or an
+        # x86_64 host class the detector did not classify). Stay silent so the
+        # matrix runner remains usable as a smoke probe.
         return 0
     fi
 
-    # Uncaptured rows: apple-m3-plus inherits the M1/M2 numbers pending
-    # operator capture on real M3+ hardware; apple-unknown means the SoC
-    # brand string did not match a known class at all. In both cases
-    # surface that the baseline is not authoritative for this host so a
-    # genuine M3+ divergence is not silently absorbed.
+    # Uncaptured rows: apple-m3-plus inherits the M1/M2 numbers pending operator
+    # capture on real M3+ hardware; apple-unknown means the SoC brand string did
+    # not match a known class at all. In both cases surface that the baseline is
+    # not authoritative for this host so a genuine M3+ divergence is not
+    # silently absorbed.
     if [ "$mode" = "elfuse-x86_64" ]; then
         case "$host_class" in
             apple-m3-plus)
@@ -1147,9 +1139,9 @@ verify_expected_counts()
 }
 
 # Main entry point. The aarch64 fixture fetch only matters for modes that
-# actually consume those binaries; running elfuse-x86_64 in isolation lets
-# the user iterate before the x86_64 corpus exists, without pulling the
-# aarch64 musl rootfs and qemu kernel they will not use.
+# actually consume those binaries; running elfuse-x86_64 in isolation lets the
+# user iterate before the x86_64 corpus exists, without pulling the aarch64 musl
+# rootfs and qemu kernel they will not use.
 case "$MODE" in
     elfuse-x86_64)
         ensure_x86_fixtures

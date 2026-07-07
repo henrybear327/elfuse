@@ -1098,6 +1098,35 @@ static int64_t sc_kill(guest_t *g,
     return -LINUX_ESRCH;
 }
 
+/* tkill(tid, sig): the legacy 2-arg thread-directed kill. Same routing as
+ * tgkill but without a thread-group id to validate. Modern libcs use tgkill;
+ * tkill remains for older or bare callers.
+ */
+static int64_t sc_tkill(guest_t *g,
+                        uint64_t x0,
+                        uint64_t x1,
+                        uint64_t x2,
+                        uint64_t x3,
+                        uint64_t x4,
+                        uint64_t x5,
+                        bool verbose)
+{
+    (void) g;
+    (void) x2;
+    (void) x3;
+    (void) x4;
+    (void) x5;
+    (void) verbose;
+    int tid = (int) x0, sig = (int) x1;
+    if (sig < 0 || sig > LINUX_NSIG)
+        return -LINUX_EINVAL;
+    if (tid <= 0)
+        return -LINUX_EINVAL;
+    if (sig == 0)
+        return thread_tid_alive((int64_t) tid) ? 0 : -LINUX_ESRCH;
+    return signal_queue_thread((int64_t) tid, sig) ? 0 : -LINUX_ESRCH;
+}
+
 static int64_t sc_tgkill(guest_t *g,
                          uint64_t x0,
                          uint64_t x1,
@@ -1112,20 +1141,105 @@ static int64_t sc_tgkill(guest_t *g,
     (void) x4;
     (void) x5;
     (void) verbose;
-    int sig = (int) x2, tid = (int) x1;
+    int tgid = (int) x0, tid = (int) x1, sig = (int) x2;
     if (sig < 0 || sig > LINUX_NSIG)
         return -LINUX_EINVAL;
-    thread_entry_t *target = thread_find((int64_t) tid);
-    if (!target) {
-        if (tid == (int) proc_get_pid())
-            target = current_thread;
-    }
-    if (target) {
-        if (sig > 0)
-            signal_queue(sig);
+    if (tgid <= 0 || tid <= 0)
+        return -LINUX_EINVAL;
+    /* All guest threads share the single guest tgid; a mismatch names a thread
+     * that is not in this group (or a foreign process elfuse cannot reach),
+     * which Linux reports as -ESRCH.
+     */
+    if (tgid != (int) proc_get_pid())
+        return -LINUX_ESRCH;
+    /* sig == 0 is the existence/permission probe: report whether the thread is
+     * live without queueing anything.
+     */
+    if (sig == 0)
+        return thread_tid_alive((int64_t) tid) ? 0 : -LINUX_ESRCH;
+    /* Thread-directed: only the target thread consumes it (Linux
+     * task->pending). The enqueue resolves and validates the tid atomically.
+     */
+    return signal_queue_thread((int64_t) tid, sig) ? 0 : -LINUX_ESRCH;
+}
+
+/* Shared body for rt_tgsigqueueinfo (directed=true, thread-targeted) and
+ * rt_sigqueueinfo (directed=false, process-targeted). Existence is resolved by
+ * guest tid (thread_tid_alive accepts any live thread, including the main
+ * thread whose tid equals the pid). tgsigqueueinfo queues into the target
+ * thread's private set; sigqueueinfo queues into the shared set.
+ */
+static int64_t rt_sigqueueinfo_impl(guest_t *g,
+                                    int tid,
+                                    int sig,
+                                    uint64_t uinfo_gva,
+                                    bool directed)
+{
+    if (sig < 0 || sig > LINUX_NSIG)
+        return -LINUX_EINVAL;
+    if (!thread_tid_alive((int64_t) tid))
+        return -LINUX_ESRCH;
+    /* sig == 0 is the existence/permission probe: the target is live, queue
+     * nothing.
+     */
+    if (sig == 0)
         return 0;
+    linux_siginfo_t info;
+    memset(&info, 0, sizeof(info));
+    if (uinfo_gva && guest_read_small(g, uinfo_gva, &info, sizeof(info)) < 0) {
+        log_debug("rt_sigqueueinfo(tid=%d, sig=%d, uinfo=0x%llx [unreadable])",
+                  tid, sig, (unsigned long long) uinfo_gva);
+        return -LINUX_EFAULT;
     }
-    return -LINUX_ESRCH;
+    if (uinfo_gva) {
+        bool is_fault =
+            (sig == LINUX_SIGTRAP || sig == LINUX_SIGSEGV ||
+             sig == LINUX_SIGBUS || sig == LINUX_SIGFPE || sig == LINUX_SIGILL);
+        if (is_fault && info.si_code > 0) {
+            uint64_t fault_addr;
+            memcpy(&fault_addr, &info.si_pid, sizeof(fault_addr));
+            signal_set_fault_info(info.si_code, fault_addr, 0);
+            log_debug(
+                "rt_sigqueueinfo(tid=%d, sig=%d, si_code=%d, "
+                "fault_addr=0x%llx)",
+                tid, sig, info.si_code, (unsigned long long) fault_addr);
+        } else
+            log_debug("rt_sigqueueinfo(tid=%d, sig=%d, si_code=%d)", tid, sig,
+                      info.si_code);
+    }
+    /* Queued signals carry sigval in si_value for both standard and RT signals;
+     * standard signals still coalesce to one pending instance.
+     */
+    int32_t si_int = 0;
+    uint64_t si_ptr = 0;
+    if (uinfo_gva) {
+        memcpy(&si_int, &info.si_value, sizeof(si_int));
+        memcpy(&si_ptr, &info.si_value, sizeof(si_ptr));
+    }
+    if (directed) {
+        bool queued = uinfo_gva
+                          ? signal_queue_thread_info(
+                                (int64_t) tid, sig, info.si_code, info.si_pid,
+                                (uint32_t) info.si_uid, si_int, si_ptr)
+                          : signal_queue_thread((int64_t) tid, sig);
+        /* The target may have exited between the liveness check and the
+         * enqueue; report -ESRCH as Linux would for a vanished thread.
+         */
+        return queued ? 0 : -LINUX_ESRCH;
+    }
+    /* Process-directed: queue into the shared set. Existence was checked
+     * lock-free above; if the named tid was a worker that exits in the gap, the
+     * signal still lands in the surviving thread group and this returns 0 where
+     * Linux would -ESRCH. The window is nanoseconds and the common sigqueue
+     * target is the group leader (tid == pid), which never exits before the
+     * process, so the shared enqueue is left lock-free.
+     */
+    if (uinfo_gva)
+        signal_queue_info(sig, info.si_code, info.si_pid,
+                          (uint32_t) info.si_uid, si_int, si_ptr);
+    else
+        signal_queue(sig);
+    return 0;
 }
 
 static int64_t sc_rt_tgsigqueueinfo(guest_t *g,
@@ -1139,57 +1253,15 @@ static int64_t sc_rt_tgsigqueueinfo(guest_t *g,
 {
     (void) x4;
     (void) x5;
-    int tgid = (int) x0, tid = (int) x1, sig = (int) x2;
-    uint64_t uinfo_gva = x3;
-    (void) tgid;
-    if (sig < 1 || sig > LINUX_NSIG)
+    (void) verbose;
+    /* x0=tgid, x1=tid, x2=sig, x3=uinfo. */
+    int tgid = (int) x0, tid = (int) x1;
+    if (tgid <= 0 || tid <= 0)
         return -LINUX_EINVAL;
-    thread_entry_t *target = thread_find((int64_t) tid);
-    if (!target) {
-        if (tid == (int) proc_get_pid())
-            target = current_thread;
-    }
-    if (!target)
+    /* All guest threads share the single guest tgid; a mismatch is -ESRCH. */
+    if (tgid != (int) proc_get_pid())
         return -LINUX_ESRCH;
-    linux_siginfo_t info;
-    memset(&info, 0, sizeof(info));
-    if (uinfo_gva && guest_read_small(g, uinfo_gva, &info, sizeof(info)) < 0) {
-        log_debug(
-            "rt_tgsigqueueinfo(tgid=%d, tid=%d, sig=%d, "
-            "uinfo=0x%llx [unreadable])",
-            tgid, tid, sig, (unsigned long long) uinfo_gva);
-        return -LINUX_EFAULT;
-    }
-    if (uinfo_gva) {
-        bool is_fault =
-            (sig == LINUX_SIGTRAP || sig == LINUX_SIGSEGV ||
-             sig == LINUX_SIGBUS || sig == LINUX_SIGFPE || sig == LINUX_SIGILL);
-        if (is_fault && info.si_code > 0) {
-            uint64_t fault_addr;
-            memcpy(&fault_addr, &info.si_pid, sizeof(fault_addr));
-            signal_set_fault_info(info.si_code, fault_addr, 0);
-            log_debug(
-                "rt_tgsigqueueinfo(tgid=%d, tid=%d, sig=%d, "
-                "si_code=%d, fault_addr=0x%llx)",
-                tgid, tid, sig, info.si_code, (unsigned long long) fault_addr);
-        } else
-            log_debug("rt_tgsigqueueinfo(tgid=%d, tid=%d, sig=%d, si_code=%d)",
-                      tgid, tid, sig, info.si_code);
-    }
-    /* Queued signals carry sigval in si_value for both standard and RT signals;
-     * standard signals still coalesce to one pending instance.
-     */
-    if (uinfo_gva) {
-        int32_t si_int = 0;
-        memcpy(&si_int, &info.si_value, sizeof(si_int));
-        uint64_t si_ptr = 0;
-        memcpy(&si_ptr, &info.si_value, sizeof(si_ptr));
-        signal_queue_info(sig, info.si_code, info.si_pid,
-                          (uint32_t) info.si_uid, si_int, si_ptr);
-    } else {
-        signal_queue(sig);
-    }
-    return 0;
+    return rt_sigqueueinfo_impl(g, tid, (int) x2, x3, true);
 }
 
 /* rt_sigqueueinfo(pid, sig, info) -- POSIX sigqueue() in glibc/musl uses this.
@@ -1197,15 +1269,13 @@ static int64_t sc_rt_tgsigqueueinfo(guest_t *g,
  * The first argument is documented as a process identifier, but real Linux is
  * permissive: kill_pid_info() looks pid up in the task table and routes the
  * signal through PIDTYPE_TGID, so a thread id that resolves to a task succeeds
- * and the signal lands in that task's thread-group pending set. Foreign pids
- * that match no task return -ESRCH.
+ * and the signal lands in that task's thread-group (shared) pending set.
+ * Foreign pids that match no task return -ESRCH.
  *
- * elfuse mirrors this by forwarding to sc_rt_tgsigqueueinfo with
- * tgid==tid==pid: the downstream thread_find() lookup accepts any guest
- * thread's tid (collapsing to the single guest tgid), the proc_get_pid()
- * fallback accepts the main thread's tid, and unknown pids fall through to
- * -ESRCH. signal_queue_info() then queues process-wide so the routing semantics
- * match Linux even though the lookup goes through the per-thread table.
+ * elfuse mirrors this with directed=false so the signal queues into the shared
+ * set: the thread_find() lookup accepts any guest thread's tid (collapsing to
+ * the single guest tgid), the proc_get_pid() fallback accepts the main thread's
+ * tid, and unknown pids fall through to -ESRCH.
  *
  * Earlier review feedback flagged "incorrectly accepting thread ids" and
  * recommended a strict pid==tgid gate; that gate was tried and rejected because
@@ -1223,7 +1293,9 @@ static int64_t sc_rt_sigqueueinfo(guest_t *g,
     (void) x3;
     (void) x4;
     (void) x5;
-    return sc_rt_tgsigqueueinfo(g, x0, x0, x1, x2, 0, 0, verbose);
+    (void) verbose;
+    /* x0=pid, x1=sig, x2=uinfo. */
+    return rt_sigqueueinfo_impl(g, (int) x0, (int) x1, x2, false);
 }
 
 static int64_t sc_rt_sigreturn(guest_t *g,

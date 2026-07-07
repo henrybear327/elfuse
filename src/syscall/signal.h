@@ -176,15 +176,15 @@ typedef struct {
     uint64_t si_ptr;
 } signal_rt_info_t;
 
-/* Signal state. */
+/* One pending-signal set. Linux keeps two of these per task: the thread's
+ * private set (task->pending, targeted by tgkill/tkill) and the thread-group
+ * shared set (signal->shared_pending, targeted by kill). elfuse mirrors that:
+ * signal_state_t holds one shared instance and each thread_entry_t holds its
+ * own private instance. Delivery drains the current thread's private set first,
+ * then the shared set.
+ */
 typedef struct {
-    linux_sigaction_t actions[LINUX_NSIG]; /* Per-signal handler state */
-    uint64_t pending;                      /* Bitmask of pending signals */
-    uint64_t blocked;                      /* Bitmask of blocked signals */
-    uint64_t saved_blocked;                /* Original mask before sigsuspend */
-    bool saved_blocked_valid;              /* True if saved_blocked is set */
-    linux_stack_t altstack; /* Alternate signal stack (sigaltstack) */
-    bool on_altstack;       /* True if currently delivering on altstack */
+    uint64_t pending; /* Bitmask of pending signals in this set */
     /* Standard signal metadata: Linux coalesces signals 1-31, but preserves one
      * siginfo payload for the pending instance.
      */
@@ -197,6 +197,17 @@ typedef struct {
     int rt_queue[RT_SIGNAL_COUNT];
     uint8_t rt_head[RT_SIGNAL_COUNT];
     signal_rt_info_t rt_info[RT_SIGNAL_COUNT][RT_SIGQUEUE_MAX];
+} signal_pending_t;
+
+/* Signal state. */
+typedef struct {
+    linux_sigaction_t actions[LINUX_NSIG]; /* Per-signal handler state */
+    signal_pending_t shared;               /* Process-directed pending set */
+    uint64_t blocked;                      /* Bitmask of blocked signals */
+    uint64_t saved_blocked;                /* Original mask before sigsuspend */
+    bool saved_blocked_valid;              /* True if saved_blocked is set */
+    linux_stack_t altstack; /* Alternate signal stack (sigaltstack) */
+    bool on_altstack;       /* True if currently delivering on altstack */
 } signal_state_t;
 
 /* API */
@@ -210,8 +221,28 @@ void signal_init(void);
  */
 void signal_reset_for_exec(void);
 
-/* Queue a signal for delivery. */
+/* Queue a process-directed signal (kill(2) semantics): lands in the shared
+ * pending set, delivered to whichever eligible thread reaches a delivery point
+ * first.
+ */
 void signal_queue(int signum);
+
+/* Queue a thread-directed signal (tgkill/tkill semantics): lands in the target
+ * thread's private pending set so only that thread consumes it, and standard
+ * signals do not coalesce across threads. The target is resolved by guest tid
+ * and enqueued atomically against thread-slot reuse.
+ *
+ * Returns true if the target thread was found (and the signal queued), false
+ * otherwise (caller maps false to -ESRCH).
+ */
+bool signal_queue_thread(int64_t tid, int signum);
+bool signal_queue_thread_info(int64_t tid,
+                              int signum,
+                              int32_t si_code,
+                              int32_t si_pid,
+                              uint32_t si_uid,
+                              int32_t si_int,
+                              uint64_t si_ptr);
 
 /* Queue an RT signal with sender metadata and payload from sigqueue. */
 void signal_queue_rt(int signum,
@@ -239,6 +270,15 @@ void signal_queue_info(int signum,
  * appended to __reserved after FPSIMD.
  */
 void signal_set_fault_info(int si_code, uint64_t addr, uint64_t esr);
+
+/* Recompute the global pending hint (shared set OR every active thread's
+ * private set) under sig_lock. Call after a thread exits so its unconsumed
+ * thread-directed pending bits stop keeping the identity-syscall fast path
+ * disabled. Must NOT be called while holding thread_lock (sig_lock <
+ * thread_lock in the lock order); the exiting thread's slot must already be
+ * inactive so the union excludes it.
+ */
+void signal_refresh_pending_hint(void);
 
 /* Check if any unblocked signal is pending. */
 int signal_pending(void);
@@ -284,8 +324,8 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code);
  *
  * Follows Linux force_sig_info_to_task() semantics: a SIG_IGN or blocked
  * disposition is reset to SIG_DFL and unblocked before delivery, so an
- * unhandleable fault terminates the process rather than re-faulting forever
- * or invoking a handler the guest asked to block.
+ * unhandleable fault terminates the process rather than re-faulting forever or
+ * invoking a handler the guest asked to block.
  */
 int signal_deliver_fault(hv_vcpu_t vcpu,
                          guest_t *g,
@@ -333,10 +373,26 @@ void signal_set_state(const signal_state_t *state);
 /* Snapshot or consume pending signals for signalfd. signal_peek_signalfd()
  * snapshots up to max matching entries without consuming them.
  * signal_take_signalfd_exact() then consumes those exact entries, preserving
- * any matching signals that arrived later.
+ * any matching signals that arrived later. Peek fills out[] with matching
+ * pending siginfo and, when src is non-NULL, tags each entry with the pending
+ * set it came from (0 = the reading thread's private set, 1 = the shared set).
+ * signal_take_signalfd_exact() must be handed that same src array so it
+ * consumes each entry from the exact set it was peeked from, never a
+ * same-valued entry in the other set.
  */
-size_t signal_peek_signalfd(uint64_t mask, signal_rt_info_t *out, size_t max);
-size_t signal_take_signalfd_exact(const signal_rt_info_t *expected, size_t max);
+size_t signal_peek_signalfd(uint64_t mask,
+                            signal_rt_info_t *out,
+                            uint8_t *src,
+                            size_t max);
+size_t signal_take_signalfd_exact(const signal_rt_info_t *expected,
+                                  const uint8_t *src,
+                                  size_t max);
+
+/* Bitmask of signals a signalfd read on the current thread could observe: the
+ * shared set unioned with this thread's private (thread-directed) set. Used to
+ * gate the signalfd fast path before peeking.
+ */
+uint64_t signal_signalfd_pending_mask(void);
 
 /* Save and restore blocked mask for pselect6/ppoll signal mask atomicity.
  * signal_save_blocked returns the current blocked mask. signal_set_blocked

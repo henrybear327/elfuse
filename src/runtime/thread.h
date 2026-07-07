@@ -22,15 +22,19 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "core/guest.h"  /* guest_t (for thread_alloc_sp_el1) */
-#include "syscall/abi.h" /* linux_user_pt_regs_t */
+#include "core/guest.h"     /* guest_t (for thread_alloc_sp_el1) */
+#include "syscall/abi.h"    /* linux_user_pt_regs_t */
+#include "syscall/signal.h" /* signal_pending_t (per-thread directed signals) */
 
 /* Maximum number of concurrent guest threads in one VM. */
 #define MAX_THREADS 64
 #define MAX_DEFERRED_STACK_UNMAPS 8
 
-/* Per-thread state. One entry per guest thread (main + workers). */
-typedef struct {
+/* Per-thread state. One entry per guest thread (main + workers). Tagged (struct
+ * thread_entry) so signal.h can forward-declare it for the thread-directed
+ * signal API without an include cycle.
+ */
+typedef struct thread_entry {
     int64_t guest_tid;        /* Linux TID (unique per thread) */
     hv_vcpu_t vcpu;           /* HVF vCPU handle for this thread */
     hv_vcpu_exit_t *vexit;    /* vCPU exit info pointer */
@@ -41,7 +45,8 @@ typedef struct {
                                * Stored at alloc time so the free path does
                                * not need to recompute (top - sp) / 4096; the
                                * shim data block is now at high IPA and only
-                               * known via guest_t. */
+                               * known via guest_t.
+                               */
     int active;               /* Non-zero while thread is running.
                                * Stays int (not bool) because lock-free paths in thread.c
                                * use __atomic_load_n on this field; the 32-bit width keeps
@@ -53,6 +58,12 @@ typedef struct {
     uint64_t blocked;       /* Signal mask for this thread */
     uint64_t saved_blocked; /* Original mask saved by sigsuspend */
     bool saved_blocked_valid;
+
+    /* Thread-directed pending signals (Linux task->pending). tgkill/tkill and
+     * pthread_kill queue here so only this thread consumes them. Written and
+     * read under the signal module's sig_lock; do not touch without it.
+     */
+    signal_pending_t tpending;
 
     /* Per-thread alternate signal stack (Linux sigaltstack is per-thread).
      * Fields mirror linux_stack_t layout for easy copy.
@@ -172,6 +183,14 @@ void thread_deactivate(thread_entry_t *t);
 /* Find a thread by guest TID. Returns NULL if not found. */
 thread_entry_t *thread_find(int64_t tid);
 
+/* Find a thread by guest TID with thread_lock already held by the caller.
+ * Returns a pointer that stays valid only while the caller keeps thread_lock.
+ * Used by the signal module to resolve a tgkill target and enqueue into its
+ * private pending set atomically against slot reuse. Acquire sig_lock (4)
+ * before thread_lock (5) per the documented lock order.
+ */
+thread_entry_t *thread_find_locked(int64_t tid);
+
 /* Lock-free check: is there an active thread with this TID?
  * Returns 1 if found, 0 if not. Safe to call without holding any lock (used
  * from futex_lock_pi to avoid lock order inversion with bucket locks). May
@@ -182,6 +201,14 @@ int thread_tid_alive(int64_t tid);
 
 /* Count currently active threads. */
 int thread_active_count(void);
+
+/* OR of every active thread's private pending bitmask (thread-directed
+ * signals). The signal module folds this into its global "maybe pending" hint.
+ * Caller must hold sig_lock so the tpending fields are stable; the active-slot
+ * scan itself takes no lock and tolerates a racing (de)activation as a harmless
+ * superset.
+ */
+uint64_t thread_pending_union(void);
 
 /* Fast path: return non-zero when exactly one guest thread is active. */
 int thread_is_single_active(void);

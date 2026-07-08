@@ -22,8 +22,9 @@ set -uo pipefail
 
 ELFUSE="${ELFUSE:-build/elfuse}"
 TESTDIR="${TESTDIR:-build}"
-TIMEOUT=60
+TIMEOUT="${TEST_TIMEOUT:-60}"
 FILTER=""
+SECTION=""
 LIST_ONLY=0
 VERBOSE=0
 TAP=0
@@ -38,7 +39,7 @@ ALLOW_MISSING_BINARIES="${ALLOW_MISSING_BINARIES:-0}"
 
 usage()
 {
-    echo "Usage: $0 [-e elfuse] [-d testdir] [-t timeout] [-f filter] [-l] [-v] [-T] [test ...]" >&2
+    echo "Usage: $0 [-e elfuse] [-d testdir] [-t timeout] [-f filter] [-s section] [-l] [-v] [-T] [test ...]" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -53,6 +54,10 @@ while [ $# -gt 0 ]; do
             ;;
         -t)
             TIMEOUT="${2:?missing argument for -t}"
+            shift 2
+            ;;
+        -s)
+            SECTION="${2:?missing argument for -s}"
             shift 2
             ;;
         -f)
@@ -196,20 +201,24 @@ if [ $# -gt 0 ]; then
         echo "error: no tests matched: $*" >&2
         exit 1
     fi
-elif [ -n "$FILTER" ]; then
-    for i in "${!test_names[@]}"; do
-        if printf "%s\n" "${test_names[$i]}" | grep -q "$FILTER"; then
-            filtered_idx+=("$i")
-        fi
-    done
-    if [ ${#filtered_idx[@]} -eq 0 ]; then
-        echo "error: no tests matched filter: $FILTER" >&2
-        exit 1
-    fi
 else
+    # -f (name) and -s (section) are independent constraints; when both are
+    # set a test must match both. Neither set selects everything.
     for i in "${!test_names[@]}"; do
+        if [ -n "$FILTER" ] && ! printf "%s\n" "${test_names[$i]}" | grep -Eq "$FILTER"; then
+            continue
+        fi
+        if [ -n "$SECTION" ] && ! printf "%s\n" "${test_sections[$i]}" | grep -Eq "$SECTION"; then
+            continue
+        fi
         filtered_idx+=("$i")
     done
+    if [ ${#filtered_idx[@]} -eq 0 ] && {
+        [ -n "$FILTER" ] || [ -n "$SECTION" ]
+    }; then
+        echo "error: no tests matched${FILTER:+ filter: $FILTER}${SECTION:+ section: $SECTION}" >&2
+        exit 1
+    fi
 fi
 
 if [ "$LIST_ONLY" -eq 1 ]; then

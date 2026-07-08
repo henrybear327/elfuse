@@ -56,6 +56,7 @@ CFLAGS := -O2 -Wall -Wextra -Wpedantic \
           -Wshadow -Wstrict-prototypes -Wmissing-prototypes \
           -Wformat=2 -Wimplicit-fallthrough -Wundef \
           -Wnull-dereference -Wno-unused-parameter
+CFLAGS += $(EXTRA_CFLAGS)
 
 ifneq ($(strip $(ELFUSE_NR_EMBEDDER_HVC6)),)
 CFLAGS += -DELFUSE_NR_EMBEDDER_HVC6=$(ELFUSE_NR_EMBEDDER_HVC6)

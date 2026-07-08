@@ -737,9 +737,16 @@ typedef struct {
 } sock_opt_cache_t;
 
 typedef struct {
-    int type;        /* FD_CLOSED, FD_STDIO, FD_REGULAR, FD_DIR */
-    int host_fd;     /* Underlying macOS file descriptor */
-    uint64_t ofd_id; /* Shared by dup aliases of one open file description */
+    /* Read lock-free in per-syscall validity gates (e.g. type == FD_CLOSED) and
+     * written under fd_lock at open/close. _Atomic makes those lock-free reads
+     * well-defined against the locked writes (a plain int would be a data race,
+     * flagged by ThreadSanitizer); plain read/write syntax stays atomic under
+     * C11. A stale read only affects a guest racing open/close/op on the same
+     * fd number, which is a guest-level bug.
+     */
+    _Atomic int type; /* FD_CLOSED, FD_STDIO, FD_REGULAR, FD_DIR */
+    int host_fd;      /* Underlying macOS file descriptor */
+    uint64_t ofd_id;  /* Shared by dup aliases of one open file description */
     uint64_t generation; /* Bumped each time this guest fd slot is reused. Lets
                           * long-lived references (e.g. epoll registrations)
                           * detect a close+reopen ABA where the slot now holds a
@@ -747,7 +754,8 @@ typedef struct {
                           */
     int linux_flags;     /* Linux open flags (for CLOEXEC tracking) */
     void *dir;           /* dir_stream_t* for FD_DIR entries, opaque instance
-                          * pointer for FD_EPOLL entries (NULL otherwise) */
+                          * pointer for FD_EPOLL entries (NULL otherwise)
+                          */
     char proc_path[FD_VIRTUAL_PATH_MAX]; /* Virtual /proc dir root for *at */
     int seals;      /* F_SEAL_* bits (non-zero only for memfd_create fds) */
     bool can_block; /* host read/write on this fd may block (pipe, socket, fifo,

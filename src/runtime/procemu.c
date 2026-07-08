@@ -3481,9 +3481,14 @@ int proc_intercept_stat(const char *path, struct stat *st)
         /* macOS dev_t = (major << 24) | minor; the fs-stat translation layer
          * (mac_to_linux_dev) re-encodes that into Linux's split major/minor
          * layout, so storing 136 in the macOS-major slot makes glibc's
-         * major(rdev) yield UNIX98_PTY_SLAVE_MAJOR.
+         * major(rdev) yield UNIX98_PTY_SLAVE_MAJOR. Build the value in
+         * uint32_t: dev_t is a signed 32-bit int here, so 136 << 24
+         * (0x88000000) would overflow it -- undefined behavior flagged by
+         * UBSAN. The unsigned shift is well-defined and the conversion to dev_t
+         * keeps the same bit pattern.
          */
-        st->st_rdev = ((dev_t) 136u << 24) | (dev_t) (n & 0xFFFFFFu);
+        st->st_rdev =
+            (dev_t) (((uint32_t) 136u << 24) | (uint32_t) (n & 0xFFFFFFu));
         st->st_size = 0;
         st->st_blksize = 1024;
         st->st_blocks = 0;

@@ -37,6 +37,54 @@ define RUN_OPTIONAL_SKIP77
 	fi
 endef
 
+.PHONY: check-asan check-ubsan check-tsan check-sanitizer
+
+# Sanitizer builds target elfuse's own internals, not Linux syscall
+# compatibility -- the release lane already covers that via test-matrix. So the
+# check-{asan,ubsan,tsan} entry points run check-sanitizer, a representative
+# subset of manifest sections that stress concurrency, memory, fork, and signal
+# machinery (where ASAN/UBSAN/TSAN actually find bugs) instead of the full
+# check suite.
+#
+# Sanitized guests run several times slower, so widen the per-test timeout
+# (test-runner.sh defaults to 10s) to keep the slowdown from surfacing as a
+# spurious TIMEOUT. TEST_TIMEOUT is only overridden if the caller has not
+# already set one.
+
+## Run the sanitizer subset with AddressSanitizer (ASAN)
+check-asan: clean
+	ASAN_OPTIONS="abort_on_error=1:detect_leaks=0" TEST_TIMEOUT="$${TEST_TIMEOUT:-30}" $(MAKE) EXTRA_CFLAGS="-fsanitize=address -fno-omit-frame-pointer" check-sanitizer
+
+## Run the sanitizer subset with UndefinedBehaviorSanitizer (UBSAN)
+check-ubsan: clean
+	UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" TEST_TIMEOUT="$${TEST_TIMEOUT:-30}" $(MAKE) EXTRA_CFLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer" check-sanitizer
+
+## Run the sanitizer subset with ThreadSanitizer (TSAN)
+check-tsan: clean
+	TSAN_OPTIONS="halt_on_error=1" TEST_TIMEOUT="$${TEST_TIMEOUT:-60}" $(MAKE) EXTRA_CFLAGS="-fsanitize=thread -fno-omit-frame-pointer" check-sanitizer
+
+# Manifest sections that exercise elfuse-internal concurrency, memory, fork,
+# and signal machinery -- the highest-signal targets for ASAN/UBSAN/TSAN.
+# Selected by tests/driver.sh -s; see tests/manifest.txt for the full list.
+# Kept deliberately tight so a TSAN leg (~5s per guest spawn) stays inside the
+# CI budget. "I/O subsystem" is included for its fd-table refcount/ABA races
+# (epoll-mt/aba/refcount, getdents-refcount) now that fd_entry_t.type is atomic;
+# the remaining compat sections (rseq, /proc, sockets) stay on the release lane.
+SANITIZER_SECTIONS := Threading|Stress|Signal.*thread|Fork edge|CoW fork|Guard page|mremap|MAP_SHARED|madvise|futex|FD table race|Multithreaded|SysV shared|membarrier|I/O subsystem
+
+## Run the representative internal-implementation subset (for sanitizer builds)
+check-sanitizer: $(ELFUSE_BIN) $(TEST_DEPS) \
+		$(BUILD_DIR)/test-tlbi-encoder-host \
+		$(BUILD_DIR)/test-fork-ipc-protocol-host \
+		$(BUILD_DIR)/test-identity-override-host
+	@bash tests/driver.sh -e $(ELFUSE_BIN) -d $(TEST_DIR) -v -s '$(SANITIZER_SECTIONS)'
+	@printf "\n$(BLUE)━━━ TLBI RVAE1IS encoder unit test ━━━$(RESET)\n"
+	@$(BUILD_DIR)/test-tlbi-encoder-host
+	@printf "\n$(BLUE)━━━ fork IPC protocol identity unit test ━━━$(RESET)\n"
+	@$(BUILD_DIR)/test-fork-ipc-protocol-host
+	@printf "\n$(BLUE)━━━ identity override unit test ━━━$(RESET)\n"
+	@$(BUILD_DIR)/test-identity-override-host
+
 ## Run the unit test suite plus busybox applet validation
 check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
 		$(BUILD_DIR)/test-tlbi-encoder-host \

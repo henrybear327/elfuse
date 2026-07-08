@@ -56,6 +56,16 @@ static pthread_mutex_t thread_lock =
     PTHREAD_MUTEX_INITIALIZER; /* Lock order: 5 */
 static _Atomic int active_thread_count = 0;
 
+/* Fork barrier state. Protected by thread_lock. Declared here (rather than
+ * beside thread_quiesce_siblings) because thread_deactivate, earlier in the
+ * file, hands its count back when a counted sibling exits before the barrier.
+ */
+static bool fork_quiesce_active = false; /* True while a fork is in progress */
+static int fork_quiesced_count = 0;      /* Siblings blocked on barrier */
+static int fork_target_count = 0;        /* Number of siblings to quiesce */
+static pthread_cond_t fork_cond = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t fork_all_quiesced_cond = PTHREAD_COND_INITIALIZER;
+
 /* Iterate every slot. */
 #define THREAD_FOR_EACH(t) \
     for (thread_entry_t *t = thread_table; t < thread_table + MAX_THREADS; t++)
@@ -152,16 +162,16 @@ rescan:
          */
         if (t->ptrace_conds_inited && t->ptrace_waiters > 0)
             continue;
-        /* Reap the previous occupant's pthread before reusing the slot.
-         * Workers that exit on their own are joinable but never joined
+        /* Reap the previous occupant's pthread before reusing the slot. Workers
+         * that exit on their own are joinable but never joined
          * (thread_join_workers snapshots active entries only), so dropping the
-         * handle in the memset below would leak its pthread bookkeeping for
-         * the process lifetime. active == 0 means the pthread is already past
-         * thread_deactivate, so the join blocks at most for its final
-         * wind-down -- but that wind-down can take thread_lock (the
-         * last-worker wakeup calls thread_interrupt_all), so the join must run
-         * with the lock dropped. Claim the handle first so no one else joins
-         * it, then rescan: the table may have changed while unlocked.
+         * handle in the memset below would leak its pthread bookkeeping for the
+         * process lifetime. active == 0 means the pthread is already past
+         * thread_deactivate, so the join blocks at most for its final wind-down
+         * -- but that wind-down can take thread_lock (the last-worker wakeup
+         * calls thread_interrupt_all), so the join must run with the lock
+         * dropped. Claim the handle first so no one else joins it, then rescan:
+         * the table may have changed while unlocked.
          */
         if (t->host_thread_needs_join) {
             pthread_t stale = t->host_thread;
@@ -176,8 +186,8 @@ rescan:
             pthread_cond_destroy(&t->resume_cond);
         }
         /* Bump generation across the memset so a caller still holding this
-         * slot's pointer from before reuse (e.g. a clone parent racing its
-         * own worker's startup-failure path) can detect the recycle via
+         * slot's pointer from before reuse (e.g. a clone parent racing its own
+         * worker's startup-failure path) can detect the recycle via
          * thread_set_host_thread's generation check instead of writing into
          * what is now a different logical thread.
          */
@@ -257,6 +267,23 @@ bool thread_claim_worker_join(thread_entry_t *t, pthread_t thr)
     return claimed;
 }
 
+void thread_fork_release_counted_locked(thread_entry_t *t)
+{
+    /* Caller holds thread_lock. If a fork snapshot counted this slot but it is
+     * exiting or failing bring-up before it could reach
+     * thread_fork_barrier_check, hand its count back so thread_quiesce_siblings
+     * is not stalled the full timeout waiting for a thread that will never
+     * arrive. Guarded by fork_counted so a slot created after the barrier armed
+     * (never counted) does not over-decrement. No-op when no barrier is armed.
+     */
+    if (fork_quiesce_active && t->fork_counted) {
+        t->fork_counted = false;
+        fork_target_count--;
+        if (fork_quiesced_count >= fork_target_count)
+            pthread_cond_signal(&fork_all_quiesced_cond);
+    }
+}
+
 void thread_deactivate(thread_entry_t *t)
 {
     if (!t)
@@ -284,6 +311,8 @@ void thread_deactivate(thread_entry_t *t)
 
     __atomic_store_n(&t->active, 0, __ATOMIC_RELEASE);
     atomic_fetch_sub(&active_thread_count, 1);
+
+    thread_fork_release_counted_locked(t);
 
     /* Destroy condvars once no waiters still reference them. A tracer woken by
      * the broadcast above may still be re-acquiring thread_lock.
@@ -471,9 +500,9 @@ void thread_join_workers(void)
              * polled: thread_alloc only recycles a slot once its previous
              * occupant is inactive, so a generation bump here proves our
              * snapshotted worker already deactivated even though the slot now
-             * reads active == 1 again for the replacement thread. Stop
-             * polling immediately rather than tracking the wrong thread's
-             * active bit for the rest of the loop.
+             * reads active == 1 again for the replacement thread. Stop polling
+             * immediately rather than tracking the wrong thread's active bit
+             * for the rest of the loop.
              */
             if (workers[w].t->generation != workers[w].generation) {
                 recycled = true;
@@ -485,8 +514,8 @@ void thread_join_workers(void)
         if (!workers[w].claimed)
             continue;
         /* recycled short-circuits before the active re-check: once recycled,
-         * that bit belongs to the replacement thread and must not influence
-         * the join-vs-detach decision for our (already-terminated) handle.
+         * that bit belongs to the replacement thread and must not influence the
+         * join-vs-detach decision for our (already-terminated) handle.
          */
         if (recycled ||
             !__atomic_load_n(&workers[w].t->active, __ATOMIC_ACQUIRE))
@@ -554,27 +583,32 @@ int thread_signal_deliverable(uint64_t sigbit)
 
 /* Fork quiesce. */
 
-/* Fork barrier state. Protected by thread_lock. */
-static bool fork_quiesce_active = false; /* True while a fork is in progress */
-static int fork_quiesced_count = 0;      /* Siblings blocked on barrier */
-static int fork_target_count = 0;        /* Number of siblings to quiesce */
-static pthread_cond_t fork_cond = PTHREAD_COND_INITIALIZER;
-static pthread_cond_t fork_all_quiesced_cond = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t deferred_stack_unmap_cond = PTHREAD_COND_INITIALIZER;
 
 void thread_quiesce_siblings(void)
 {
     hv_vcpu_t vcpus[MAX_THREADS];
     int count = 0;
+    int targets = 0;
 
     pthread_mutex_lock(&thread_lock);
 
-    /* Collect sibling vCPUs (all active threads except caller). */
-    THREAD_FOR_EACH_ACTIVE (t)
-        if (t != current_thread)
+    /* Count every active sibling. Startup siblings may not have published a
+     * vCPU yet, but once they do they check the barrier before guest entry.
+     * fork_counted marks the slots that owe the barrier a response, so a
+     * sibling that exits before arriving can hand its count back (see
+     * thread_deactivate) instead of stalling the forker the full timeout.
+     */
+    THREAD_FOR_EACH_ACTIVE (t) {
+        if (t == current_thread)
+            continue;
+        t->fork_counted = true;
+        targets++;
+        if (t->vcpu)
             vcpus[count++] = t->vcpu;
+    }
 
-    if (count == 0) {
+    if (targets == 0) {
         pthread_mutex_unlock(&thread_lock);
         return;
     }
@@ -582,12 +616,13 @@ void thread_quiesce_siblings(void)
     /* Arm the barrier */
     fork_quiesce_active = true;
     fork_quiesced_count = 0;
-    fork_target_count = count;
+    fork_target_count = targets;
 
     pthread_mutex_unlock(&thread_lock);
 
     /* Force siblings out of hv_vcpu_run */
-    hv_vcpus_exit(vcpus, (uint32_t) count);
+    if (count > 0)
+        hv_vcpus_exit(vcpus, (uint32_t) count);
 
     /* Wait until all siblings have blocked on the barrier. Use a bounded wait:
      * siblings in long-running host syscalls (poll, read, accept) may not reach
@@ -615,6 +650,12 @@ void thread_resume_siblings(void)
     fork_quiesce_active = false;
     fork_quiesced_count = 0;
     fork_target_count = 0;
+    /* Clear any fork_counted still set on siblings that never reached the
+     * barrier (blocked in a host syscall and released by the timeout) so the
+     * next barrier generation starts from a clean slate.
+     */
+    THREAD_FOR_EACH (t)
+        t->fork_counted = false;
     pthread_cond_broadcast(&fork_cond);
     pthread_mutex_unlock(&thread_lock);
 }
@@ -627,10 +668,18 @@ int thread_fork_barrier_check(void)
         return 0;
     }
 
-    /* Signal that the current thread has reached the barrier */
-    fork_quiesced_count++;
-    if (fork_quiesced_count >= fork_target_count)
-        pthread_cond_signal(&fork_all_quiesced_cond);
+    /* Only a thread that thread_quiesce_siblings counted contributes to the
+     * quiesced tally, and only once. A thread created after the barrier armed
+     * (fork_counted == false) still blocks below so it cannot run guest code
+     * during the snapshot, but must not inflate fork_quiesced_count past
+     * fork_target_count and let the forker proceed before a real sibling has
+     * stopped.
+     */
+    if (current_thread && current_thread->fork_counted) {
+        current_thread->fork_counted = false;
+        if (++fork_quiesced_count >= fork_target_count)
+            pthread_cond_signal(&fork_all_quiesced_cond);
+    }
 
     /* Block until fork is complete */
     while (fork_quiesce_active)

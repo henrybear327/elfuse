@@ -643,10 +643,10 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         return -LINUX_EAGAIN;
     }
     /* Captured now, while the slot is guaranteed still ours (thread_alloc just
-     * marked it active, so no concurrent thread_alloc reuse-scan will touch
-     * it until our own worker deactivates it). Passed to
-     * thread_set_host_thread below so it can detect whether this exact slot
-     * got recycled to a different logical thread before that call runs.
+     * marked it active, so no concurrent thread_alloc reuse-scan will touch it
+     * until our own worker deactivates it). Passed to thread_set_host_thread
+     * below so it can detect whether this exact slot got recycled to a
+     * different logical thread before that call runs.
      */
     uint64_t t_generation = t->generation;
 
@@ -718,16 +718,16 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
         return -LINUX_EAGAIN;
     }
 
-    /* If this returns false, the worker already hit its startup_failed path
-     * and thread_deactivate'd t fast enough for a concurrent clone to recycle
-     * the slot before this write -- t no longer refers to our worker, so the
-     * write is skipped rather than clobbering the new occupant (a race
-     * flagged by review: recording host_thread unconditionally could corrupt
-     * the recycled slot's real handle). A mismatch can only happen alongside
-     * a startup failure (thread_deactivate is the sole precondition for
-     * reuse, and nothing else calls it this early), so the failure branch
-     * below is guaranteed to run and is solely responsible for reaping
-     * host_thread in that case.
+    /* If this returns false, the worker already hit its startup_failed path and
+     * thread_deactivate'd t fast enough for a concurrent clone to recycle the
+     * slot before this write -- t no longer refers to our worker, so the write
+     * is skipped rather than clobbering the new occupant (a race flagged by
+     * review: recording host_thread unconditionally could corrupt the recycled
+     * slot's real handle). A mismatch can only happen alongside a startup
+     * failure (thread_deactivate is the sole precondition for reuse, and
+     * nothing else calls it this early), so the failure branch below is
+     * guaranteed to run and is solely responsible for reaping host_thread in
+     * that case.
      */
     bool host_thread_recorded =
         thread_set_host_thread(t, host_thread, true, t_generation);
@@ -746,19 +746,18 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
          */
         if (host_thread_recorded) {
             /* The worker deactivated its slot before signaling the handshake,
-             * so a concurrent clone may already have reused the slot and
-             * joined the handle at reuse time; claim the join to guarantee
-             * exactly one joiner.
+             * so a concurrent clone may already have reused the slot and joined
+             * the handle at reuse time; claim the join to guarantee exactly one
+             * joiner.
              */
             if (thread_claim_worker_join(t, host_thread))
                 pthread_join(host_thread, NULL);
         } else {
-            /* The write above was rejected: some other clone recycled t
-             * before we could record host_thread, so no table entry
-             * references it and nobody else will ever join it. We are the
-             * only owner. The worker's startup_failed path is a short,
-             * non-blocking sequence (no guest code ever ran), so this join
-             * returns promptly.
+            /* The write above was rejected: some other clone recycled t before
+             * we could record host_thread, so no table entry references it and
+             * nobody else will ever join it. We are the only owner. The
+             * worker's startup_failed path is a short, non-blocking sequence
+             * (no guest code ever ran), so this join returns promptly.
              */
             pthread_join(host_thread, NULL);
         }
@@ -800,8 +799,29 @@ static void *thread_create_and_run(void *arg)
         return NULL;
     }
 
+    /* Publish the vCPU handle under the thread lock. The slot is already active
+     * (thread_alloc set active before pthread_create), so thread_interrupt_all,
+     * thread_quiesce_siblings, and thread_destroy_all_vcpus can scan it
+     * concurrently; they read t->vcpu under thread_lock, so an unlocked store
+     * here is a data race (flagged by ThreadSanitizer). Until this store the
+     * scanners observe the zeroed handle and skip the slot; the startup_failed
+     * path below deactivates before destroying, so a scan that does observe the
+     * handle only ever hands HVF a live vCPU.
+     */
+    pthread_mutex_t *tlock = thread_get_lock();
+    pthread_mutex_lock(tlock);
     t->vcpu = vcpu;
     t->vexit = vexit;
+    /* A PTRACE_INTERRUPT that raced this bring-up (arrived before the handle
+     * was published) recorded a pending request it could not deliver via
+     * hv_vcpus_exit. Consume it under the same lock and self-kick below so the
+     * first hv_vcpu_run returns CANCELED into the ptrace-stop path.
+     */
+    bool ptrace_interrupt = t->ptrace_interrupt_pending;
+    t->ptrace_interrupt_pending = false;
+    pthread_mutex_unlock(tlock);
+    if (ptrace_interrupt)
+        hv_vcpus_exit(&vcpu, 1);
 
     /* Sysreg setup uses checked calls instead of HV_CHECK so the parent's
      * startup handshake can roll back cleanly rather than tearing down the
@@ -877,7 +897,12 @@ static void *thread_create_and_run(void *arg)
     bool verbose = tca->verbose;
     free(tca);
 
-    /* Set per-thread TLS pointer and enter worker run loop */
+    /* Set per-thread TLS pointer. The fork-quiesce barrier is checked at
+     * startup_ok (right before guest entry), not here: signaling startup
+     * readiness first lets the clone parent return and reach the barrier via
+     * the normal kick path, instead of stalling the fork snapshot until this
+     * worker's parent unblocks.
+     */
     current_thread = t;
 
     pthread_mutex_lock(&startup->lock);
@@ -890,13 +915,14 @@ static void *thread_create_and_run(void *arg)
 
 startup_failed:
     /* HVF sysreg/GPR setup failed after vCPU creation. Drop the thread slot
-     * before tearing the vCPU down: thread_interrupt_all() scans the active set
-     * and calls hv_vcpus_exit() on each t->vcpu without a null check, so
-     * clearing t->vcpu while the slot is still active would let a concurrent
-     * exit_group hand a zero handle to HVF. Deactivating first removes the slot
-     * from iteration. Then destroy the vCPU on its owning thread (the only
-     * thread allowed to do so), free args, and finally signal the parent so it
-     * observes a fully torn-down state.
+     * before tearing the vCPU down: the vCPU handle was already published under
+     * thread_lock, so a concurrent thread_interrupt_all /
+     * thread_destroy_all_vcpus / exit_group could otherwise observe it.
+     * Deactivating first removes the slot from THREAD_FOR_EACH_ACTIVE iteration
+     * so subsequent scans skip it before the handle is destroyed. Then destroy
+     * the vCPU on its owning thread (the only thread allowed to do so), free
+     * args, and finally signal the parent so it observes a fully torn-down
+     * state.
      */
     thread_deactivate(t);
     hv_vcpu_destroy(vcpu);
@@ -909,6 +935,16 @@ startup_failed:
     return NULL;
 
 startup_ok:;
+
+    /* If a sibling armed a fork snapshot while this worker was still in
+     * bring-up, thread_quiesce_siblings could not kick a not-yet-published
+     * vCPU, but it still counted this slot in fork_target_count. Check the
+     * barrier before touching guest memory so the snapshot cannot be torn by a
+     * freshly-created thread. thread_lock serializes this check against the
+     * quiesce scan+arm, so the worker was either kicked (it published in time)
+     * or observes the armed barrier here and blocks until the fork completes.
+     */
+    thread_fork_barrier_check();
 
     log_debug("thread tid=%lld starting on vCPU", (long long) t->guest_tid);
 
@@ -1066,11 +1102,11 @@ static int64_t sys_clone_vm(hv_vcpu_t parent_vcpu,
     }
 
     /* Detached: the pthread runtime reclaims the thread on exit, so the handle
-     * must never be joined (host_thread_needs_join stays false). The
-     * generation check always succeeds here: unlike sys_clone_thread's
-     * worker, a vm-clone worker that fails HVF bring-up
-     * (vm_clone_report_bringup_failure) keeps the slot active for wait4
-     * rather than deactivating it, so t cannot be recycled before this call.
+     * must never be joined (host_thread_needs_join stays false). The generation
+     * check always succeeds here: unlike sys_clone_thread's worker, a vm-clone
+     * worker that fails HVF bring-up (vm_clone_report_bringup_failure) keeps
+     * the slot active for wait4 rather than deactivating it, so t cannot be
+     * recycled before this call.
      */
     (void) thread_set_host_thread(t, host_thread, false, t_generation);
 
@@ -1101,6 +1137,12 @@ static void vm_clone_report_bringup_failure(thread_entry_t *t)
     t->vcpu = 0;
     t->vm_exited = true;
     t->vm_exit_status = LINUX_SIGKILL; /* WIFSIGNALED, WTERMSIG == SIGKILL */
+    /* The slot stays active for wait4 rather than deactivating, so the fork
+     * barrier hand-back that thread_deactivate would otherwise perform must be
+     * done here -- else a fork racing this bring-up failure waits the full
+     * quiesce timeout for a child that never reaches the barrier.
+     */
+    thread_fork_release_counted_locked(t);
     pthread_cond_broadcast(&t->ptrace_cond);
     pthread_mutex_unlock(lock);
     if (dying)
@@ -1128,8 +1170,22 @@ static void *vm_clone_thread_run(void *arg)
         return NULL;
     }
 
+    /* Publish under the thread lock; see thread_create_and_run for the race
+     * this closes (concurrent thread_interrupt_all / thread_destroy_all_vcpus
+     * read t->vcpu under thread_lock).
+     */
+    pthread_mutex_t *tlock = thread_get_lock();
+    pthread_mutex_lock(tlock);
     t->vcpu = vcpu;
     t->vexit = vexit;
+    /* Deliver a PTRACE_INTERRUPT that raced bring-up; see
+     * thread_create_and_run. vm-clone children are the usual ptrace targets.
+     */
+    bool ptrace_interrupt = t->ptrace_interrupt_pending;
+    t->ptrace_interrupt_pending = false;
+    pthread_mutex_unlock(tlock);
+    if (ptrace_interrupt)
+        hv_vcpus_exit(&vcpu, 1);
 
     /* Copy system registers from parent */
     HV_CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_VBAR_EL1, tca->vbar));
@@ -1172,6 +1228,7 @@ static void *vm_clone_thread_run(void *arg)
 
     /* Set per-thread TLS pointer and enter worker run loop */
     current_thread = t;
+    thread_fork_barrier_check();
 
     log_debug("vm_clone tid=%lld starting on vCPU", (long long) t->guest_tid);
 

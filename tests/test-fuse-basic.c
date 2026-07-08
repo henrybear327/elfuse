@@ -530,6 +530,15 @@ int main(void)
     if (fuse_fl < 0 || fcntl(fusefd, F_SETFL, fuse_fl | O_ASYNC) < 0)
         die("fcntl(F_SETFL O_ASYNC fusefd)");
 
+    /* Route the daemon and the mount through a dup of the device fd: the
+     * original is closed after INIT below, and SIGIO must keep flowing since
+     * O_ASYNC and the owner live on the shared open-file description.
+     */
+    int sigio_origfd = fusefd;
+    fusefd = dup(sigio_origfd);
+    if (fusefd < 0)
+        die("dup(/dev/fuse)");
+
     daemon_ctx_t ctx = {.fusefd = fusefd};
     pthread_t tid;
     if (pthread_create(&tid, NULL, daemon_main, &ctx) != 0) {
@@ -554,6 +563,29 @@ int main(void)
         fprintf(stderr, "mountpoint is not a directory\n");
         return 1;
     }
+
+    /* Close the original device fd: the session must repoint synchronous
+     * SIGIO delivery at the surviving dup, so the next request still raises
+     * the signal.
+     */
+    if (close(sigio_origfd) < 0)
+        die("close(original /dev/fuse fd)");
+    got_sigio = 0;
+    if (stat(mount_dir, &st) < 0)
+        die("stat(mountpoint after close)");
+    for (int i = 0; i < 2000 && !got_sigio; i++)
+        usleep(1000);
+    if (!got_sigio) {
+        fprintf(stderr, "no SIGIO after closing the original /dev/fuse fd\n");
+        return 1;
+    }
+    /* Disarm O_ASYNC: every later FUSE request would otherwise raise SIGIO,
+     * and a non-SA_RESTART handler firing mid-syscall surfaces spurious EINTR
+     * in the unrelated tests below.
+     */
+    fuse_fl = fcntl(fusefd, F_GETFL);
+    if (fuse_fl < 0 || fcntl(fusefd, F_SETFL, fuse_fl & ~O_ASYNC) < 0)
+        die("fcntl(F_SETFL clear O_ASYNC)");
 
     expect_contains("/proc/self/mountinfo", mount_dir);
     expect_contains("/proc/self/mountinfo", " - fuse ");

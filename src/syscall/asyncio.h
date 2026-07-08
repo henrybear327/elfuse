@@ -63,6 +63,18 @@ void asyncio_arm(int guest_fd, uint64_t generation, int host_fd, int fd_type);
  */
 void asyncio_disarm(int host_fd);
 
+/* Synchronously deliver SIGIO for a readiness edge the caller just produced on
+ * guest_fd, without going through the kqueue watcher. Needed where the ready
+ * state can be consumed again before the watcher's kevent() collection
+ * revalidates the knote: the FUSE device's daemon can dequeue the request and
+ * drain the notify pipe first, which drops the edge -- and with it the only
+ * SIGIO a one-shot request like FUSE_INIT will ever produce. Linux fires
+ * kill_fasync synchronously at enqueue time for the same reason. Revalidates
+ * O_ASYNC and the owner against the live slot; a duplicate delivery against
+ * the watcher's coalesces in the pending mask like any standard signal.
+ */
+void asyncio_fire(int guest_fd);
+
 /* Store the SIGIO/SIGURG owner for guest_fd under fd_lock, guarded by the
  * caller's snapshot generation so a close+reopen in the race window is a no-op.
  * owner_type is a FASYNC_OWNER_* value.

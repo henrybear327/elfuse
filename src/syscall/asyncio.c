@@ -113,6 +113,18 @@ static void async_deliver(void *udata, int signum)
     signal_queue(signum);
 }
 
+void asyncio_fire(int guest_fd)
+{
+    fd_entry_t snap;
+    if (!fd_snapshot(guest_fd, &snap))
+        return;
+    if (!(snap.linux_flags & LINUX_O_ASYNC))
+        return;
+    if (!async_owner_is_local(snap.fasync_owner_type, snap.fasync_owner))
+        return;
+    signal_queue(LINUX_SIGIO);
+}
+
 static void *async_watcher(void *arg)
 {
     (void) arg;

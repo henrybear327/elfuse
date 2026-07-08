@@ -474,15 +474,18 @@ static fuse_session_t *fuse_unbind_dev_fd_locked(int guest_fd)
     return NULL;
 }
 
-static int fuse_dev_alias_count_locked(fuse_session_t *session)
+/* First guest fd still bound to session, or -1 when none remain. Doubles as
+ * the alias-count > 0 test and names the surviving alias so the close path can
+ * repoint session->guest_fd (the synchronous SIGIO target) at a live slot.
+ */
+static int fuse_dev_alias_fd_locked(fuse_session_t *session)
 {
-    int count = 0;
     for (int i = 0; i < FD_TABLE_SIZE; i++) {
         if (fuse_dev_bindings[i].used &&
             fuse_dev_bindings[i].session == session)
-            count++;
+            return fuse_dev_bindings[i].guest_fd;
     }
-    return count;
+    return -1;
 }
 
 /* Bump session reference under fuse_lock. Each live mount, each FUSE-backed
@@ -529,6 +532,11 @@ static void fuse_notify_readable_locked(fuse_session_t *session)
         return;
     uint8_t byte = 1;
     write(session->notify_wr, &byte, 1);
+    /* Fire SIGIO synchronously: a parked daemon can dequeue the request and
+     * drain the notify byte before the asyncio watcher's kevent() revalidates
+     * the readiness edge, silently losing the signal (FUSE_INIT is one-shot).
+     */
+    asyncio_fire(session->guest_fd);
 }
 
 static void fuse_notify_drain_fd_locked(int fd)
@@ -1235,7 +1243,18 @@ static void fuse_fd_cleanup(int guest_fd)
         return;
     }
 
-    if (fuse_dev_alias_count_locked(session) > 0) {
+    int alias_fd = fuse_dev_alias_fd_locked(session);
+    if (alias_fd >= 0) {
+        /* The closing fd may be the one fuse_notify_readable_locked fires
+         * synchronous SIGIO on; repoint delivery at a surviving alias so a
+         * dup+close of the original /dev/fuse fd keeps signal-driven I/O
+         * working (the armed bit and owner are per open-file description and
+         * already mirrored on every alias).
+         */
+        pthread_mutex_lock(&session->lock);
+        if (session->guest_fd == guest_fd)
+            session->guest_fd = alias_fd;
+        pthread_mutex_unlock(&session->lock);
         fuse_session_put_locked(session);
         pthread_mutex_unlock(&fuse_lock);
         return;

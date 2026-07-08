@@ -861,14 +861,38 @@ int64_t sys_ptrace(guest_t *g,
         /* Force a running tracee into ptrace-stop. Uses hv_vcpus_exit to break
          * the tracee out of hv_vcpu_run; the tracee will then enter ptrace-stop
          * in its HV_EXIT_REASON_CANCELED handler.
+         *
+         * Read the vCPU handle under thread_lock: thread_find drops the lock
+         * before returning, so touching target->vcpu afterwards would race a
+         * concurrent teardown/recycle. Snapshot the handle while locked, then
+         * call HVF outside the lock (framework calls must not run under it).
          */
-        thread_entry_t *target = thread_find(pid);
-        if (!target || !target->ptraced)
+        pthread_mutex_t *tlock = thread_get_lock();
+        pthread_mutex_lock(tlock);
+        thread_entry_t *target = thread_find_locked(pid);
+        if (!target || !target->ptraced) {
+            pthread_mutex_unlock(tlock);
             return -LINUX_ESRCH;
-        if (target->ptrace_stopped)
+        }
+        if (target->ptrace_stopped) {
+            pthread_mutex_unlock(tlock);
             return 0; /* Already stopped */
+        }
+        hv_vcpu_t vcpu = target->vcpu;
+        /* If the tracee is still in vCPU bring-up (handle not yet published),
+         * hv_vcpus_exit cannot reach it, and dropping the interrupt would lose
+         * it silently. Record it under thread_lock: the worker checks this flag
+         * at publish and self-kicks so the interrupt is delivered before it
+         * runs any guest code. This serializes against the worker's publish
+         * (also under thread_lock), so exactly one of the two paths delivers
+         * it.
+         */
+        if (!vcpu)
+            target->ptrace_interrupt_pending = true;
+        pthread_mutex_unlock(tlock);
 
-        hv_vcpus_exit(&target->vcpu, 1);
+        if (vcpu)
+            hv_vcpus_exit(&vcpu, 1);
         return 0;
     }
 

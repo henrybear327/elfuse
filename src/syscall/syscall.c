@@ -607,8 +607,8 @@ static int64_t sc_setpgid(guest_t *g,
      * pid/pgid is seen as negative, not a large positive.
      */
     int pid = (int) x0, pgid = (int) x1;
-    /* Kernel order: default pid/pgid before validation, so setpgid(-9, 0)
-     * turns the pgid negative and fails EINVAL, not ESRCH.
+    /* Kernel order: default pid/pgid before validation, so setpgid(-9, 0) turns
+     * the pgid negative and fails EINVAL, not ESRCH.
      */
     int64_t self = proc_get_pid();
     int64_t rpid = (pid == 0) ? self : pid;
@@ -810,6 +810,14 @@ static void thread_force_exit_cb(thread_entry_t *t, void *ctx)
 {
     (void) ctx;
     if (t == current_thread)
+        return;
+    /* Skip a slot that is active but has not yet published its vCPU (a sibling
+     * still in thread_create_and_run bring-up): it is not in hv_vcpu_run, and
+     * handing hv_vcpus_exit a zero handle is invalid. Runs under thread_lock
+     * via thread_for_each, so this read is race-free. Same guard as
+     * thread_interrupt_all / thread_quiesce_siblings.
+     */
+    if (!t->vcpu)
         return;
     hv_vcpus_exit(&t->vcpu, 1);
 }

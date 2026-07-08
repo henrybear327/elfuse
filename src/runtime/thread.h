@@ -46,7 +46,8 @@ typedef struct thread_entry {
                                   * teardown in thread_join_workers, or the
                                   * clone startup-failure rollback. Never set
                                   * for the main thread or vm-clone children
-                                  * (the latter are created detached). */
+                                  * (the latter are created detached).
+                                  */
     uint64_t clear_child_tid;    /* GVA for CLONE_CHILD_CLEARTID (0=none) */
     uint64_t sp_el1;             /* Per-thread EL1 stack top (IPA) */
     int sp_el1_slot;             /* Slot index in sp_el1_allocated (-1 = none).
@@ -105,6 +106,15 @@ typedef struct thread_entry {
     uint32_t rseq_len;       /* Length from registration */
     uint32_t rseq_signature; /* Abort signature from registration */
 
+    /* Fork-quiesce barrier accounting. Set by thread_quiesce_siblings for each
+     * sibling it counted into fork_target_count; cleared when the thread either
+     * reaches thread_fork_barrier_check (contributing to fork_quiesced_count)
+     * or deactivates first (decrementing fork_target_count so the forker is not
+     * stalled). Guards both sides so a thread created after the barrier armed
+     * neither inflates nor deflates the tally. Written under thread_lock.
+     */
+    bool fork_counted;
+
     /* ptrace state. Used by two-process JIT architectures: the tracer attaches
      * via PTRACE_SEIZE, then uses BRK-triggered SIGTRAP + wait4 to discover
      * untranslated code on-demand. The tracee snapshots its own vCPU registers
@@ -121,6 +131,12 @@ typedef struct thread_entry {
     int ptrace_waiters;          /* Tracers currently blocked on ptrace_cond */
     bool ptrace_cleanup_pending; /* Destroy condvars after last waiter leaves */
     int ptrace_cont_sig;         /* Signal to inject on resume (0=none) */
+    bool ptrace_interrupt_pending;    /* PTRACE_INTERRUPT arrived while the vCPU
+                                       * was still in bring-up (t->vcpu == 0), so
+                                       * it could not be delivered via
+                                       * hv_vcpus_exit; the worker self-kicks at
+                                       * publish to deliver it. Under thread_lock.
+                                       */
     linux_user_pt_regs_t ptrace_regs; /* snapshot for cross-thread access */
     bool ptrace_regs_dirty;           /* Tracer modified registers */
 
@@ -201,25 +217,28 @@ void thread_deactivate(thread_entry_t *t);
 
 /* Record the host pthread backing this entry, under thread_lock so concurrent
  * table readers (thread_join_workers snapshot, thread_alloc slot reuse) see a
- * consistent handle. joinable marks the handle as needing a pthread_join
- * before its slot can be reused; pass false for detached pthreads (vm-clone
- * children). generation must be the value of t->generation the caller
- * observed when it obtained t from thread_alloc: if the slot was recycled to
- * a different logical thread in the meantime (the calling worker failed
- * startup and deactivated before this call ran), the current generation no
- * longer matches and the write is rejected -- the caller then owns thr
- * exclusively and must join or detach it itself. Returns true if recorded.
+ * consistent handle. joinable marks the handle as needing a pthread_join before
+ * its slot can be reused; pass false for detached pthreads (vm-clone children).
+ * generation must be the value of t->generation the caller observed when it
+ * obtained t from thread_alloc: if the slot was recycled to a different logical
+ * thread in the meantime (the calling worker failed startup and deactivated
+ * before this call ran), the current generation no longer matches and the write
+ * is rejected -- the caller then owns thr exclusively and must join or detach
+ * it itself.
+ *
+ * Returns true if recorded.
  */
 bool thread_set_host_thread(thread_entry_t *t,
                             pthread_t thr,
                             bool joinable,
                             uint64_t generation);
 
-/* Atomically claim the right to pthread_join a worker's handle. Returns true
- * when the caller must join thr; false when someone else (slot reuse in
- * thread_alloc) already claimed it, or the slot no longer holds thr. Used by
- * the clone startup-failure rollback so the parent's join cannot race with a
- * concurrent slot reuse joining the same terminated pthread.
+/* Atomically claim the right to pthread_join a worker's handle.
+ *
+ * Returns true when the caller must join thr; false when someone else (slot
+ * reuse in thread_alloc) already claimed it, or the slot no longer holds thr.
+ * Used by the clone startup-failure rollback so the parent's join cannot race
+ * with a concurrent slot reuse joining the same terminated pthread.
  */
 bool thread_claim_worker_join(thread_entry_t *t, pthread_t thr);
 
@@ -322,6 +341,14 @@ void thread_resume_siblings(void);
  * Returns 0 if no quiesce is active.
  */
 int thread_fork_barrier_check(void);
+
+/* Hand a counted sibling's slot back to an armed fork barrier when it exits or
+ * fails bring-up before reaching thread_fork_barrier_check. Caller must hold
+ * the thread lock (thread_get_lock()). No-op if no barrier is armed or the slot
+ * was not counted. thread_deactivate calls this; paths that keep a failed slot
+ * active for wait4 (vm-clone bring-up failure) must call it explicitly.
+ */
+void thread_fork_release_counted_locked(thread_entry_t *t);
 
 /* Ptrace helpers. */
 

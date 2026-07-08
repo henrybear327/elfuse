@@ -103,7 +103,9 @@ test_report()
 test_excerpt()
 {
     local output="$1"
-    printf "  %.120s\n" "$output" | head -3
+    # The closing lines carry the actual assertion failure; the opening line
+    # is usually just an elfuse WARN banner.
+    printf "%s\n" "$output" | tail -10 | cut -c -200 | sed 's/^/  /'
 }
 
 test_tool_path()

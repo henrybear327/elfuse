@@ -50,19 +50,19 @@ boot-time overhead those tools impose.
 - macOS on Apple Silicon
 - macOS 13 or newer
 - Xcode Command Line Tools, `clang`, `codesign`, and GNU `make`
-- GNU `objcopy` from Homebrew `binutils`, or `llvm-objcopy`
+- GNU `objcopy` or `llvm-objcopy`
 - Hypervisor entitlement: `com.apple.security.hypervisor`
+
+To build only (`make elfuse`) without running tests, just the 
+Xcode Command Line Tools and `objcopy` (`brew install binutils`) suffice.
 
 For guest test binaries, the project also expects an AArch64 Linux cross
 toolchain. The default paths in `mk/toolchain.mk` target the toolchain layout
 used by the repository test harness, but `CROSS_COMPILE` and
 `BAREMETAL_CROSS` are overridable.
 
-To run `make check`, install the Homebrew AArch64 embedded toolchain first:
-
-```sh
-brew install --cask gcc-aarch64-embedded
-```
+See
+[docs/testing.md](docs/testing.md#build-requirements) for toolchain setup guide. 
 
 ## Quick Start
 

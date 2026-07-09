@@ -8,11 +8,13 @@ how the repository validation flow is structured.
 Host build requirements:
 
 - Apple Silicon macOS host
+- macOS 13 or newer
 - Xcode Command Line Tools
 - `clang`
 - `codesign`
 - GNU `make`
 - GNU `objcopy` or `llvm-objcopy`
+- GNU coreutils
 - `bash` 3.2+ (the version Apple ships as `/bin/bash`) is sufficient for
   the test harness; no Homebrew `bash` is required. See
   `tests/lib/bash-compat.sh` for the cross-version shims (a portable
@@ -23,18 +25,49 @@ Host build requirements:
   `${var^^}` / `${var,,}` case-conversion, and guard any potentially
   empty array expansion with `${arr[@]+"${arr[@]}"}` so `set -u` does
   not trip on it.
+- Hypervisor entitlement: `com.apple.security.hypervisor`
 
 Guest test builds additionally require:
 
 - An AArch64 Linux cross-compiler for C test programs
 - An AArch64 bare-metal toolchain for the assembly smoke test
 
-The repository defaults are defined in `mk/toolchain.mk`, but these variables
-are intended to be overridden when needed:
+The toolchain defaults are defined in `mk/toolchain.mk`. 
+These variables are intended to be overridden when needed:
 
 - `CROSS_COMPILE`
 - `BAREMETAL_CROSS`
 - `SIGN_IDENTITY`
+
+### Installing the toolchains with Homebrew
+
+The following block installs everything needed to run both `make check` and
+the full `make test-matrix` (including the `qemu-aarch64` reference run). Run it
+once on an Apple Silicon macOS host:
+
+```sh
+# GNU coreutils (gtimeout) — required by the test harness timeout wrapper
+brew install coreutils
+
+# GNU objcopy
+brew install binutils
+
+# Bare-metal aarch64-none-elf toolchain used by `make check`
+brew install --cask gcc-aarch64-embedded
+
+# AArch64 Linux cross-compiler for guest test binaries (make test-matrix)
+brew tap messense/macos-cross-toolchains
+brew trust --formula messense/macos-cross-toolchains/aarch64-unknown-linux-gnu
+brew install aarch64-unknown-linux-gnu
+
+# QEMU — boots the Alpine minirootfs for the qemu-aarch64 reference run
+brew install qemu
+```
+
+Depending on your setup, you might need to add the following to your PATH
+```
+export PATH="/opt/homebrew/opt/aarch64-elf-gcc/bin:$PATH"
+```
 
 ## Main Targets
 
@@ -132,8 +165,7 @@ Fixture handling is self-contained:
 - When Rosetta mode is requested and the translator is installed,
   `tests/test-matrix.sh` auto-fetches the x86_64 fixture tree
   (`INCLUDE_X86_64=1`) on demand.
-- QEMU mode requires `qemu-system-aarch64` on `PATH` (Homebrew `qemu`
-  provides it).
+- QEMU mode requires `qemu-system-aarch64` on `PATH` (Homebrew `qemu` provides it).
 - musl is the only Alpine libc; the glibc-dynamic suite is skipped unless
   `GUEST_GLIBC_*` environment variables point at an external sysroot.
 

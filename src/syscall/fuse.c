@@ -2281,7 +2281,24 @@ int64_t fuse_dev_read(int guest_fd,
             host_fd_ref_close(&notify_ref);
             return -LINUX_EAGAIN;
         }
-        pthread_cond_wait(&session->queue_cond, &session->lock);
+        /* An untimed cond_wait has no re-check point: a FUSE daemon thread
+         * parked here with no requests queued is invisible to
+         * thread_join_workers' poll cap and touches guest memory (the reply
+         * frame write below) on an eventual delayed wake, well after
+         * guest_destroy may have unmapped it. Poll in bounded quanta and bail
+         * out once exit_group is requested.
+         */
+        if (proc_exit_group_requested()) {
+            pthread_mutex_unlock(&session->lock);
+            pthread_mutex_lock(&fuse_lock);
+            fuse_session_put_locked(session);
+            pthread_mutex_unlock(&fuse_lock);
+            host_fd_ref_close(&notify_ref);
+            return -LINUX_EINTR;
+        }
+        struct timespec ts;
+        timespec_deadline_in_ms(&ts, 200);
+        pthread_cond_timedwait(&session->queue_cond, &session->lock, &ts);
     }
     if (session->closed || session->daemon_dead) {
         pthread_mutex_unlock(&session->lock);

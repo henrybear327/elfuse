@@ -72,6 +72,12 @@ typedef struct thread_entry {
                           * acquire/release ordering against thread_alloc's
                           * release-store.
                           */
+    bool join_abandoned; /* thread_join_workers timed out on this worker and
+                          * pthread_detach()ed it. Later join passes
+                          * (guest_destroy runs one after main()'s) must skip
+                          * the entry: pthread_join/pthread_detach on an
+                          * already-detached thread is undefined.
+                          */
     /* Per-thread signal mask (POSIX requires each thread to have its own).
      * Initialized to the parent's mask on clone, modified via rt_sigprocmask.
      */
@@ -295,10 +301,13 @@ void thread_for_each(void (*fn)(thread_entry_t *t, void *ctx), void *ctx);
  */
 int thread_count_active_vm_clones(void);
 
-/* Join worker threads (all active threads except the caller). Collects thread
- * handles under the lock, then polls/joins OUTSIDE the lock so workers can call
- * thread_deactivate() to set active=0. Threads still alive after ~50ms are
- * detached (process is exiting).
+/* Join worker threads (all active threads except the caller, minus any
+ * already join_abandoned by a prior pass). Collects thread handles under the
+ * lock, then polls OUTSIDE the lock under one shared 500ms deadline so
+ * workers can call thread_deactivate() to set active=0. Workers still alive
+ * past the deadline are detached and marked join_abandoned so a later pass
+ * (e.g. guest_destroy's internal join after main()'s) does not touch the same
+ * handle twice.
  */
 void thread_join_workers(void);
 

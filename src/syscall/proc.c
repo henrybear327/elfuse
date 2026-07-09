@@ -1144,8 +1144,34 @@ int64_t sys_wait4(guest_t *g,
 
             int status;
             struct rusage ru;
-            pid_t ret =
-                wait4(host_pid, &status, mac_options, rusage_gva ? &ru : NULL);
+            pid_t ret;
+            if (mac_options & WNOHANG) {
+                ret = wait4(host_pid, &status, mac_options,
+                            rusage_gva ? &ru : NULL);
+            } else {
+                /* A bare blocking wait4 has no re-check point: a worker
+                 * parked here past exit_group is invisible to
+                 * thread_join_workers' poll cap and touches guest memory
+                 * (status/rusage writes below) on an eventual delayed
+                 * return, well after guest_destroy may have unmapped it.
+                 * Poll with WNOHANG under a bounded retry instead, mirroring
+                 * the pid==-1 loop above; proc_mark_child_exited broadcasts
+                 * pid_cond on every host child exit.
+                 */
+                for (;;) {
+                    ret = wait4(host_pid, &status, mac_options | WNOHANG,
+                                rusage_gva ? &ru : NULL);
+                    if (ret != 0)
+                        break;
+                    if (proc_exit_group_requested())
+                        return -LINUX_EINTR;
+                    struct timespec ts;
+                    timespec_deadline_in_ms(&ts, 100);
+                    pthread_mutex_lock(&pid_lock);
+                    pthread_cond_timedwait(&pid_cond, &pid_lock, &ts);
+                    pthread_mutex_unlock(&pid_lock);
+                }
+            }
             if (ret > 0) {
                 if (status_gva) {
                     int32_t linux_status = status;

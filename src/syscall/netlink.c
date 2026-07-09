@@ -33,6 +33,7 @@
 
 #include "syscall/abi.h"
 #include "syscall/internal.h"
+#include "syscall/io.h" /* io_wait_fd_or_interrupted */
 #include "syscall/net.h"
 #include "utils.h"
 #include <poll.h>
@@ -707,13 +708,15 @@ static int64_t nl_wait_readable_locked(netlink_state_t *ns,
         int rd_fd = ns->pipe_rd;
         pthread_mutex_unlock(&nl_lock);
 
-        struct pollfd pfd = {
-            .fd = rd_fd,
-            .events = POLLIN,
-        };
-        int ret = poll(&pfd, 1, -1);
-        if (ret < 0)
-            return (errno == EINTR) ? -LINUX_EINTR : -LINUX_EIO;
+        /* Bounded + interrupt-aware: an untimed poll() here has no re-check
+         * point, so a worker parked on an AF_NETLINK socket with no incoming
+         * messages is invisible to thread_join_workers' poll cap and touches
+         * guest memory on an eventual delayed return, well after
+         * guest_destroy may have unmapped it.
+         */
+        int64_t wait_rc = io_wait_fd_or_interrupted(rd_fd, POLLIN);
+        if (wait_rc < 0)
+            return wait_rc;
 
         pthread_mutex_lock(&nl_lock);
         netlink_state_t *current_ns = nl_find(guest_fd);

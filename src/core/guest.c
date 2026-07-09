@@ -641,12 +641,14 @@ void guest_destroy(guest_t *g)
      * leave hv_vcpu_run. A worker still inside the guest at unmap time takes a
      * stage-2 translation fault on its next instruction fetch and surfaces as
      * "unexpected exception EC=0x20" in the crash report. The foot terminal
-     * reproduction tripped exactly that race. The exit_group syscall handler
-     * already runs request, interrupt, and join before its own teardown; the
-     * destroy path needs the same prefix because forkipc.c:vcpu_run_loop
+     * reproduction tripped exactly that race. On the exit_group path the
+     * syscall handler runs request and interrupt, and main() joins the workers
+     * after its run loop returns; the destroy path needs the full
+     * request-interrupt-join sequence here because forkipc.c:vcpu_run_loop
      * returns straight into guest_destroy without going through the guest
-     * exit_group handler. The request is guarded on the prior state so a
-     * process that already chose its exit code keeps it intact.
+     * exit_group handler or main()'s teardown. The request is guarded on the
+     * prior state so a process that already chose its exit code keeps it
+     * intact.
      *
      * The wake signals cover workers blocked outside hv_vcpu_run: futex waiters
      * poll futex_interrupt_requested, and any thread parked in epoll or poll

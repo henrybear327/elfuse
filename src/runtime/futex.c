@@ -370,6 +370,27 @@ static uint64_t futex_remaining_ns(const struct timespec *deadline,
     return rem < cap_ns ? rem : cap_ns;
 }
 
+/* Absolute CLOCK_REALTIME wait target one bounded quantum from now: the guest
+ * deadline capped at FUTEX_OS_SYNC_POLL_CAP_NS. Every condvar sleep in the
+ * timed-wait paths goes through this so a waiter parked on a distant guest
+ * deadline still re-checks the process-wide teardown flags
+ * (proc_exit_group_requested / futex_interrupt) each quantum; an uncapped
+ * sleep would outlive thread_join_workers' poll cap and race
+ * guest_destroy's unmap of the memory the waiter touches on wake.
+ * Returns false when the guest deadline has already passed.
+ */
+static bool futex_quantum_deadline(const struct timespec *deadline,
+                                   struct timespec *out)
+{
+    uint64_t rem_ns = futex_remaining_ns(deadline, FUTEX_OS_SYNC_POLL_CAP_NS);
+    if (rem_ns == 0)
+        return false;
+    clock_gettime(CLOCK_REALTIME, out);
+    out->tv_nsec += (long) rem_ns;
+    timespec_normalize(out);
+    return true;
+}
+
 #if ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS
 
 /* Wake up to budget kernel-side waiters at uaddr via
@@ -629,10 +650,45 @@ static int64_t futex_wait(guest_t *g,
 
     while (!__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE)) {
         if (has_timeout) {
-            int rc = pthread_cond_timedwait(&waiter.cond, &b->lock, &deadline);
-            if (rc != 0) {
-                /* Timeout (ETIMEDOUT) or error; stop waiting */
+            /* Sleep in bounded quanta rather than to the guest deadline: a
+             * worker parked here for a long guest timeout (JVM parkNanos,
+             * sem_timedwait) would otherwise be unreachable by exit_group /
+             * futex_interrupt, outlive thread_join_workers' poll cap, and
+             * race guest_destroy's unmap. The interrupt checks mirror the
+             * no-timeout branch below.
+             */
+            struct timespec quantum = {0};
+            if (!futex_quantum_deadline(&deadline, &quantum)) {
                 ret = -LINUX_ETIMEDOUT;
+                break;
+            }
+            pthread_cond_timedwait(&waiter.cond, &b->lock, &quantum);
+            if (proc_exit_group_requested() || futex_interrupt_consume()) {
+                ret = -LINUX_EINTR;
+                break;
+            }
+
+            if (__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE))
+                break;
+
+            /* Mirror the no-timeout branch's itimer/queued-signal re-check
+             * below: without it, a thread parked in a timed FUTEX_WAIT_BITSET
+             * (glibc sem_timedwait, pthread_cond_timedwait, JVM parkNanos)
+             * only observes an expired guest itimer or a deliverable queued
+             * signal once the futex wakes or the full guest deadline elapses.
+             * Lock order requires dropping the bucket lock before touching
+             * sig_lock (4).
+             */
+            pthread_mutex_unlock(&b->lock);
+            signal_check_timer();
+            bool sig_ready = signal_pending() != 0;
+            pthread_mutex_lock(&b->lock);
+
+            if (__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE))
+                break;
+
+            if (sig_ready) {
+                ret = -LINUX_EINTR;
                 break;
             }
             continue;
@@ -1184,10 +1240,43 @@ static int64_t futex_lock_pi(guest_t *g, uint64_t uaddr, uint64_t timeout_gva)
         bool owner_died = false;
         while (!__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE)) {
             if (has_timeout) {
-                int rc =
-                    pthread_cond_timedwait(&waiter.cond, &b->lock, &deadline);
-                if (rc != 0 &&
-                    !__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE)) {
+                /* Bounded quanta for the same teardown-reachability reason as
+                 * futex_wait: never sleep to a distant guest deadline.
+                 */
+                struct timespec quantum = {0};
+                bool expired = !futex_quantum_deadline(&deadline, &quantum);
+                if (!expired) {
+                    pthread_cond_timedwait(&waiter.cond, &b->lock, &quantum);
+                    if (!__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE) &&
+                        proc_exit_group_requested()) {
+                        /* Mirror the no-timeout exit_group path below. */
+                        bucket_unlink_locked(b, &waiter);
+                        pthread_mutex_unlock(&b->lock);
+                        pthread_cond_destroy(&waiter.cond);
+                        return -LINUX_EINTR;
+                    }
+
+                    /* Mirror futex_wait's untimed branch: without this, a
+                     * thread parked here with a timeout only observes an
+                     * expired guest itimer or a deliverable queued signal
+                     * once the lock is acquired or the full guest deadline
+                     * elapses. Lock order requires dropping the bucket lock
+                     * before signal_check_timer/signal_pending touch
+                     * sig_lock (4).
+                     */
+                    pthread_mutex_unlock(&b->lock);
+                    signal_check_timer();
+                    bool sig_ready = signal_pending() != 0;
+                    pthread_mutex_lock(&b->lock);
+
+                    if (!__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE) &&
+                        sig_ready) {
+                        bucket_unlink_locked(b, &waiter);
+                        pthread_mutex_unlock(&b->lock);
+                        pthread_cond_destroy(&waiter.cond);
+                        return -LINUX_EINTR;
+                    }
+                } else if (!__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE)) {
                     /* Timeout: dequeue and return */
                     bucket_unlink_locked(b, &waiter);
                     /* Only clear WAITERS bit if no waiters for this address */
@@ -1226,6 +1315,26 @@ static int64_t futex_lock_pi(guest_t *g, uint64_t uaddr, uint64_t timeout_gva)
 
                 if (proc_exit_group_requested()) {
                     /* Dequeue and return */
+                    bucket_unlink_locked(b, &waiter);
+                    pthread_mutex_unlock(&b->lock);
+                    pthread_cond_destroy(&waiter.cond);
+                    return -LINUX_EINTR;
+                }
+
+                /* Mirror futex_wait's untimed branch: without this, a thread
+                 * parked in FUTEX_LOCK_PI with no timeout never observes an
+                 * expired guest itimer or a deliverable queued signal until
+                 * the lock is acquired or the owner dies. Lock order requires
+                 * dropping the bucket lock before signal_check_timer/
+                 * signal_pending touch sig_lock (4).
+                 */
+                pthread_mutex_unlock(&b->lock);
+                signal_check_timer();
+                bool sig_ready = signal_pending() != 0;
+                pthread_mutex_lock(&b->lock);
+
+                if (!__atomic_load_n(&waiter.woken, __ATOMIC_ACQUIRE) &&
+                    sig_ready) {
                     bucket_unlink_locked(b, &waiter);
                     pthread_mutex_unlock(&b->lock);
                     pthread_cond_destroy(&waiter.cond);
@@ -1679,9 +1788,11 @@ int64_t sys_futex_waitv(guest_t *g,
         pthread_mutex_unlock(&bucket_ptrs[i]->lock);
 
     /* All enqueued. Block on shared.cond until any wake site signals it. The
-     * bounded sleep (capped at 500ms or the user deadline, whichever is sooner)
-     * gives proc_exit_group_requested() and timeout checks a chance to run if
-     * the cond_signal never arrives.
+     * bounded sleep (capped at 100 ms or the user deadline, whichever is
+     * sooner) gives proc_exit_group_requested() and timeout checks a chance to
+     * run if the cond_signal never arrives. The cap matches the other futex
+     * wait paths so every futex-parked worker re-checks teardown flags well
+     * inside thread_join_workers' poll cap.
      */
     int result_idx = -1;
     pthread_mutex_lock(&shared.lock);
@@ -1701,7 +1812,7 @@ int64_t sys_futex_waitv(guest_t *g,
         }
 
         struct timespec wait_ts;
-        timespec_deadline_in_ms(&wait_ts, 500);
+        timespec_deadline_in_ms(&wait_ts, 100);
         if (has_timeout) {
             if (deadline.tv_sec < wait_ts.tv_sec ||
                 (deadline.tv_sec == wait_ts.tv_sec &&

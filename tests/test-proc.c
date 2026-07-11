@@ -7,10 +7,11 @@
  *
  * Tests: /proc/self/cmdline, /proc/meminfo, /proc/stat, /proc/version,
  *        /proc/filesystems, /proc/mounts, readlink(/proc/self/exe),
+ *        statfs(/proc, /proc/self/cmdline, /proc/self/fd, /proc/self/fdinfo),
  *        /dev/null, /dev/zero, /dev/urandom
  *
  * Syscalls exercised: openat(56), read(63), write(64), readlinkat(78),
- *                     close(57)
+ *                     close(57), statfs(43), fstatfs(44)
  */
 
 #include <stdlib.h>
@@ -21,6 +22,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 
 #include "test-harness.h"
 #include "test-util.h"
@@ -197,6 +199,85 @@ int main(void)
             EXPECT_TRUE(found_self, "self not found");
         } else
             FAIL("opendir failed");
+    }
+
+    /* statfs("/proc") and friends: /proc has no host-filesystem counterpart
+     * under the sysroot, so this exercises the intercept path (issue #141)
+     * rather than a raw host statfs() on the guest-supplied string.
+     */
+    TEST("statfs /proc");
+    {
+        struct statfs st;
+        if (statfs("/proc", &st) < 0)
+            FAIL("statfs failed");
+        else
+            PASS();
+    }
+
+    TEST("statfs /proc/ (trailing slash)");
+    {
+        struct statfs st;
+        if (statfs("/proc/", &st) < 0)
+            FAIL("statfs failed");
+        else
+            PASS();
+    }
+
+    TEST("statfs /proc/self/cmdline");
+    {
+        struct statfs st;
+        if (statfs("/proc/self/cmdline", &st) < 0)
+            FAIL("statfs failed");
+        else
+            PASS();
+    }
+
+    TEST("statfs matches fstatfs for /proc/self/cmdline");
+    {
+        struct statfs path_st, fd_st;
+        int fd = open("/proc/self/cmdline", O_RDONLY);
+        if (fd < 0) {
+            FAIL("open failed");
+        } else if (statfs("/proc/self/cmdline", &path_st) < 0) {
+            FAIL("statfs failed");
+        } else if (fstatfs(fd, &fd_st) < 0) {
+            FAIL("fstatfs failed");
+        } else {
+            EXPECT_TRUE(path_st.f_type == fd_st.f_type,
+                        "statfs/fstatfs f_type mismatch");
+        }
+        if (fd >= 0)
+            close(fd);
+    }
+
+    /* /proc/self/fd and /proc/self/fdinfo are directories whose *open* path
+     * allocates a fresh scratch directory with one placeholder file per live
+     * guest fd (see proc_open_fd_scratch) -- work a plain statfs() has no use
+     * for. These exercise the statfs-specific bypass (proc_intercept_statfs)
+     * added alongside issue #141's fix, including enough repeats to exceed
+     * PROC_SCRATCH_DIRS_MAX (128). The scratch dirs live under the real host
+     * /tmp, outside anything this guest binary can see, so the loop can only
+     * confirm statfs() keeps succeeding -- it cannot observe, and so cannot
+     * fail on, whether the bypass actually avoids allocating those dirs.
+     */
+    TEST("statfs /proc/self/fd");
+    {
+        struct statfs st;
+        int ok = 1;
+        for (int i = 0; i < 200 && ok; i++)
+            if (statfs("/proc/self/fd", &st) < 0)
+                ok = 0;
+        EXPECT_TRUE(ok, "statfs failed");
+    }
+
+    TEST("statfs /proc/self/fdinfo");
+    {
+        struct statfs st;
+        int ok = 1;
+        for (int i = 0; i < 200 && ok; i++)
+            if (statfs("/proc/self/fdinfo", &st) < 0)
+                ok = 0;
+        EXPECT_TRUE(ok, "statfs failed");
     }
 
     TEST("chdir /proc preserves guest cwd");

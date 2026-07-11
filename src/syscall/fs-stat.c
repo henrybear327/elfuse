@@ -21,6 +21,7 @@
 #include "syscall/internal.h"
 #include "syscall/path.h"
 #include "syscall/proc.h"
+#include "utils.h"
 
 static uint64_t mac_to_linux_dev(dev_t dev)
 {
@@ -355,6 +356,17 @@ int64_t sys_newfstatat(guest_t *g,
     return 0;
 }
 
+/* True when path (already translated/normalized by path_translate_at) names
+ * /proc itself or something under it. Boundary-checked so "/procfoo" does not
+ * false-positive the way a bare strncmp(path, "/proc", 5) would.
+ */
+static bool statfs_path_is_proc(const char *path)
+{
+    if (!path || path[0] != '/')
+        return false;
+    return !strncmp(path, "/proc", 5) && (path[5] == '\0' || path[5] == '/');
+}
+
 int64_t sys_statfs(guest_t *g, uint64_t path_gva, uint64_t buf_gva)
 {
     char path[LINUX_PATH_MAX];
@@ -368,8 +380,36 @@ int64_t sys_statfs(guest_t *g, uint64_t path_gva, uint64_t buf_gva)
         return -LINUX_ENOSYS;
 
     struct statfs mac_st;
-    if (statfs(tx.host_path, &mac_st) < 0)
+
+    /* /proc has no host-filesystem counterpart under the sysroot: every entry
+     * is synthesized on open (see proc_intercept_open), so a raw statfs() on
+     * the guest path always misses with ENOENT even for "/proc" itself. Try
+     * the lightweight statfs-specific resolver first (it shortcuts nodes whose
+     * open path would otherwise allocate scratch state statfs never uses),
+     * then fall back to the same intercept open/fstatfs/close that
+     * sys_newfstatat uses via proc_intercept_stat.
+     */
+    if (statfs_path_is_proc(tx.intercept_path)) {
+        int intercepted = proc_intercept_statfs(tx.intercept_path, &mac_st);
+        if (intercepted == PROC_NOT_INTERCEPTED) {
+            int host_fd = proc_intercept_open(g, tx.intercept_path, 0, 0);
+            if (host_fd == PROC_NOT_INTERCEPTED) {
+                if (statfs(tx.host_path, &mac_st) < 0)
+                    return linux_errno();
+            } else if (host_fd < 0) {
+                return linux_errno();
+            } else {
+                int rc = fstatfs(host_fd, &mac_st);
+                close_keep_errno(host_fd);
+                if (rc < 0)
+                    return linux_errno();
+            }
+        } else if (intercepted < 0) {
+            return linux_errno();
+        }
+    } else if (statfs(tx.host_path, &mac_st) < 0) {
         return linux_errno();
+    }
 
     linux_statfs_t lin_st;
     translate_statfs(&mac_st, &lin_st);

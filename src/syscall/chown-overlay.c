@@ -117,8 +117,8 @@ int chown_overlay_set(uint64_t dev,
         }
         e->dev = dev;
         e->ino = ino;
-        e->uid = cur_uid;
-        e->gid = cur_gid;
+        e->uid = (uint32_t) -1;
+        e->gid = (uint32_t) -1;
         unsigned int idx = bucket_index(dev, ino);
         e->next = buckets[idx];
         buckets[idx] = e;
@@ -131,7 +131,9 @@ int chown_overlay_set(uint64_t dev,
     if (new_group != (uint32_t) -1)
         e->gid = new_group;
 
-    if (e->uid == cur_uid && e->gid == cur_gid)
+    uint32_t effective_uid = e->uid == (uint32_t) -1 ? cur_uid : e->uid;
+    uint32_t effective_gid = e->gid == (uint32_t) -1 ? cur_gid : e->gid;
+    if (effective_uid == cur_uid && effective_gid == cur_gid)
         remove_locked(dev, ino);
 
 out:
@@ -164,8 +166,10 @@ void chown_overlay_apply(struct stat *st)
     overlay_entry_t *e =
         find_locked((uint64_t) st->st_dev, (uint64_t) st->st_ino);
     if (e) {
-        st->st_uid = e->uid;
-        st->st_gid = e->gid;
+        if (e->uid != (uint32_t) -1)
+            st->st_uid = e->uid;
+        if (e->gid != (uint32_t) -1)
+            st->st_gid = e->gid;
     }
 
     pthread_rwlock_unlock(&overlay_lock);

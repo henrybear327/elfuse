@@ -12,6 +12,16 @@ import (
 // inspect prints a stored image's manifest + config. With --json the raw config
 // JSON is emitted (one object); otherwise a human-readable summary.
 func inspect(w io.Writer, s *store, ref string, asJSON bool) error {
+	// Hold the store lock across resolution and every metadata read, as list
+	// does: ConfigFile/Layers are lazy blob reads, so a concurrent rmi on the
+	// last ref could delete the config/layer blobs between resolving the pin
+	// and reading them, failing inspect partway through.
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	img, err := s.image(ref)
 	if err != nil {
 		return err
@@ -47,9 +57,10 @@ func inspect(w io.Writer, s *store, ref string, asJSON bool) error {
 	bw := bufio.NewWriter(w)
 	w = bw
 
+	platform := Platform{OS: cfg.OS, Arch: cfg.Architecture, Variant: cfg.Variant}.String()
 	fmt.Fprintf(w, "%-12s %s\n", "Ref:", ref)
 	fmt.Fprintf(w, "%-12s %s\n", "Digest:", d)
-	fmt.Fprintf(w, "%-12s %s/%s\n", "Platform:", cfg.OS, cfg.Architecture)
+	fmt.Fprintf(w, "%-12s %s\n", "Platform:", platform)
 	if !cfg.Created.IsZero() {
 		fmt.Fprintf(w, "%-12s %s\n", "Created:", cfg.Created.UTC().Format("2006-01-02T15:04:05Z"))
 	}

@@ -11,26 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
-
-// withDarwinCacheSeams swaps the darwin mount-probe and force-detach seams
-// for a test and restores them on cleanup.
-func withDarwinCacheSeams(t *testing.T, isMount func(string) bool, detach func(string) error) {
-	t.Helper()
-	oldIsMount := isMountPointFn
-	oldDetach := detachForce
-	if isMount != nil {
-		isMountPointFn = isMount
-	}
-	if detach != nil {
-		detachForce = detach
-	}
-	t.Cleanup(func() {
-		isMountPointFn = oldIsMount
-		detachForce = oldDetach
-	})
-}
 
 // hdiutil attach -plist output is an array of system entity dictionaries. We
 // only care about the mount-point. This fixture is a trimmed-down capture of the
@@ -394,6 +377,138 @@ func TestProvisionCaseSensitiveWithFakeHdiutilFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withMountSeam overrides the mount-point probe directly (not via any shared
+// seam helper) so these lock-behavior tests are self-contained.
+func withMountSeam(t *testing.T, fn func(string) bool) {
+	t.Helper()
+	old := isMountPointFn
+	isMountPointFn = fn
+	t.Cleanup(func() { isMountPointFn = old })
+}
+
+// TestProvisionSharesLiveMount pins the F1 fix: when live runs of the digest
+// hold run.lock, a new provision must share the already-attached volume, not
+// force-detach it out from under the running guests.
+func TestProvisionSharesLiveMount(t *testing.T) {
+	installFakeHdiutil(t)
+	bundle := t.TempDir()
+	requested := filepath.Join(t.TempDir(), "mnt")
+	withMountSeam(t, func(p string) bool { return p == requested })
+	oldDetach := detachForce
+	detachForce = func(p string) error {
+		t.Errorf("detachForce(%s) called although a live run holds the volume", p)
+		return nil
+	}
+	t.Cleanup(func() { detachForce = oldDetach })
+
+	holder, err := acquireFlock(runLockPath(bundle), syscall.LOCK_SH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+
+	m, err := provisionCaseSensitive(bundle, requested, "32m")
+	if err != nil {
+		t.Fatalf("provisionCaseSensitive with live run: %v", err)
+	}
+	if m.mountPath != requested || !m.owned {
+		t.Fatalf("mount = %+v, want shared attach at requested mount", m)
+	}
+
+	// The new run holds run.lock shared: an exclusive probe must report busy.
+	if _, err := acquireFlock(runLockPath(bundle), syscall.LOCK_EX|syscall.LOCK_NB); !errors.Is(err, errCacheBusy) {
+		t.Fatalf("run.lock probe err = %v, want errCacheBusy while run is live", err)
+	}
+
+	// Close with the other holder still live: last-one-out must NOT detach
+	// (the detachForce seam above fails the test if it does).
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close with surviving run: %v", err)
+	}
+}
+
+// TestProvisionRejectsSymlinkedMountPath pins the G4 fix: a symlinked mount
+// path must be refused before any mount-status probe or force-detach, so a
+// tampered cache cannot trick provision into detaching an unrelated volume.
+func TestProvisionRejectsSymlinkedMountPath(t *testing.T) {
+	installFakeHdiutil(t)
+	t.Setenv("HDIUTIL_MOUNT", t.TempDir())
+	bundle := t.TempDir()
+	requested := filepath.Join(t.TempDir(), "mnt")
+	if err := os.Symlink(t.TempDir(), requested); err != nil {
+		t.Fatal(err)
+	}
+	// Even if the path reads as a mount point, the symlink guard must win and
+	// no detach may run.
+	withMountSeam(t, func(string) bool { return true })
+	oldDetach := detachForce
+	detachForce = func(p string) error {
+		t.Errorf("detachForce(%s) called on a symlinked mount path", p)
+		return nil
+	}
+	t.Cleanup(func() { detachForce = oldDetach })
+
+	_, err := provisionCaseSensitive(bundle, requested, "32m")
+	if err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("provisionCaseSensitive(symlink) err = %v, want 'is a symlink'", err)
+	}
+}
+
+// TestProvisionDetachesStaleMountAndHoldsRunLock pins the crash-recovery
+// path: with no live run holding run.lock, a leftover attached mount is
+// provably stale: provision detaches it, re-attaches cleanly, and the
+// returned mount holds run.lock shared until Close, whose last-one-out probe
+// then detaches.
+func TestProvisionDetachesStaleMountAndHoldsRunLock(t *testing.T) {
+	installFakeHdiutil(t)
+	bundle := t.TempDir()
+	requested := filepath.Join(t.TempDir(), "requested-mnt")
+	actualMount := filepath.Join(t.TempDir(), "actual-mount")
+	if err := os.MkdirAll(actualMount, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	detachLog := filepath.Join(t.TempDir(), "detach.log")
+	t.Setenv("HDIUTIL_MOUNT", actualMount)
+	t.Setenv("HDIUTIL_DETACH_LOG", detachLog)
+	// The stale leftover: the requested mount point reads as attached.
+	withMountSeam(t, func(p string) bool { return p == requested })
+
+	m, err := provisionCaseSensitive(bundle, requested, "32m")
+	if err != nil {
+		t.Fatalf("provisionCaseSensitive: %v", err)
+	}
+	b, err := os.ReadFile(detachLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), requested) {
+		t.Fatalf("detach log = %q, want stale mount %s detached", b, requested)
+	}
+	if m.mountPath != actualMount {
+		t.Fatalf("mountPath = %q, want re-attached %q", m.mountPath, actualMount)
+	}
+
+	// Liveness is held from provision until Close.
+	if _, err := acquireFlock(runLockPath(bundle), syscall.LOCK_EX|syscall.LOCK_NB); !errors.Is(err, errCacheBusy) {
+		t.Fatalf("run.lock probe err = %v, want errCacheBusy while mount is open", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	b, err = os.ReadFile(detachLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), actualMount) {
+		t.Fatalf("detach log = %q, want last-one-out detach of %s", b, actualMount)
+	}
+	free, err := acquireFlock(runLockPath(bundle), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err != nil {
+		t.Fatalf("run.lock probe after Close err = %v, want free", err)
+	}
+	free.Close()
 }
 
 // TestParseMountpointDecodesXMLEntities pins entity decoding: hdiutil's plist

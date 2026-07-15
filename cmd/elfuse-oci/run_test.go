@@ -13,7 +13,7 @@ import (
 )
 
 // writeElfuseStub writes a #!/bin/sh stub script that stands in for the
-// elfuse binary, and points elfuseBin() at it via $ELFUSE_BIN. spawnElfuseWait
+// elfuse binary, and points resolveElfuseBin() at it via $ELFUSE_BIN. spawnElfuseWait
 // exec.Command's whatever $ELFUSE_BIN names, so no real elfuse (and no HVF) is
 // needed. t.Setenv restores the env on cleanup.
 func writeElfuseStub(t *testing.T, body string) string {
@@ -92,35 +92,31 @@ func TestElfuseArgvShape(t *testing.T) {
 	}
 }
 
-func TestElfuseBinEnvAndFallback(t *testing.T) {
+func TestResolveElfuseBinEnvAndMissing(t *testing.T) {
 	want := filepath.Join(t.TempDir(), "elfuse-custom")
+	if err := os.WriteFile(want, []byte("#!"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("ELFUSE_BIN", want)
-	got, err := elfuseBin()
+	got, err := resolveElfuseBin()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Fatalf("elfuseBin with env = %q, want %q", got, want)
+		t.Fatalf("resolveElfuseBin with env = %q, want %q", got, want)
 	}
 
-	t.Setenv("ELFUSE_BIN", "")
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want = filepath.Join(filepath.Dir(exe), "elfuse")
-	got, err = elfuseBin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Fatalf("elfuseBin fallback = %q, want %q", got, want)
+	// A missing binary must fail up front with the $ELFUSE_BIN hint instead
+	// of surfacing later as an opaque exec error.
+	t.Setenv("ELFUSE_BIN", filepath.Join(t.TempDir(), "absent"))
+	if _, err := resolveElfuseBin(); err == nil || !strings.Contains(err.Error(), "ELFUSE_BIN") {
+		t.Fatalf("resolveElfuseBin missing binary err = %v, want not-found with hint", err)
 	}
 }
 
 func TestExecElfuseMissingBinary(t *testing.T) {
 	t.Setenv("ELFUSE_BIN", filepath.Join(t.TempDir(), "missing-elfuse"))
-	err := execElfuse(t.TempDir(), &runSpec{Args: []string{"/bin/true"}, Workdir: "/", UID: 0, GID: 0})
+	err := execElfuse(t.TempDir(), &runSpec{Args: []string{"/bin/true"}, Workdir: "/", UID: 0, GID: 0}, nil)
 	if err == nil || !strings.Contains(err.Error(), "elfuse binary not found") {
 		t.Fatalf("execElfuse missing binary err = %v, want not found", err)
 	}

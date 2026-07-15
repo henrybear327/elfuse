@@ -16,9 +16,19 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1"
 )
 
-// unpackImage extracts every layer of the stored image (base first) into a
-// plain directory rootfs. Each layer is a tar stream (crane decompresses gzip
-// and zstd transparently via layer.Uncompressed).
+// rootfsStagingSuffix marks unpackImage's pre-rename staging siblings,
+// <dest><suffix><random>. rootfsCacheLockPath parses it to map a staging
+// dir back to its digest's lock, so the two must never drift apart.
+const rootfsStagingSuffix = ".tmp-"
+
+// unpackImage extracts every layer of img (base first) into a plain directory
+// rootfs. Each layer is a tar stream (crane decompresses gzip and zstd
+// transparently via layer.Uncompressed).
+//
+// img is the caller's already-resolved image, not a ref re-resolved here: the
+// caller keys caches by the digest it resolved, and a re-resolution could
+// observe a different pin (a concurrent repull) and fill a digest-keyed cache
+// with another image's content.
 //
 // Layer application implements the OCI whiteout conventions:
 //   - `.wh.<name>` in a directory removes `<name>` (from this and lower layers).
@@ -33,11 +43,7 @@ import (
 //
 // Ownership is not applied here: elfuse runs as the host user and overrides
 // identity at runtime via --user, so the rootfs carries only mode bits.
-func unpackImage(s *store, ref, dest string) error {
-	img, err := s.image(ref)
-	if err != nil {
-		return err
-	}
+func unpackImage(img v1.Image, dest string) error {
 	if _, statErr := os.Lstat(dest); statErr == nil {
 		// An explicit pre-existing --rootfs directory: merge in place and
 		// never remove it, failed or not; it is not ours to delete.
@@ -54,7 +60,7 @@ func unpackImage(s *store, ref, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.MkdirTemp(filepath.Dir(dest), filepath.Base(dest)+".tmp-")
+	tmp, err := os.MkdirTemp(filepath.Dir(dest), filepath.Base(dest)+rootfsStagingSuffix)
 	if err != nil {
 		return err
 	}
@@ -99,6 +105,35 @@ func unpackInto(img v1.Image, dest string) error {
 	return nil
 }
 
+// layerPaths tracks what the current layer has created, so a late opaque
+// whiteout does not wipe the layer's own additions. entries holds the exact tar
+// entry paths; subtree additionally holds every ancestor directory of those
+// entries, so an opaque clear can preserve an implicit parent directory the
+// layer never gave its own tar entry (e.g. a layer with dir/sub/file but no
+// dir/sub entry).
+type layerPaths struct {
+	entries map[string]bool
+	subtree map[string]bool
+}
+
+func newLayerPaths() layerPaths {
+	return layerPaths{entries: map[string]bool{}, subtree: map[string]bool{}}
+}
+
+// add records name as a current-layer entry and marks name and all its ancestor
+// directories as carrying current-layer content.
+func (lp layerPaths) add(name string) {
+	lp.entries[name] = true
+	for p := name; p != "." && p != string(filepath.Separator); {
+		lp.subtree[p] = true
+		parent := filepath.Dir(p)
+		if parent == p {
+			break
+		}
+		p = parent
+	}
+}
+
 func applyLayer(root *os.Root, layer v1.Layer) error {
 	r, err := layer.Uncompressed()
 	if err != nil {
@@ -109,7 +144,7 @@ func applyLayer(root *os.Root, layer v1.Layer) error {
 	// content only, but tar entry order within a layer is not guaranteed: an
 	// opaque marker may arrive after the directory's own same-layer children,
 	// which must survive the clear (Docker's unpacker keeps the same set).
-	applied := make(map[string]bool)
+	lp := newLayerPaths()
 	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
@@ -119,7 +154,7 @@ func applyLayer(root *os.Root, layer v1.Layer) error {
 		if err != nil {
 			return fmt.Errorf("read tar entry: %w", err)
 		}
-		if err := applyEntry(root, hdr, tr, applied); err != nil {
+		if err := applyEntry(root, hdr, tr, lp); err != nil {
 			return fmt.Errorf("entry %q: %w", hdr.Name, err)
 		}
 	}
@@ -141,10 +176,11 @@ func rootRelative(cleaned string) string {
 	return strings.TrimPrefix(cleaned, "/")
 }
 
-// applyEntry applies one tar header to the rootfs. applied tracks the paths
-// the current layer has created so far, so an opaque whiteout arriving after
-// its directory's same-layer children does not delete them.
-func applyEntry(root *os.Root, hdr *tar.Header, r io.Reader, applied map[string]bool) error {
+// applyEntry applies one tar header to the rootfs. lp tracks the paths the
+// current layer has created so far, so an opaque whiteout arriving after its
+// directory's same-layer children (or their implicit parents) does not delete
+// them.
+func applyEntry(root *os.Root, hdr *tar.Header, r io.Reader, lp layerPaths) error {
 	name := filepath.Clean(hdr.Name)
 	if strings.HasPrefix(name, "../") || name == ".." {
 		return fmt.Errorf("unsafe entry path %q", hdr.Name)
@@ -157,7 +193,7 @@ func applyEntry(root *os.Root, hdr *tar.Header, r io.Reader, applied map[string]
 
 	base := filepath.Base(name)
 	if base == opaqueMarker {
-		return clearDirectory(root, filepath.Dir(name), applied)
+		return clearDirectory(root, filepath.Dir(name), lp)
 	}
 	if trimmed, ok := strings.CutPrefix(base, whiteoutPrefix); ok {
 		// A bare ".wh." would leave an empty target and Join(dir, "") is the
@@ -169,7 +205,7 @@ func applyEntry(root *os.Root, hdr *tar.Header, r io.Reader, applied map[string]
 		target := filepath.Join(filepath.Dir(name), trimmed)
 		return root.RemoveAll(target)
 	}
-	applied[name] = true
+	lp.add(name)
 
 	// hdr.FileInfo().Mode() maps the tar header's unix mode bits to os.FileMode
 	// with the special bits (ModeSetuid/Setgid/Sticky) at os.FileMode's high
@@ -395,7 +431,7 @@ func shouldDropSpecial(err error, special os.FileMode) bool {
 // keeping entries the current layer itself created: opaque markers hide
 // lower-layer content, and a marker ordered after its directory's same-layer
 // additions must not wipe them.
-func clearDirectory(root *os.Root, dir string, applied map[string]bool) error {
+func clearDirectory(root *os.Root, dir string, lp layerPaths) error {
 	fi, err := root.Lstat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -410,7 +446,7 @@ func clearDirectory(root *os.Root, dir string, applied map[string]bool) error {
 	// under this name anyway, mirroring the non-dir replacement mkdirAll and
 	// the regular-file path perform.
 	if !fi.IsDir() {
-		if applied[dir] {
+		if lp.entries[dir] {
 			// This layer created the non-dir itself; there is no lower
 			// content beneath it for the marker to hide.
 			return nil
@@ -434,7 +470,11 @@ func clearDirectory(root *os.Root, dir string, applied map[string]bool) error {
 	}
 	for _, e := range entries {
 		child := filepath.Join(dir, e.Name())
-		if applied[child] {
+		// Keep a child the current layer created OR that has current-layer
+		// content beneath it: an implicit parent directory (dir/sub with no
+		// own tar entry, created for dir/sub/file) has no entries[child] but is
+		// in subtree, and deleting it would take the layer's own file with it.
+		if lp.subtree[child] {
 			continue
 		}
 		if err := root.RemoveAll(child); err != nil {

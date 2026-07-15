@@ -135,16 +135,47 @@ func TestParseRunArgs(t *testing.T) {
 func TestParseCommandFlagErrors(t *testing.T) {
 	cases := []struct {
 		name string
-		err  error
+		fn   func() error
 	}{
-		{"malformed platform", func() error { _, _, err := parsePullArgs([]string{"--platform", "bogus", "alpine:3"}); return err }()},
-		{"unknown flag", func() error { _, _, err := parsePullArgs([]string{"--unknown", "alpine:3"}); return err }()},
-		{"missing flag value", func() error { _, _, _, err := parseUnpackArgs([]string{"--rootfs"}); return err }()},
-		{"run missing ref", func() error { _, _, _, _, err := parseRunArgs([]string{"--env", "A=1"}); return err }()},
+		{"malformed platform", func() error { _, _, err := parsePullArgs([]string{"--platform", "bogus", "alpine:3"}); return err }},
+		{"unknown flag", func() error { _, _, err := parsePullArgs([]string{"--unknown", "alpine:3"}); return err }},
+		{"missing flag value", func() error { _, _, _, err := parseUnpackArgs([]string{"--rootfs"}); return err }},
+		{"run missing ref", func() error { _, _, _, _, err := parseRunArgs([]string{"--env", "A=1"}); return err }},
+		{"list extra arg", func() error { _, _, err := parseListArgs([]string{"alpine:3"}); return err }},
+		{"rmi missing ref", func() error { _, _, _, err := parseRmiArgs([]string{"--force"}); return err }},
+		{"prune all without cache", func() error { _, _, err := parsePruneArgs([]string{"--all"}); return err }},
 	}
 	for _, tc := range cases {
-		if tc.err == nil {
-			t.Errorf("%s: got nil error", tc.name)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.fn(); err == nil {
+				t.Errorf("%s: got nil error, want parse failure", tc.name)
+			}
+		})
+	}
+}
+
+func TestParseLifecycleArgs(t *testing.T) {
+	cf, asJSON, err := parseListArgs([]string{"--store", "/s", "--json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.store != "/s" || !asJSON {
+		t.Fatalf("list parse = store %q json %v, want /s true", cf.store, asJSON)
+	}
+
+	cf, force, ref, err := parseRmiArgs([]string{"--force", "alpine:3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if force != true || ref != "alpine:3" || cf.platform != defaultPlatform {
+		t.Fatalf("rmi parse = force %v ref %q platform %+v", force, ref, cf.platform)
+	}
+
+	cf, opts, err := parsePruneArgs([]string{"--cache", "--all", "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.cache || !opts.all || !opts.dryRun || cf.platform != defaultPlatform {
+		t.Fatalf("prune parse = opts %+v platform %+v", opts, cf.platform)
 	}
 }

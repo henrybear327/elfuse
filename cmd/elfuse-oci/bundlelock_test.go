@@ -6,9 +6,12 @@ package main
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestAcquireFlockSharedCoexists(t *testing.T) {
@@ -118,6 +121,71 @@ func TestBundleLockPaths(t *testing.T) {
 	}
 	if got := runLockPath("/store/cs/sha256/ab"); got != "/store/cs/sha256/ab/run.lock" {
 		t.Fatalf("runLockPath = %q", got)
+	}
+}
+
+// TestPreserveAcrossExecClearsCloexec pins the exec-survival half of the
+// plain-rootfs run lock: Go opens files close-on-exec, so without the
+// FD_SETFD clear the flock would silently drop at syscall.Exec.
+func TestPreserveAcrossExecClearsCloexec(t *testing.T) {
+	l, err := acquireFlock(filepath.Join(t.TempDir(), "x.lock"), syscall.LOCK_SH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	flags, err := unix.FcntlInt(l.f.Fd(), unix.F_GETFD, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags&unix.FD_CLOEXEC == 0 {
+		t.Fatal("lock fd unexpectedly not close-on-exec before PreserveAcrossExec")
+	}
+	if err := l.PreserveAcrossExec(); err != nil {
+		t.Fatal(err)
+	}
+	flags, err = unix.FcntlInt(l.f.Fd(), unix.F_GETFD, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags&unix.FD_CLOEXEC != 0 {
+		t.Fatal("FD_CLOEXEC still set after PreserveAcrossExec")
+	}
+}
+
+// TestRootfsLockSurvivesIntoChildProcess models the exec handoff with the
+// closest testable analog: hand the lock's descriptor to a child via
+// ExtraFiles (a dup shares the open file description, exactly like exec
+// inheritance), drop the parent's fd WITHOUT unlocking, and require the
+// flock to live precisely as long as the child: released by the kernel at
+// kill, no unlock code run. An in-process syscall.Exec is untestable by
+// construction; this pins the same kernel behavior the run path relies on.
+func TestRootfsLockSurvivesIntoChildProcess(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cache")
+	hold, err := acquireRootfsRunLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command("/bin/sleep", "30")
+	child.ExtraFiles = []*os.File{hold.f}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Close the parent's fd only (no LOCK_UN), mirroring the process image
+	// being replaced. The child's dup keeps the description locked.
+	if err := hold.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	hold.f = nil
+
+	if !rootfsCacheBusy(dir) {
+		t.Error("lock not held while child lives; exec inheritance would drop it")
+	}
+	if err := child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = child.Wait()
+	if rootfsCacheBusy(dir) {
+		t.Error("lock still held after child death; kernel should have released it")
 	}
 }
 

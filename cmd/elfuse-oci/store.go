@@ -163,18 +163,14 @@ func fsyncDir(dir string) error {
 // a pull racing an rmi); without it, last-writer-wins on refs.json can drop a
 // just-recorded pin.
 func (s *store) lock() (func(), error) {
-	f, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	// acquireFlock rather than a bare Flock: it retries EINTR (run's signal
+	// forwarding can interrupt a blocking wait) and re-checks the lock file's
+	// identity, one lock discipline for the whole package.
+	l, err := acquireFlock(filepath.Join(s.root, ".lock"), syscall.LOCK_EX)
 	if err != nil {
-		return nil, fmt.Errorf("store: open lock: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
 		return nil, fmt.Errorf("store: lock: %w", err)
 	}
-	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-	}, nil
+	return func() { _ = l.Close() }, nil
 }
 
 // withLock runs fn while holding the store lock. Results cross the closure

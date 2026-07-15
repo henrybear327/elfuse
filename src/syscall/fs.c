@@ -127,6 +127,43 @@ static const char *proc_stateful_file_path(const char *path)
     return NULL;
 }
 
+static bool proc_path_is_symlink(const char *path)
+{
+    if (!path)
+        return false;
+
+    if (!strcmp(path, "/proc/self/exe") || !strcmp(path, "/proc/self/cwd") ||
+        !strcmp(path, "/proc/self/root")) {
+        return true;
+    }
+
+    if (!strncmp(path, "/proc/self/fd/", 14)) {
+        char *endp;
+        long n = strtol(path + 14, &endp, 10);
+        if (endp != path + 14 && *endp == '\0' && n >= 0)
+            return true;
+    }
+
+    if (!strncmp(path, "/proc/self/task/", 16)) {
+        char *endp;
+        strtol(path + 16, &endp, 10);
+        if (endp != path + 16 && *endp == '/') {
+            const char *sub = endp + 1;
+            if (!strcmp(sub, "exe") || !strcmp(sub, "cwd") ||
+                !strcmp(sub, "root")) {
+                return true;
+            }
+            if (!strncmp(sub, "fd/", 3)) {
+                long n = strtol(sub + 3, &endp, 10);
+                if (endp != sub + 3 && *endp == '\0' && n >= 0)
+                    return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 /* Resolve the proc_path the fd table should record for an intercepted path.
  * Returns true and fills *out when a mapping exists; false otherwise so the
  * caller can skip the install entirely. Pure string work; safe to call before
@@ -149,11 +186,32 @@ static bool resolve_virtual_path(const char *path, char *out, size_t out_size)
     const char *virt = proc_virtual_dir_path(path, virt_buf, sizeof(virt_buf));
     if (!virt)
         virt = proc_stateful_file_path(path);
-    if (!virt)
-        return false;
 
-    str_copy_trunc(out, virt, out_size);
-    return true;
+    if (virt) {
+        str_copy_trunc(out, virt, out_size);
+        return true;
+    }
+
+    /* If it has a valid /proc prefix, normalize it and record it. */
+    if (path[5] == '\0' || path[5] == '/') {
+        if (strncmp(path, "/proc/", 6) == 0) {
+            char *endp;
+            long pid = strtol(path + 6, &endp, 10);
+            if (endp != path + 6 && pid == (long) proc_get_pid() &&
+                (*endp == '\0' || *endp == '/')) {
+                snprintf(out, out_size, "/proc/self%s", endp);
+                if (proc_path_is_symlink(out))
+                    return false;
+                return true;
+            }
+        }
+        if (proc_path_is_symlink(path))
+            return false;
+        str_copy_trunc(out, path, out_size);
+        return true;
+    }
+
+    return false;
 }
 
 static const char *proc_virtual_dir_path(const char *path,

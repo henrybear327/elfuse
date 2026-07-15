@@ -367,6 +367,20 @@ static bool statfs_path_is_proc(const char *path)
     return !strncmp(path, "/proc", 5) && (path[5] == '\0' || path[5] == '/');
 }
 
+static void fill_proc_statfs(linux_statfs_t *lin)
+{
+    memset(lin, 0, sizeof(*lin));
+    lin->f_type = 0x9fa0; /* PROC_SUPER_MAGIC */
+    lin->f_bsize = 4096;
+    lin->f_blocks = 0;
+    lin->f_bfree = 0;
+    lin->f_bavail = 0;
+    lin->f_files = 0;
+    lin->f_ffree = 0;
+    lin->f_namelen = 255;
+    lin->f_frsize = 4096;
+}
+
 int64_t sys_statfs(guest_t *g, uint64_t path_gva, uint64_t buf_gva)
 {
     char path[LINUX_PATH_MAX];
@@ -379,37 +393,17 @@ int64_t sys_statfs(guest_t *g, uint64_t path_gva, uint64_t buf_gva)
     if (tx.fuse_path)
         return -LINUX_ENOSYS;
 
-    struct statfs mac_st;
-
-    /* /proc has no host-filesystem counterpart under the sysroot: every entry
-     * is synthesized on open (see proc_intercept_open), so a raw statfs() on
-     * the guest path always misses with ENOENT even for "/proc" itself. Try
-     * the lightweight statfs-specific resolver first (it shortcuts nodes whose
-     * open path would otherwise allocate scratch state statfs never uses),
-     * then fall back to the same intercept open/fstatfs/close that
-     * sys_newfstatat uses via proc_intercept_stat.
-     */
     if (statfs_path_is_proc(tx.intercept_path)) {
-        int intercepted = proc_intercept_statfs(tx.intercept_path, &mac_st);
-        if (intercepted == PROC_NOT_INTERCEPTED) {
-            int host_fd = proc_intercept_open(g, tx.intercept_path, 0, 0);
-            if (host_fd == PROC_NOT_INTERCEPTED) {
-                if (statfs(tx.host_path, &mac_st) < 0)
-                    return linux_errno();
-            } else if (host_fd < 0) {
-                return linux_errno();
-            } else {
-                int rc = fstatfs(host_fd, &mac_st);
-                close_keep_errno(host_fd);
-                if (rc < 0)
-                    return linux_errno();
-            }
-        } else if (intercepted < 0) {
-            return linux_errno();
-        }
-    } else if (statfs(tx.host_path, &mac_st) < 0) {
-        return linux_errno();
+        linux_statfs_t lin_st;
+        fill_proc_statfs(&lin_st);
+        if (guest_write_small(g, buf_gva, &lin_st, sizeof(lin_st)) < 0)
+            return -LINUX_EFAULT;
+        return 0;
     }
+
+    struct statfs mac_st;
+    if (statfs(tx.host_path, &mac_st) < 0)
+        return linux_errno();
 
     linux_statfs_t lin_st;
     translate_statfs(&mac_st, &lin_st);
@@ -421,6 +415,16 @@ int64_t sys_statfs(guest_t *g, uint64_t path_gva, uint64_t buf_gva)
 
 int64_t sys_fstatfs(guest_t *g, int fd, uint64_t buf_gva)
 {
+    fd_entry_t snap;
+    memset(&snap, 0, sizeof(snap));
+    if (fd_snapshot(fd, &snap) && statfs_path_is_proc(snap.proc_path)) {
+        linux_statfs_t proc_st;
+        fill_proc_statfs(&proc_st);
+        if (guest_write_small(g, buf_gva, &proc_st, sizeof(proc_st)) < 0)
+            return -LINUX_EFAULT;
+        return 0;
+    }
+
     host_fd_ref_t host_ref;
     if (host_fd_ref_open(fd, &host_ref) < 0)
         return -LINUX_EBADF;

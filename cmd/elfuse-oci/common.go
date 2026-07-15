@@ -50,6 +50,13 @@ func (p *Platform) Set(s string) error {
 // Rosetta).
 var defaultPlatform = Platform{OS: "linux", Arch: "arm64"}
 
+// platformOf reads the platform an image config declares. inspect, list, and
+// run's --platform agreement check all derive it the same way, so they cannot
+// disagree about what an image's platform is.
+func platformOf(cfg *v1.ConfigFile) Platform {
+	return Platform{OS: cfg.OS, Arch: cfg.Architecture, Variant: cfg.Variant}
+}
+
 // formatCreated renders a config's creation time in the CLI's fixed
 // second-precision UTC form, shared so inspect and list print one format.
 func formatCreated(cfg *v1.ConfigFile) string {

@@ -1,0 +1,97 @@
+// Copyright 2026 elfuse contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// writeElfuseStub writes a #!/bin/sh stub script that stands in for the
+// elfuse binary, and points elfuseBin() at it via $ELFUSE_BIN. spawnElfuseWait
+// exec.Command's whatever $ELFUSE_BIN names, so no real elfuse (and no HVF) is
+// needed. t.Setenv restores the env on cleanup.
+func writeElfuseStub(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "elfuse-stub.sh")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ELFUSE_BIN", p)
+	return p
+}
+
+func TestElfuseBinEnvAndFallback(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "elfuse-custom")
+	t.Setenv("ELFUSE_BIN", want)
+	got, err := elfuseBin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("elfuseBin with env = %q, want %q", got, want)
+	}
+
+	t.Setenv("ELFUSE_BIN", "")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = filepath.Join(filepath.Dir(exe), "elfuse")
+	got, err = elfuseBin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("elfuseBin fallback = %q, want %q", got, want)
+	}
+}
+
+func TestExecElfuseMissingBinary(t *testing.T) {
+	t.Setenv("ELFUSE_BIN", filepath.Join(t.TempDir(), "missing-elfuse"))
+	err := execElfuse(t.TempDir(), &runSpec{Args: []string{"/bin/true"}, Workdir: "/", UID: 0, GID: 0})
+	if err == nil || !strings.Contains(err.Error(), "elfuse binary not found") {
+		t.Fatalf("execElfuse missing binary err = %v, want not found", err)
+	}
+}
+
+func TestExecElfuseSuccessSubprocess(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "argv.txt")
+	stub := filepath.Join(dir, "elfuse-stub.sh")
+	body := "printf '%s\\n' \"$@\" > \"$ELFUSE_EXEC_ARGV_OUT\"\nexit 17\n"
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rootfs := filepath.Join(dir, "rootfs")
+	if err := os.MkdirAll(rootfs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(),
+		"ELFUSE_EXEC_ELFUSE_TEST=1",
+		"ELFUSE_BIN="+stub,
+		"ELFUSE_EXEC_ROOTFS="+rootfs,
+		"ELFUSE_EXEC_ARGV_OUT="+outPath,
+	)
+	err := cmd.Run()
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 17 {
+		t.Fatalf("execElfuse subprocess err = %T %v, want stub exit 17", err, err)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(b)
+	for _, want := range []string{"--sysroot", rootfs, "--user", "1:2", "--workdir", "/", "--clear-env", "--env", "A=1", "/bin/echo", "hi"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("exec argv missing %q in:\n%s", want, out)
+		}
+	}
+}

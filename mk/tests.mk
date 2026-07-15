@@ -15,7 +15,8 @@
         test-sysroot-create-paths test-fork-ipc-protocol-host \
         test-vcpu-run-hooks-host test-identity-override-host \
         test-proctitle-host test-proctitle-low-stack \
-        test-sysroot-procfs-exec test-timeout-disable test-fuse-alpine \
+        test-sysroot-procfs-exec test-timeout-disable test-launch-flags \
+        test-fuse-alpine \
         test-sysroot-nofollow test-sysroot-chdir test-sysroot-symlink-escape \
         test-sysroot-dotdot test-sysroot-openat2-walk \
         test-sysroot-inotify-names test-sysroot-exec-names \
@@ -225,6 +226,8 @@ check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
 	@$(MAKE) --no-print-directory test-fuse-alpine
 	@printf "\n$(BLUE)━━━ timeout=0 validation ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-timeout-disable
+	@printf "\n$(BLUE)━━━ launch flag rejection ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-launch-flags
 	@printf "\n$(BLUE)━━━ rosetta CLI gating ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-rosetta-cli
 	@printf "\n$(BLUE)━━━ hot-syscall guardrail ━━━$(RESET)\n"
@@ -1040,6 +1043,11 @@ test-sysroot-procfs-exec: $(ELFUSE_BIN) $(BUILD_DIR)/test-procfs-exec
 
 test-timeout-disable: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
 	@$(ELFUSE_BIN) --timeout 0 $(TEST_DIR)/test-hello > /dev/null
+
+## Verify --user / --workdir / --fakeroot reject contradictory requests during
+## option parsing, before any VM is created.
+test-launch-flags: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
+	@bash tests/test-launch-flags.sh $(ELFUSE_BIN) $(TEST_DIR)/test-hello
 
 ## Run GDB stub integration tests (LLDB <-> elfuse gdbstub)
 test-gdbstub: $(ELFUSE_BIN) $(TEST_DIR)/test-hello

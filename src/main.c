@@ -12,7 +12,8 @@
  *   - Guest memory identity-mapped at GVA=GPA with 2MiB block page tables.
  *   - Syscall handlers that translate Linux syscalls to macOS equivalents.
  *
- * Usage: elfuse [--verbose] [--timeout N] [--sysroot PATH] <elf-path> [args...]
+ * Usage: elfuse [options] <elf-path> [args...]; `elfuse --help` lists the
+ * options, which ELFUSE_USAGE below defines so the two cannot drift.
  */
 
 #include <Hypervisor/Hypervisor.h>
@@ -104,6 +105,127 @@ static void free_guest_argv(const char **guest_argv, int guest_argc)
     free((void *) guest_argv);
 }
 
+/* Free a guest envp vector produced by build_guest_env. Each entry is a
+ * heap "KEY=VAL" string owned by us (never a borrowed environ pointer), so
+ * free every slot then the array. A NULL envp (meaning "use host environ")
+ * is a no-op.
+ */
+static void free_envp(char **envp)
+{
+    if (!envp)
+        return;
+    for (char **e = envp; *e; e++)
+        free(*e);
+    free((void *) envp);
+}
+
+/* Free the raw --env override array collected during option parsing. These
+ * strings are distinct from build_guest_env's output (which strdups its own
+ * copies), so both must be freed.
+ */
+static void free_env_overrides(char **env_overrides, int n)
+{
+    free_guest_argv((const char **) env_overrides, n);
+}
+
+/* Build the guest environment vector, mirroring `env(1)` semantics. Returns 0
+ * and sets *out_envp to either:
+ *   - NULL when no --env/--clear-env was given, meaning "use the host environ
+ *     as-is" (the pre-flag behavior, preserved exactly), or
+ *   - a malloc'd, NULL-terminated char** of strdup'd "KEY=VAL" strings (caller
+ *     frees with free_envp): the base is the host environ, or empty under
+ *     clear_env, and each override replaces a matching KEY= in place or
+ * appends. "KEY=VAL" sets; a bare "KEY" inherits KEY from the host environ,
+ * skipped when unset so it can never create an empty-string variable. Returns
+ * -1 on allocation failure (out_envp untouched).
+ */
+static int build_guest_env(char *const *overrides,
+                           int n_overrides,
+                           bool clear_env,
+                           char ***out_envp)
+{
+    if (n_overrides == 0 && !clear_env) {
+        *out_envp = NULL;
+        return 0;
+    }
+
+    extern char **environ;
+    int cap = 1; /* NULL terminator */
+    if (!clear_env)
+        for (char **e = environ; *e; e++)
+            cap++;
+    cap += n_overrides;
+
+    char **envp = (char **) calloc((size_t) cap, sizeof(char *));
+    if (!envp)
+        return -1;
+    int n = 0;
+
+    if (!clear_env) {
+        for (char **e = environ; *e; e++) {
+            envp[n] = strdup(*e);
+            if (!envp[n])
+                goto fail;
+            n++;
+        }
+    }
+
+    for (int i = 0; i < n_overrides; i++) {
+        const char *ov = overrides[i];
+        const char *eq = strchr(ov, '=');
+        /* Reject an empty variable name ("--env =VAL", or a bare "--env ""):
+         * eq == ov (or an empty ov) means a zero-length key. setenv(3), whose
+         * semantics --env mirrors, rejects an empty name, and appending
+         * "=VAL" verbatim would hand the guest a malformed environ entry the
+         * dedup scan cannot match. */
+        if ((size_t) (eq ? eq - ov : strlen(ov)) == 0) {
+            log_error("invalid --env entry \"%s\": empty variable name", ov);
+            goto fail;
+        }
+        char *entry;
+        if (eq) {
+            entry = strdup(ov);
+        } else {
+            const char *val = getenv(ov);
+            if (!val)
+                continue; /* bare KEY, unset on host: skip */
+            size_t need = strlen(ov) + 1 + strlen(val) + 1;
+            entry = (char *) malloc(need);
+            if (entry)
+                snprintf(entry, need, "%s=%s", ov, val);
+        }
+        if (!entry)
+            goto fail;
+
+        size_t klen = (size_t) (eq ? eq - ov : strlen(ov));
+        int found = -1;
+        for (int j = 0; j < n; j++) {
+            if (envp[j] && strncmp(envp[j], ov, klen) == 0 &&
+                envp[j][klen] == '=') {
+                found = j;
+                break;
+            }
+        }
+        if (found >= 0) {
+            free(envp[found]);
+            envp[found] = entry;
+        } else {
+            /* cap is an exact upper bound (host environ + n_overrides + the
+             * NULL slot) and each override appends at most once, so the
+             * append can never outgrow the allocation.
+             */
+            envp[n++] = entry;
+        }
+    }
+    envp[n] = NULL;
+    *out_envp = envp;
+    return 0;
+
+fail:
+    free_envp(envp);
+    return -1;
+}
+
 /* Releases the host state main() owns: the sysroot mount, the host cwd, and the
  * heap copies of argv. The guest itself belongs to elfuse_launch, which
  * destroys it on every exit path, so nothing here touches HVF or guest memory.
@@ -126,12 +248,6 @@ static void cleanup_main_resources(sysroot_mount_t *sysroot_mount,
     free((void *) elf_path);
     free((void *) sysroot_path);
 }
-
-/* The embedded shim binary (shim_blob.h, generated by xxd -i from shim.bin)
- * is now included by src/core/launch.c, the single site that hands the blob to
- * guest_bootstrap_prepare. main() no longer references shim_bin/shim_bin_len
- * directly, so the static blob has one object definition site.
- */
 
 /* The infra-reserve layout invariants documented in guest.h are derived from
  * raw offset constants, so a future edit that grows the pool by shifting one
@@ -224,6 +340,17 @@ static int host_dc_zva_assert(void)
     return 0;
 }
 
+/* One-line usage synopsis shared by the argument-error paths; --help prints
+ * the long multi-line form. A single definition keeps the copies from
+ * drifting (one copy had already lost the --gdb flags).
+ */
+#define ELFUSE_USAGE                                           \
+    "usage: elfuse [--verbose] [--timeout N] "                 \
+    "[--sysroot PATH] [--create-sysroot PATH] [--no-rosetta] " \
+    "[--fakeroot] [--gdb PORT] [--gdb-stop-on-entry] "         \
+    "[--user UID[:GID]] [--workdir DIR] [--env KEY=VAL] "      \
+    "[--clear-env] <elf-path> [args...]"
+
 int main(int argc, char **argv)
 {
     log_init();
@@ -247,7 +374,24 @@ int main(int argc, char **argv)
     int gdb_port = 0;
     bool gdb_stop_on_entry = false;
     bool fakeroot = false;
+    /* Launch flags driven by `elfuse-oci run` (and usable directly). They
+     * map onto launch_args_t fields; --user overrides the guest identity,
+     * --workdir sets the guest's initial cwd, --env/--clear-env build the
+     * guest environment. All are additive: existing flags are unchanged.
+     */
+    bool has_creds = false;
+    uint32_t uid = 0, gid = 0;
+    char *workdir = NULL;
+    char **env_overrides = NULL;
+    int n_env_overrides = 0, env_cap = 0;
+    bool clear_env = false;
     int arg_start = 1;
+    /* The heap copies of the ELF and sysroot paths are declared here, ahead of
+     * every `goto fail_parse` below, so that unwind can free them: a goto that
+     * skipped their initializers would leave it freeing indeterminate pointers.
+     */
+    char *elf_path = NULL;
+    char *sysroot_path = NULL;
 
     /* 'elfuse rosettad translate <in> <out>' runs the real Apple rosettad
      * binary inside an elfuse guest to materialise an AOT translation. The
@@ -280,6 +424,8 @@ int main(int argc, char **argv)
                 "              [--create-sysroot PATH]\n"
                 "              [--no-rosetta] [--fakeroot]\n"
                 "              [--gdb PORT] [--gdb-stop-on-entry]\n"
+                "              [--user UID[:GID]] [--workdir DIR]\n"
+                "              [--env KEY=VAL] [--clear-env]\n"
                 "              <elf-path> [args...]\n"
                 "\n"
                 "Options:\n"
@@ -301,6 +447,16 @@ int main(int argc, char **argv)
                 "Protocol on PORT\n"
                 "  --gdb-stop-on-entry     Halt before the first guest "
                 "instruction\n"
+                "  --user UID[:GID]        Run the guest as UID (and GID; "
+                "defaults to UID). Numeric; elfuse-oci resolves symbolic "
+                "names\n"
+                "  --workdir DIR           Guest-absolute initial working "
+                "directory (resolved under --sysroot)\n"
+                "  --env KEY=VAL           Set a guest environment variable; "
+                "repeatable. 'KEY' (no '=') inherits from the host environ\n"
+                "  --clear-env             Start the guest environment empty "
+                "(only --env entries apply); default inherits the host "
+                "environ\n"
                 "\n"
                 "Environment:\n"
                 "  ELFUSE_NO_ROSETTA=1     Same as --no-rosetta\n"
@@ -373,24 +529,97 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[arg_start], "--gdb-stop-on-entry")) {
             gdb_stop_on_entry = true;
             arg_start++;
+        } else if (!strcmp(argv[arg_start], "--user") && arg_start + 1 < argc) {
+            /* Numeric UID[:GID]; elfuse-oci resolves symbolic User
+             * against the image /etc/passwd+group and passes numbers. A bare
+             * UID sets gid=uid (typical single-user image).
+             */
+            const char *spec = argv[arg_start + 1];
+            char *end;
+            errno = 0;
+            unsigned long u = strtoul(spec, &end, 10);
+            if (errno || end == spec || u > UINT32_MAX) {
+                log_error("invalid --user UID: %s", spec);
+                goto fail_parse;
+            }
+            unsigned long gg = u;
+            if (*end == ':') {
+                errno = 0;
+                char *end2;
+                gg = strtoul(end + 1, &end2, 10);
+                if (errno || end2 == end + 1 || *end2 != '\0' ||
+                    gg > UINT32_MAX) {
+                    log_error("invalid --user UID:GID: %s", spec);
+                    goto fail_parse;
+                }
+            } else if (*end != '\0') {
+                log_error("invalid --user spec: %s", spec);
+                goto fail_parse;
+            }
+            uid = (uint32_t) u;
+            gid = (uint32_t) gg;
+            has_creds = true;
+            arg_start += 2;
+        } else if (!strcmp(argv[arg_start], "--workdir") &&
+                   arg_start + 1 < argc) {
+            /* Guest-absolute working directory; elfuse_launch translates it
+             * against the sysroot and chdirs there. Reject relative paths up
+             * front: translation would resolve them against the host cwd,
+             * silently starting the guest outside the intended tree. strdup
+             * now because runtime_set_process_title clobbers the original
+             * argv block.
+             */
+            if (argv[arg_start + 1][0] != '/') {
+                log_error("--workdir requires a guest-absolute path, got %s",
+                          argv[arg_start + 1]);
+                goto fail_parse;
+            }
+            free(workdir);
+            workdir = strdup(argv[arg_start + 1]);
+            if (!workdir) {
+                log_error("out of memory");
+                goto fail_parse;
+            }
+            arg_start += 2;
+        } else if (!strcmp(argv[arg_start], "--env") && arg_start + 1 < argc) {
+            /* "KEY=VAL" sets; "KEY" inherits from the host environ (resolved
+             * in build_guest_env). strdup now; argv is clobbered later.
+             */
+            if (n_env_overrides == env_cap) {
+                int ncap = env_cap ? env_cap * 2 : 8;
+                char **grown = (char **) realloc(
+                    (void *) env_overrides, (size_t) ncap * sizeof(char *));
+                if (!grown) {
+                    log_error("out of memory");
+                    goto fail_parse;
+                }
+                env_overrides = grown;
+                env_cap = ncap;
+            }
+            env_overrides[n_env_overrides] = strdup(argv[arg_start + 1]);
+            if (!env_overrides[n_env_overrides]) {
+                log_error("out of memory");
+                goto fail_parse;
+            }
+            n_env_overrides++;
+            arg_start += 2;
+        } else if (!strcmp(argv[arg_start], "--clear-env")) {
+            clear_env = true;
+            arg_start++;
         } else if (!strcmp(argv[arg_start], "--")) {
             arg_start++;
             break;
         } else {
             log_error("unknown option: %s", argv[arg_start]);
-            log_error(
-                "usage: elfuse [--verbose] [--timeout N] "
-                "[--sysroot PATH] [--create-sysroot PATH] [--no-rosetta] "
-                "[--fakeroot] [--gdb PORT] "
-                "[--gdb-stop-on-entry] <elf-path> [args...]");
-            return 1;
+            log_error(ELFUSE_USAGE);
+            goto fail_parse;
         }
     }
 
     if (sysroot && create_sysroot) {
         log_error(
             "use either --sysroot PATH or --create-sysroot PATH, not both");
-        return 1;
+        goto fail_parse;
     }
 
     /* ELFUSE_NO_ROSETTA=1 mirrors --no-rosetta for environments where passing
@@ -410,6 +639,20 @@ int main(int argc, char **argv)
         const char *fakeroot_env = getenv("ELFUSE_FAKEROOT");
         if (fakeroot_env && strcmp(fakeroot_env, "1") == 0)
             fakeroot = true;
+    }
+    /* Fakeroot means the guest starts as uid/gid 0: proc_identity_init's
+     * defaults and the ELFUSE_FAKEROOT_EXEC transition both set root together
+     * with the flag, and uid_is_permitted() grants every setuid under fakeroot
+     * on that basis. A non-root --user would keep that grant while reporting an
+     * unprivileged identity, so the guest could call setuid(0) at will. Refuse
+     * the contradiction rather than silently handing out the privilege.
+     */
+    if (fakeroot && has_creds && (uid != 0 || gid != 0)) {
+        log_error(
+            "--fakeroot runs the guest as uid/gid 0 and cannot be combined "
+            "with --user %u:%u",
+            uid, gid);
+        goto fail_parse;
     }
     proc_set_fakeroot_enabled(fakeroot);
 
@@ -440,14 +683,14 @@ int main(int argc, char **argv)
      * internal host reserve.
      */
     if (host_nofile_ensure_capacity() < 0)
-        return 1;
+        goto fail_parse;
 
     /* Block the vCPU-preemption signals and start the sigwait thread before any
      * vCPU thread exists, so both the normal path and the fork-child path below
      * inherit the block on every thread they spawn.
      */
     if (proc_preempt_init() < 0)
-        return 1;
+        goto fail_parse;
 
     /* Fork-child mode: receive VM state over IPC and run */
     if (fork_child_fd >= 0)
@@ -455,10 +698,22 @@ int main(int argc, char **argv)
                                timeout_sec);
 
     if (arg_start >= argc) {
-        log_error(
-            "usage: elfuse [--verbose] [--timeout N] "
-            "[--sysroot PATH] [--create-sysroot PATH] [--no-rosetta] "
-            "[--fakeroot] <elf-path> [args...]");
+        log_error(ELFUSE_USAGE);
+        goto fail_parse;
+    }
+
+    /* Shared unwind for argument-parsing errors: frees the heap state owned
+     * before the guest_argv copy below and exits 1. The if (0) wrapper makes
+     * the label reachable only by goto, and placing it before the later
+     * declarations keeps any goto from crossing into their scope; paths past
+     * that copy use the cleanup: label instead.
+     */
+    if (0) {
+    fail_parse:
+        free(elf_path);
+        free(sysroot_path);
+        free_env_overrides(env_overrides, n_env_overrides);
+        free(workdir);
         return 1;
     }
 
@@ -466,10 +721,9 @@ int main(int argc, char **argv)
      * data lives in a contiguous stack region that elfuse clobbers below for
      * the process title (PostgreSQL/nginx argv-clobber technique).
      */
-    char *elf_path = strdup(argv[arg_start]);
+    elf_path = strdup(argv[arg_start]);
     bool have_sysroot = (sysroot != NULL || create_sysroot != NULL);
     const char *sysroot_src = create_sysroot ? create_sysroot : sysroot;
-    char *sysroot_path = NULL;
     if (have_sysroot) {
         sysroot_path = (char *) calloc(LINUX_PATH_MAX, 1);
         if (sysroot_path) {
@@ -478,9 +732,7 @@ int main(int argc, char **argv)
             if (src_len >= LINUX_PATH_MAX) {
                 log_error("sysroot path too long (%zu bytes, max %d): %s",
                           src_len, LINUX_PATH_MAX - 1, sysroot_src);
-                free(elf_path);
-                free(sysroot_path);
-                return 1;
+                goto fail_parse;
             }
         }
     }
@@ -493,6 +745,10 @@ int main(int argc, char **argv)
     char elf_host_path[LINUX_PATH_MAX];
     bool elf_host_temp = false;
     bool have_host_cwd = (getcwd(host_cwd, sizeof(host_cwd)) != NULL);
+    /* Declared (and NULL-initialized) before the first `goto fail` so the
+     * shared cleanup below never frees an uninitialized pointer.
+     */
+    char **envp = NULL;
     int exit_code;
     memset(&sysroot_mount, 0, sizeof(sysroot_mount));
     if (!elf_path || (have_sysroot && !sysroot_path) || !guest_argv) {
@@ -630,22 +886,37 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Build the guest environment vector late (after the shebang loop and the
+     * --gdb guard) so only this block's OOM path and the post-launch cleanup
+     * must free it. With neither --env nor --clear-env given, build_guest_env
+     * leaves envp NULL and elfuse_launch uses the host environ (pre-flag
+     * behavior, preserved); it owns that condition, not this call site.
+     */
+    if (build_guest_env(env_overrides, n_env_overrides, clear_env, &envp) < 0) {
+        /* build_guest_env has already logged the specific reason (OOM or a
+         * malformed --env entry).
+         */
+        goto fail;
+    }
+    /* build_guest_env strdups its own copies, so the raw override array and
+     * its strings are no longer needed.
+     */
+    free_env_overrides(env_overrides, n_env_overrides);
+    env_overrides = NULL;
+    n_env_overrides = 0;
+
     /* Rewrite the host-visible process title from the guest entrypoint. This
      * clobbers the original argv block (already snapshotted into the heap
      * elf_path / guest_argv above), so it must run before elfuse_launch hands
-     * control to the guest but after the shebang loop has fixed elf_path. The
-     * call only touches the original argv and the kernel procname; it does not
-     * depend on guest_bootstrap_prepare having run, so hoisting it out of the
-     * bring-up (where it previously sat between prepare and create_vcpu) is
-     * behavior-preserving.
+     * control to the guest but after the shebang loop has fixed elf_path.
      */
     runtime_set_process_title(argc, argv, elf_path);
 
-    /* Hand the bring-up, run loop, and guest teardown to elfuse_launch. main()
-     * retains ownership of the original argv (proctitle above), the sysroot
-     * mount (detached in cleanup_main_resources after the guest exits so the
-     * mount stays live for the whole run), host cwd, and the heap elf_path /
-     * sysroot_path / guest_argv copies.
+    /* Hand bring-up, run loop, and guest teardown to elfuse_launch. main()
+     * keeps ownership of the original argv (proctitle above), the sysroot mount
+     * (detached in cleanup_main_resources after the guest exits so it stays
+     * live for the whole run), host cwd, and the heap elf_path / sysroot_path /
+     * guest_argv / envp / workdir copies.
      */
     launch_args_t largs = {
         .elf_path = elf_host_path,
@@ -653,6 +924,11 @@ int main(int argc, char **argv)
         .sysroot = sysroot,
         .guest_argc = guest_argc,
         .guest_argv = guest_argv,
+        .envp = envp,
+        .has_creds = has_creds,
+        .uid = uid,
+        .gid = gid,
+        .cwd_guest = workdir,
         .gdb_port = gdb_port,
         .gdb_stop_on_entry = gdb_stop_on_entry,
         .timeout_sec = timeout_sec,
@@ -671,8 +947,13 @@ fail:
 cleanup:
     /* Single unwind for every exit past the heap-copy allocations: frees the
      * caller-owned heap copies, detaches the sysroot mount, restores the host
-     * cwd, and drops a still-owned FUSE-materialized temp ELF.
+     * cwd, and drops a still-owned FUSE-materialized temp ELF. A successful
+     * build_guest_env already freed and reset the override array, so freeing it
+     * here is then a no-op.
      */
+    free_env_overrides(env_overrides, n_env_overrides);
+    free_envp(envp);
+    free(workdir);
     cleanup_main_resources(&sysroot_mount, have_host_cwd ? host_cwd : NULL,
                            guest_argv, guest_argc, elf_path, sysroot_path);
     if (elf_host_temp)

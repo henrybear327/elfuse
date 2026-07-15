@@ -89,6 +89,42 @@ func TestParseInspectArgs(t *testing.T) {
 	}
 }
 
+func TestParseRunArgs(t *testing.T) {
+	cf, rf, ref, tail, err := parseRunArgs([]string{
+		"--store", "/s",
+		"--entrypoint", "/bin/sh",
+		"--env", "A=1",
+		"--env=B=2",
+		"--clear-env",
+		"--user", "1000:1000",
+		"--workdir", "/work",
+		"--rootfs", "/tmp/rootfs",
+		"alpine:3",
+		"-c", "echo hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.store != "/s" {
+		t.Errorf("store = %q, want /s", cf.store)
+	}
+	if ref != "alpine:3" {
+		t.Errorf("ref = %q, want alpine:3", ref)
+	}
+	if !reflect.DeepEqual(tail, []string{"-c", "echo hi"}) {
+		t.Errorf("tail = %v, want [-c echo hi]", tail)
+	}
+	if rf.entrypoint != "/bin/sh" || rf.user != "1000:1000" || rf.workdir != "/work" || rf.rootfs != "/tmp/rootfs" {
+		t.Errorf("run flags = %+v", rf)
+	}
+	if !rf.clearEnv {
+		t.Error("clearEnv = false, want true")
+	}
+	if !reflect.DeepEqual(rf.env, []string{"A=1", "B=2"}) {
+		t.Errorf("env = %v, want [A=1 B=2]", rf.env)
+	}
+}
+
 func TestParseCommandFlagErrors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -97,6 +133,7 @@ func TestParseCommandFlagErrors(t *testing.T) {
 		{"malformed platform", func() error { _, _, err := parsePullArgs([]string{"--platform", "bogus", "alpine:3"}); return err }()},
 		{"unknown flag", func() error { _, _, err := parsePullArgs([]string{"--unknown", "alpine:3"}); return err }()},
 		{"missing flag value", func() error { _, _, _, err := parseUnpackArgs([]string{"--rootfs"}); return err }()},
+		{"run missing ref", func() error { _, _, _, _, err := parseRunArgs([]string{"--env", "A=1"}); return err }()},
 	}
 	for _, tc := range cases {
 		if tc.err == nil {

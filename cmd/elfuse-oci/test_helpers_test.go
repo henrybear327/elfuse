@@ -6,6 +6,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -29,6 +30,20 @@ func TestMain(m *testing.M) {
 		os.Args = append([]string{os.Args[0]}, args...)
 		main()
 		return
+	}
+	if os.Getenv("ELFUSE_EXEC_ELFUSE_TEST") == "1" {
+		spec := &runSpec{
+			Args:    []string{"/bin/echo", "hi"},
+			Env:     []string{"A=1"},
+			Workdir: "/",
+			UID:     1,
+			GID:     2,
+		}
+		if err := execElfuse(os.Getenv("ELFUSE_EXEC_ROOTFS"), spec); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(98)
+		}
+		os.Exit(99)
 	}
 	os.Exit(m.Run())
 }

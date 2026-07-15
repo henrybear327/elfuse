@@ -3,13 +3,14 @@
 
 // elfuse-oci is the OCI image CLI for elfuse.
 //
-// It owns the OCI image pipeline (pull, store, and inspect for now)
-// using go-containerregistry. elfuse itself stays a pure Linux
+// It owns the OCI image pipeline (pull, store, inspect, and unpack for
+// now) using go-containerregistry. elfuse itself stays a pure Linux
 // syscall-to-Darwin runtime with no OCI awareness.
 //
 // Usage:
 //
 //	elfuse-oci pull   [--store DIR] [--platform os/arch[/variant]] <ref>
+//	elfuse-oci unpack [--store DIR] [--rootfs DIR] <ref>
 //	elfuse-oci inspect [--store DIR] [--json] <ref>
 //
 // <ref> is an OCI image reference (docker.io/library/alpine:3, ghcr.io/...,
@@ -36,6 +37,7 @@ func usage() {
 
 commands:
   pull     Pull an image reference into the local OCI store
+  unpack   Unpack a stored image's layers into a rootfs directory
   inspect  Print a stored image's manifest + config
   help     Show this help
   version  Print the elfuse-oci version
@@ -74,6 +76,8 @@ func dispatch(cmd string, rest []string) error {
 		return nil
 	case "pull":
 		return cmdPull(rest)
+	case "unpack":
+		return cmdUnpack(rest)
 	case "inspect":
 		return cmdInspect(rest)
 	default:

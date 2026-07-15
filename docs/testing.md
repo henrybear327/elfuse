@@ -15,6 +15,7 @@ Host build requirements:
 - GNU `make`
 - GNU `objcopy` or `llvm-objcopy`
 - GNU coreutils
+- Go, for the elfuse-oci OCI CLI
 - `bash` 3.2+ (the version Apple ships as `/bin/bash`) is sufficient for
   the test harness; no Homebrew `bash` is required. See
   `tests/lib/bash-compat.sh` for the cross-version shims (a portable
@@ -32,8 +33,35 @@ Guest test builds additionally require:
 - An AArch64 Linux cross-compiler for C test programs
 - An AArch64 bare-metal toolchain for the assembly smoke test
 
-The toolchain defaults are defined in `mk/toolchain.mk`. 
-These variables are intended to be overridden when needed:
+OCI interop checks additionally require `jq`. `crane`, `skopeo`, and `umoci`
+are used when available by `make oci-interop`; CI installs them so cross-tool
+layout parsing and registry-truth checks are hard gates there.
+
+`elfuse-oci` uses the Go `go-containerregistry` library directly for pulling
+images, selecting platforms, and maintaining the OCI image-layout store. The
+`crane` CLI is only used here as an independent registry/layout checker, while
+`umoci` is used to verify that another OCI implementation can parse the store;
+neither tool is on the normal `elfuse-oci run` execution path.
+
+For a full local `make oci-interop` run on macOS:
+
+```sh
+brew install jq skopeo umoci
+go install github.com/google/go-containerregistry/cmd/crane@v0.21.7
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+For a full local run on Ubuntu:
+
+```sh
+sudo apt-get install -y jq skopeo
+go install github.com/google/go-containerregistry/cmd/crane@v0.21.7
+go install github.com/opencontainers/umoci/cmd/umoci@latest
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+The toolchain defaults are defined in `mk/toolchain.mk`, but these variables
+are intended to be overridden when needed:
 
 - `CROSS_COMPILE`
 - `BAREMETAL_CROSS`
@@ -79,6 +107,10 @@ make check
 make test-rosetta-all
 make test-gdbstub
 make test-matrix
+make elfuse-oci
+make oci-test
+make oci-lint
+make oci-interop
 make lint
 make clean
 ```
@@ -118,6 +150,13 @@ What they do:
 - `make test-gdbstub`: debugger integration checks against the built-in GDB stub
 - `make test-matrix`: cross-check `elfuse` (aarch64), QEMU (aarch64),
   and `elfuse` (x86_64-via-Rosetta) on overlapping corpora
+- `make elfuse-oci`: build the Go OCI image CLI
+- `make oci-test`: run offline elfuse-oci tests
+- `make oci-lint`: `gofmt` check plus `go vet` for elfuse-oci (vet runs for both
+  `GOOS` values, so the darwin sparsebundle files are checked from Linux and the
+  non-darwin stubs from macOS)
+- `make oci-interop`: pull OCI fixtures, check the raw image-layout files with
+  `jq`, and ask available external tools to read the same store
 - `make lint`: static analysis through `clang-tidy`
 
 ## Quick Iteration
@@ -147,6 +186,72 @@ or run all matrix modes back-to-back with `make test-matrix`.
 `make check` already runs the BusyBox applet suite as a second stage, so a
 green `make check` covers BusyBox validation. Use `make test-busybox` to
 iterate on a single applet failure without rerunning the unit suite.
+
+### OCI Image CLI
+
+The OCI image CLI (`build/elfuse-oci`) is pure Go, so most of it builds and tests
+without Hypervisor.framework; only an actual `elfuse-oci run` guest boot needs
+HVF. For elfuse-oci changes:
+
+```sh
+make elfuse-oci                # build
+make oci-test                        # offline unit + conformance tests
+make oci-lint                        # gofmt check + go vet (both GOOS values)
+ELFUSE_OCI_NETTEST=1 make oci-test   # add the registry pull round-trip
+make oci-interop                     # image-layout + cross-tool interop (needs jq)
+```
+
+`make oci-interop` always requires `jq`; install `crane`, `skopeo`, and `umoci`
+too when you want the local run to match the CI cross-tool gate. The Darwin
+sparsebundle round-trip (real `hdiutil` + case-sensitive APFS) is gated behind an
+env var and runs only on macOS:
+
+```sh
+ELFUSE_OCI_DARWIN_CS=1 go test -run TestDarwinCSSweep ./cmd/elfuse-oci/
+```
+
+CI splits this coverage by what each runner can do:
+
+- **Linux (hosted)**: build, `gofmt`/`go vet` (including a `GOOS=darwin`
+  cross-vet of the sparsebundle files), the pull/inspect/unpack/list/rmi/prune
+  lifecycle, the `ELFUSE_OCI_NETTEST` round-trip, and crane/skopeo/umoci interop.
+  The unit suite runs with `-race` here.
+- **macOS (hosted)**: build plus the full `go test -race` on darwin (exercising
+  the sparsebundle/clone code the Linux job can only cross-vet). The darwin
+  concurrency-sensitive code (cache sweep, provision, clone, cache-removal lock
+  discipline) compiles only on darwin, so this is the only place the race
+  detector ever sees it; keep `-race` on this step. Plus the real
+  `ELFUSE_OCI_DARWIN_CS` sparsebundle round-trip, and a run-less
+  pull/inspect/list/rmi/prune lifecycle smoke through the darwin binary.
+  No HVF needed.
+
+### Writing OCI unit-test fixtures
+
+An image is untrusted input: its layers control file *names and shapes*, not
+just contents. When testing unpack, cache, or sweep code, build fixtures that
+adversarially exercise those, not only escape-by-content:
+
+- **Reserved marker names.** An image can ship a path that collides with an
+  elfuse-managed marker (e.g. a layer with `/.elfuse-keep`). Assert the marker
+  is ignored when it comes from image content and honored only when
+  elfuse-oci wrote it out of band (see
+  `TestListSweepableClonesReapsImageShippedKeepFile`).
+- **Implicit directories.** A layer may create `dir/sub/file` with no `dir/sub`
+  tar entry. Whiteout/opaque logic must treat that implicit parent as
+  current-layer content (see `TestUnpackOpaqueAfterImplicitParentChildren`).
+- **Platform variants.** Set `cfg.Variant` (e.g. `linux/arm/v7`) so `inspect`
+  and `list` are checked to agree, not just os/arch.
+- **Concurrency.** Use the package-level function-var seams (`afterImageResolve`,
+  `cranePull`, `isMountPointFn`, ...) to stage a racing pull/rmi in the exact
+  TOCTOU window rather than only single-command paths, and hold the store or
+  cache flocks directly to assert a busy path refuses.
+- **macOS + HVF (self-hosted)**: end-to-end `elfuse-oci run` guest boots:
+  the alpine:3 default-entrypoint smoke that proves pull → sparsebundle →
+  COW clone → HVF launch → exit-code propagation, and a full
+  pull → inspect → list → run → rmi → prune lifecycle that runs
+  python:3.12-slim with an `--entrypoint` override and asserts both teardowns
+  (a plain rmi reclaiming the cold cache with the image, then a `run --keep`
+  cache that rmi refuses without `--force` and `--force` detaches and drops).
 
 ## Test Matrix
 
@@ -358,6 +463,7 @@ Suggested minimum validation:
 | Change area | Recommended validation |
 |-------------|------------------------|
 | CLI, logging, docs-only build rules | `make elfuse` |
+| OCI lifecycle or store behavior | `make oci-lint && make oci-test && make oci-interop` |
 | General syscall or runtime logic | `make elfuse && make check && make test-matrix-elfuse-aarch64` |
 | `/proc`, `/dev`, path, or BusyBox-sensitive behavior | `make elfuse && make check && make test-matrix-elfuse-aarch64` |
 | Rosetta hosting, x86_64 dispatch, VZ ioctls, AOT cache | `make elfuse && make test-rosetta-all` |

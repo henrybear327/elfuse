@@ -868,7 +868,18 @@ How it works:
 4. The entry point becomes `interp_entry + load_base`; the dynamic linker
    takes over from there.
 5. `sys_openat()` redirects guest absolute paths through the sysroot: if
-   `--sysroot` is set, it tries `<sysroot>/<path>` first.
+   `--sysroot` is set, it tries `<sysroot>/<path>` first, then falls back to
+   the literal host path when the target is absent under the sysroot (so a
+   dynamic binary can still reach host resources such as
+   `/etc/resolv.conf`; the guest-private prefixes `/tmp`, `/var/tmp`, and
+   `.ccache` never fall back, see `sysroot.md`).
+
+That host-literal fallback applies to image-launched guests as well: the sysroot
+is a root, not a boundary, and `elfuse-oci run` inherits it unchanged.
+A guest `PATH` search whose candidate is absent under the sysroot can
+therefore resolve to a host binary; `run` compensates by guaranteeing the
+guest a `PATH` (Docker's conventional default when the image env provides
+none), and callers can reorder the search with `--env PATH=...`.
 
 The sysroot is inherited by fork children via IPC state transfer.
 `sys_execve` also loads the interpreter for dynamically linked targets, so

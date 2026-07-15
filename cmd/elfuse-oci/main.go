@@ -63,6 +63,15 @@ run flags:
                      are resolved against the image /etc/passwd and
                      /etc/group before exec.
   --workdir DIR      Guest-absolute initial working directory
+  --rootfs DIR       Use an explicit rootfs directory (implies a plain dir,
+                     no sparsebundle/clone lifecycle)
+  --plain-rootfs     Use a plain directory rootfs instead of the default
+                     macOS case-sensitive sparsebundle
+  --sparse-size SIZE Sparsebundle virtual size (default 16g; macOS only)
+  --no-clone         Run against the base tree, skipping the per-run COW
+                     clone (mutations persist; macOS only)
+  --keep             Keep the per-run COW clone and mount for inspection
+                     (macOS only)
 `)
 }
 

@@ -48,6 +48,12 @@ type runFlags struct {
 	user       string
 	workdir    string
 	rootfs     string
+
+	// Case-sensitive sparsebundle and COW clone controls.
+	plainRootfs bool   // --plain-rootfs: skip the sparsebundle, use a plain dir
+	sparseSize  string // --sparse-size SIZE: sparsebundle virtual size (default 16g)
+	noClone     bool   // --no-clone: run against the base tree, no COW clone
+	keepRootfs  bool   // --keep: do not remove the COW clone on exit
 }
 
 // computeRunSpec applies the Entrypoint/Cmd/Env/WorkingDir/User precedence.

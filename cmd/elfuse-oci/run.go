@@ -9,23 +9,29 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 )
 
 var execElfuseForRun = execElfuse
 
-// elfuseBin locates the elfuse binary to exec for `run`. Precedence:
+// resolveElfuseBin locates the elfuse binary to exec for `run` and verifies
+// it exists. Precedence:
 //   - $ELFUSE_BIN (an override hook for tests and wrapper scripts);
 //   - the sibling of this executable (build/elfuse-oci -> build/elfuse).
-func elfuseBin() (string, error) {
-	if p := os.Getenv("ELFUSE_BIN"); p != "" {
-		return p, nil
+func resolveElfuseBin() (string, error) {
+	bin := os.Getenv("ELFUSE_BIN")
+	if bin == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("locate elfuse: %w", err)
+		}
+		bin = filepath.Join(filepath.Dir(exe), "elfuse")
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("locate elfuse: %w", err)
+	if _, err := os.Stat(bin); err != nil {
+		return "", fmt.Errorf("elfuse binary not found at %s (set $ELFUSE_BIN): %w", bin, err)
 	}
-	return filepath.Join(filepath.Dir(exe), "elfuse"), nil
+	return bin, nil
 }
 
 // elfuseArgv builds the argv for `elfuse --sysroot <rootfs> --user U:G
@@ -59,18 +65,28 @@ func elfuseArgv(rootfs string, spec *runSpec) []string {
 // becomes elfuse in place, so the invoking shell reaps the same pid and
 // terminal signals such as Ctrl-C go straight to elfuse rather than through a
 // Go middleman.
-func execElfuse(rootfs string, spec *runSpec) error {
-	bin, err := elfuseBin()
+//
+// A non-nil lock is the store cache's per-digest run lock. Its descriptor is
+// made exec-survivable so the kernel holds the flock for exactly the elfuse
+// process's lifetime (SIGKILL included) and releases it at guest exit; the
+// one inherited fd is the price of not leaving a Go wrapper alive to babysit
+// the lock.
+func execElfuse(rootfs string, spec *runSpec, lock *flockFile) error {
+	bin, err := resolveElfuseBin()
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(bin); err != nil {
-		return fmt.Errorf("elfuse binary not found at %s (set $ELFUSE_BIN): %w", bin, err)
+	if lock != nil {
+		if err := lock.PreserveAcrossExec(); err != nil {
+			return fmt.Errorf("preserve rootfs lock across exec: %w", err)
+		}
 	}
-	if err := syscall.Exec(bin, elfuseArgv(rootfs, spec), os.Environ()); err != nil {
-		return fmt.Errorf("exec %s: %w", bin, err)
-	}
-	return nil // unreachable
+	err = syscall.Exec(bin, elfuseArgv(rootfs, spec), os.Environ())
+	// Unreachable on success. Keep the lock's *os.File live until the exec
+	// verdict so its finalizer cannot close the fd (dropping the flock) in
+	// the window before the process image is replaced.
+	runtime.KeepAlive(lock)
+	return fmt.Errorf("exec %s: %w", bin, err)
 }
 
 // spawnElfuseWait runs elfuse as a child and waits for it, returning the exit
@@ -83,12 +99,9 @@ func execElfuse(rootfs string, spec *runSpec) error {
 // child so a signal targeted at elfuse-oci alone still propagates, and we
 // survive to reap and report the child's status rather than dying first.
 func spawnElfuseWait(rootfs string, spec *runSpec) (int, error) {
-	bin, err := elfuseBin()
+	bin, err := resolveElfuseBin()
 	if err != nil {
 		return 0, err
-	}
-	if _, err := os.Stat(bin); err != nil {
-		return 0, fmt.Errorf("elfuse binary not found at %s (set $ELFUSE_BIN): %w", bin, err)
 	}
 	// exec.Command uses `bin` as argv[0], so drop the leading "elfuse"
 	// program-name that elfuseArgv includes for syscall.Exec's sake; otherwise

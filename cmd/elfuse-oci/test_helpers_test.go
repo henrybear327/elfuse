@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -39,17 +38,13 @@ func TestMain(m *testing.M) {
 			UID:     1,
 			GID:     2,
 		}
-		if err := execElfuse(os.Getenv("ELFUSE_EXEC_ROOTFS"), spec); err != nil {
+		if err := execElfuse(os.Getenv("ELFUSE_EXEC_ROOTFS"), spec, nil); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(98)
 		}
 		os.Exit(99)
 	}
 	os.Exit(m.Run())
-}
-
-func sliceContains(xs []string, want string) bool {
-	return slices.Contains(xs, want)
 }
 
 func captureOutput(t *testing.T, fn func() error) (string, string, error) {
@@ -169,4 +164,19 @@ func runMainSubprocess(t *testing.T, args ...string) (string, string, error) {
 	cmd.Stderr = &errB
 	waitErr := cmd.Run()
 	return outB.String(), errB.String(), waitErr
+}
+
+// legacyCacheNameForRef reproduces the pre-digest cache naming scheme, which
+// flattened the ref itself into a single (intentionally lossy) path
+// component. New caches are keyed by digest (cacheKeyForDigest). prune
+// --cache recognizes legacy caches purely by their top-level directory name
+// (anything under rootfs/ or cs/ that is not "sha256"), never through this
+// helper; it lives with the tests that fabricate legacy caches, documenting
+// the old layout.
+func legacyCacheNameForRef(ref string) string {
+	return strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(ref)
+}
+
+func legacyRootfsForRef(store, ref string) string {
+	return filepath.Join(store, rootfsCacheDirName, legacyCacheNameForRef(ref))
 }

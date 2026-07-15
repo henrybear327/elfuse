@@ -21,9 +21,29 @@ var (
 	clonefileForRun                 = unix.Clonefile
 	spawnElfuseWaitForRun           = spawnElfuseWait
 	cleanupCloneAndMountForRun      = cleanupCloneAndMount
+	writeKeptSidecarForRun          = writeKeptSidecar
 	osExitForRun                    = os.Exit
 	runNowUnixNano                  = func() int64 { return time.Now().UnixNano() }
 )
+
+// keptSidecarName marks a whole sparsebundle as holding run --keep retained
+// output. It lives beside the bundle's sparsebundle image and flocks, outside
+// the mounted volume, so a cold rmi can detect a deliberate keep without
+// attaching a detached bundle to look for .elfuse-keep clones inside it. The
+// only thing that removes a kept clone is whole-bundle removal (rmi --force,
+// prune --cache --all), which deletes this sidecar along with it, so the marker
+// never goes stale.
+const keptSidecarName = "kept"
+
+func keptSidecarPath(bundle string) string {
+	return filepath.Join(bundle, keptSidecarName)
+}
+
+// writeKeptSidecar records that m's bundle holds run --keep retained output.
+// m.mountPath is <bundle>/mnt, so the sidecar lands beside the bundle image.
+func writeKeptSidecar(m *csMount) error {
+	return touchFile(keptSidecarPath(filepath.Dir(m.mountPath)))
+}
 
 // csBundleDirForDigest is <store>/cs/<algo>/<hex>: it holds the case-sensitive
 // sparsebundle image and the attach mount point for one pinned manifest digest.
@@ -43,7 +63,7 @@ func csBundleDirForDigest(store, digest string) (string, error) {
 // The unpacked base tree persists in the sparsebundle image file across
 // attach/detach cycles, so warm re-runs skip the (slow) unpack and pay only the
 // attach.
-func ensureCaseSensitiveRootfs(cf commonFlags, s *store, ref, digest, size string) (*csMount, string, error) {
+func ensureCaseSensitiveRootfs(cf commonFlags, s *store, ref string, img v1.Image, digest, size string) (*csMount, string, error) {
 	bundle, err := csBundleDirForDigest(cf.store, digest)
 	if err != nil {
 		return nil, "", err
@@ -59,7 +79,11 @@ func ensureCaseSensitiveRootfs(cf commonFlags, s *store, ref, digest, size strin
 			return nil, "", errors.Join(err, closeMount(m))
 		}
 		fmt.Fprintf(os.Stderr, "Unpacking %s -> %s\n", ref, rootfs)
-		if err := unpackImage(s, ref, rootfs); err != nil {
+		// Unpack the caller's already-resolved image, not a re-resolution of
+		// ref: the bundle is keyed by digest, so a repull moving the tag
+		// mid-setup must not fill this digest's sparsebundle with another
+		// image.
+		if err := unpackImage(img, rootfs); err != nil {
 			return nil, "", errors.Join(err, closeMount(m))
 		}
 	}
@@ -78,8 +102,8 @@ func ensureCaseSensitiveRootfs(cf commonFlags, s *store, ref, digest, size strin
 // The clone lives in the same APFS volume as the base tree (clonefile is
 // intra-volume only), so it is instant and free until the guest writes (COW).
 // It isolates each run's mutations from the warm base, so re-runs stay clean.
-func runCaseSensitive(cf commonFlags, s *store, ref, digest string, cfg *v1.ConfigFile, rf runFlags, tail []string) error {
-	m, baseRootfs, err := ensureCaseSensitiveRootfsForRun(cf, s, ref, digest, rf.sparseSize)
+func runCaseSensitive(cf commonFlags, s *store, ref string, img v1.Image, digest string, cfg *v1.ConfigFile, rf runFlags, tail []string) error {
+	m, baseRootfs, err := ensureCaseSensitiveRootfsForRun(cf, s, ref, img, digest, rf.sparseSize)
 	if err != nil {
 		return err
 	}
@@ -89,11 +113,26 @@ func runCaseSensitive(cf commonFlags, s *store, ref, digest string, cfg *v1.Conf
 
 	// Per-run COW clone. --no-clone runs against the base tree directly (mutations
 	// then persist into the warm tree; useful for debugging or when clonefile is
-	// unavailable).
+	// unavailable). Liveness no longer depends on a clone directory existing:
+	// this run holds the bundle's run.lock (via the csMount) for its whole
+	// lifetime, so prune --cache/rmi --force see the volume busy and leave it
+	// attached regardless of whether a clone was made, so --no-clone needs
+	// no placeholder directory.
 	sysroot := baseRootfs
-	var cloneDir string
+	cloneDir := filepath.Join(m.mountPath, fmt.Sprintf("run-%d-%d", os.Getpid(), runNowUnixNano()))
+	if rf.keepRootfs {
+		// Record the bundle-level keep FIRST, before the per-clone marker, so
+		// the two keep records never disagree: if this succeeds but the
+		// per-clone marker below fails, a cold rmi still refuses to discard the
+		// bundle without --force. In the reverse order a failed sidecar write
+		// would leave a sweep-preserved clone that rmi silently discards. It
+		// also covers the --no-clone --keep case (mutations land in the base
+		// tree, no clone marker is written at all).
+		if err := writeKeptSidecarForRun(m); err != nil {
+			return errors.Join(err, closeMount(m))
+		}
+	}
 	if !rf.noClone {
-		cloneDir = filepath.Join(m.mountPath, fmt.Sprintf("run-%d-%d", os.Getpid(), runNowUnixNano()))
 		if err := os.RemoveAll(cloneDir); err != nil {
 			err = fmt.Errorf("remove stale COW clone %s: %w", cloneDir, err)
 			return errors.Join(err, closeMount(m))
@@ -103,6 +142,14 @@ func runCaseSensitive(cf commonFlags, s *store, ref, digest string, cfg *v1.Conf
 			return errors.Join(err, closeMount(m))
 		}
 		sysroot = cloneDir
+		if rf.keepRootfs {
+			// Mark the clone so a later prune/rmi sweep preserves it even
+			// after this run exits and releases run.lock: without the marker
+			// the sweep, which only runs when no run is live, would reap it.
+			if err := writeKeepMarker(cloneDir); err != nil {
+				return errors.Join(err, cleanupCloneAndMountForRun(cloneDir, rf.keepRootfs, m))
+			}
+		}
 	}
 
 	// Any failure past this point must tear down the clone and the mount.
@@ -127,8 +174,11 @@ func runCaseSensitive(cf commonFlags, s *store, ref, digest string, cfg *v1.Conf
 		// --keep leaves the clone and the mount in place for inspection. The
 		// clone lives in the sparsebundle volume, so the mount must stay
 		// attached for it to be reachable on the host; a later run reattaches
-		// (detaching this stale mount first) and the kept clone reappears.
-		if cloneDir != "" {
+		// (detaching this stale mount first) and the kept clone, protected
+		// by its keep marker from any intervening sweep, reappears. Under
+		// --no-clone there is no clone to keep (mutations landed in the base
+		// tree), only the still-attached mount.
+		if !rf.noClone {
 			fmt.Fprintf(os.Stderr, "kept clone: %s\n", cloneDir)
 		}
 		fmt.Fprintf(os.Stderr, "mount stays attached: %s\n", m.mountPath)

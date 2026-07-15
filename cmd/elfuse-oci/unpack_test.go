@@ -33,7 +33,7 @@ func applyEntries(t *testing.T, root *os.Root, entries []tar.Header) {
 			content = []byte(strings.Repeat("x", int(h.Size)))
 		}
 		hdr := h
-		if err := applyEntry(root, &hdr, bytes.NewReader(content), map[string]bool{}); err != nil {
+		if err := applyEntry(root, &hdr, bytes.NewReader(content), newLayerPaths()); err != nil {
 			t.Fatalf("applyEntry %q: %v", h.Name, err)
 		}
 	}
@@ -43,7 +43,7 @@ func applyEntryWithContent(t *testing.T, root *os.Root, h tar.Header, content st
 	t.Helper()
 	hdr := h
 	hdr.Size = int64(len(content))
-	if err := applyEntry(root, &hdr, strings.NewReader(content), map[string]bool{}); err != nil {
+	if err := applyEntry(root, &hdr, strings.NewReader(content), newLayerPaths()); err != nil {
 		t.Fatalf("applyEntry %q: %v", h.Name, err)
 	}
 }
@@ -345,7 +345,7 @@ func TestUnpackSpecialFilesRejected(t *testing.T) {
 		t.Run(tc.want, func(t *testing.T) {
 			root, dir := newRoot(t)
 			hdr := tar.Header{Name: tc.name, Mode: 0o644, Typeflag: tc.typeflag}
-			err := applyEntry(root, &hdr, strings.NewReader(""), map[string]bool{})
+			err := applyEntry(root, &hdr, strings.NewReader(""), newLayerPaths())
 			if err == nil || !strings.Contains(err.Error(), "unsupported special file type "+tc.want) {
 				t.Fatalf("applyEntry special %s err = %v, want unsupported error", tc.want, err)
 			}
@@ -359,7 +359,7 @@ func TestUnpackSpecialFilesRejected(t *testing.T) {
 func TestUnpackPathEscapeRejected(t *testing.T) {
 	root, _ := newRoot(t)
 	hdr := regHeader("../escape", 0o644, 0)
-	if err := applyEntry(root, &hdr, strings.NewReader(""), map[string]bool{}); err == nil {
+	if err := applyEntry(root, &hdr, strings.NewReader(""), newLayerPaths()); err == nil {
 		t.Fatalf("applyEntry accepted ../escape path")
 	}
 }
@@ -385,7 +385,7 @@ func TestUnpackReadsExactSize(t *testing.T) {
 	content := "abc123"
 	r := &countingReader{b: []byte(content + "TRAILING-JUNK")}
 	hdr := regHeader("f", 0o644, int64(len(content)))
-	if err := applyEntry(root, &hdr, r, map[string]bool{}); err != nil {
+	if err := applyEntry(root, &hdr, r, newLayerPaths()); err != nil {
 		t.Fatalf("applyEntry: %v", err)
 	}
 	if r.n != len(content) {
@@ -397,7 +397,7 @@ func TestUnpackReadsExactSize(t *testing.T) {
 
 	short := &countingReader{b: []byte("abc")}
 	hdr = regHeader("g", 0o644, int64(len(content)))
-	if err := applyEntry(root, &hdr, short, map[string]bool{}); err == nil {
+	if err := applyEntry(root, &hdr, short, newLayerPaths()); err == nil {
 		t.Fatal("applyEntry accepted a short body, want size-mismatch error")
 	}
 }

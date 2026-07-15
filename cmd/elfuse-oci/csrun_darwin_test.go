@@ -6,6 +6,7 @@
 package main
 
 import (
+	"archive/tar"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ func withCSRunSeams(t *testing.T) {
 	oldClone := clonefileForRun
 	oldSpawn := spawnElfuseWaitForRun
 	oldCleanup := cleanupCloneAndMountForRun
+	oldSidecar := writeKeptSidecarForRun
 	oldExit := osExitForRun
 	oldNow := runNowUnixNano
 	t.Cleanup(func() {
@@ -32,6 +34,7 @@ func withCSRunSeams(t *testing.T) {
 		clonefileForRun = oldClone
 		spawnElfuseWaitForRun = oldSpawn
 		cleanupCloneAndMountForRun = oldCleanup
+		writeKeptSidecarForRun = oldSidecar
 		osExitForRun = oldExit
 		runNowUnixNano = oldNow
 	})
@@ -48,7 +51,7 @@ func TestRunCaseSensitiveCloneSpawnCleanupAndExit(t *testing.T) {
 	runNowUnixNano = func() int64 { return 123 }
 	expectedClone := filepath.Join(mount, fmt.Sprintf("run-%d-123", os.Getpid()))
 	var clonedSrc, clonedDst string
-	ensureCaseSensitiveRootfsForRun = func(cf commonFlags, s *store, ref, digest, size string) (*csMount, string, error) {
+	ensureCaseSensitiveRootfsForRun = func(cf commonFlags, s *store, ref string, img v1.Image, digest, size string) (*csMount, string, error) {
 		if cf.store != "store" || ref != "local:a" || digest != "sha256:"+strings.Repeat("7", 64) || size != "64m" {
 			t.Fatalf("ensure args = store=%q ref=%q digest=%q size=%q", cf.store, ref, digest, size)
 		}
@@ -104,6 +107,7 @@ func TestRunCaseSensitiveCloneSpawnCleanupAndExit(t *testing.T) {
 		commonFlags{store: "store"},
 		&store{},
 		"local:a",
+		nil,
 		"sha256:"+strings.Repeat("7", 64),
 		cfg,
 		runFlags{sparseSize: "64m"},
@@ -119,7 +123,7 @@ func TestRunCaseSensitiveNoCloneKeepSkipsCleanup(t *testing.T) {
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ensureCaseSensitiveRootfsForRun = func(commonFlags, *store, string, string, string) (*csMount, string, error) {
+	ensureCaseSensitiveRootfsForRun = func(commonFlags, *store, string, v1.Image, string, string) (*csMount, string, error) {
 		return &csMount{mountPath: mount}, base, nil
 	}
 	clonefileForRun = func(string, string, int) error {
@@ -136,6 +140,13 @@ func TestRunCaseSensitiveNoCloneKeepSkipsCleanup(t *testing.T) {
 		t.Fatal("cleanup called with --keep")
 		return nil
 	}
+	// --no-clone --keep still records the keep beside the bundle so a cold rmi
+	// refuses to discard the mutated base tree without --force.
+	sidecarWritten := false
+	writeKeptSidecarForRun = func(*csMount) error {
+		sidecarWritten = true
+		return nil
+	}
 	osExitForRun = func(code int) { panic(runExitCode(code)) }
 
 	defer func() {
@@ -144,8 +155,11 @@ func TestRunCaseSensitiveNoCloneKeepSkipsCleanup(t *testing.T) {
 		if !ok || code != 0 {
 			t.Fatalf("runCaseSensitive panic = %T %v, want exit code 0", r, r)
 		}
+		if !sidecarWritten {
+			t.Error("--no-clone --keep did not write the kept sidecar")
+		}
 	}()
-	err := runCaseSensitive(commonFlags{}, &store{}, "local:a", "sha256:"+strings.Repeat("8", 64),
+	err := runCaseSensitive(commonFlags{}, &store{}, "local:a", nil, "sha256:"+strings.Repeat("8", 64),
 		&v1.ConfigFile{Config: v1.Config{Cmd: []string{"/cmd"}}},
 		runFlags{noClone: true, keepRootfs: true},
 		nil)
@@ -162,7 +176,7 @@ func TestRunCaseSensitiveSpecErrorCleansCloneAndMount(t *testing.T) {
 	m := &csMount{mountPath: mount}
 	runNowUnixNano = func() int64 { return 456 }
 	expectedClone := filepath.Join(mount, fmt.Sprintf("run-%d-456", os.Getpid()))
-	ensureCaseSensitiveRootfsForRun = func(commonFlags, *store, string, string, string) (*csMount, string, error) {
+	ensureCaseSensitiveRootfsForRun = func(commonFlags, *store, string, v1.Image, string, string) (*csMount, string, error) {
 		return m, base, nil
 	}
 	clonefileForRun = func(src, dst string, flags int) error {
@@ -185,7 +199,7 @@ func TestRunCaseSensitiveSpecErrorCleansCloneAndMount(t *testing.T) {
 	}
 	osExitForRun = func(code int) { t.Fatalf("exit called after spec error with code %d", code) }
 
-	err := runCaseSensitive(commonFlags{}, &store{}, "local:a", "sha256:"+strings.Repeat("9", 64),
+	err := runCaseSensitive(commonFlags{}, &store{}, "local:a", nil, "sha256:"+strings.Repeat("9", 64),
 		&v1.ConfigFile{Config: v1.Config{}},
 		runFlags{},
 		nil)
@@ -211,8 +225,12 @@ func TestEnsureCaseSensitiveRootfsProvisionsUnpacksAndSkipsExisting(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
+		img, err := s.image("local:tiny")
+		if err != nil {
+			t.Fatal(err)
+		}
 
-		m, rootfs, err := ensureCaseSensitiveRootfs(commonFlags{store: s.root}, s, "local:tiny", digest, "32m")
+		m, rootfs, err := ensureCaseSensitiveRootfs(commonFlags{store: s.root}, s, "local:tiny", img, digest, "32m")
 		if err != nil {
 			t.Fatalf("ensureCaseSensitiveRootfs: %v", err)
 		}
@@ -242,8 +260,12 @@ func TestEnsureCaseSensitiveRootfsProvisionsUnpacksAndSkipsExisting(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
+		img, err := s.image("local:tiny")
+		if err != nil {
+			t.Fatal(err)
+		}
 
-		m, gotRootfs, err := ensureCaseSensitiveRootfs(commonFlags{store: s.root}, s, "local:tiny", digest, "32m")
+		m, gotRootfs, err := ensureCaseSensitiveRootfs(commonFlags{store: s.root}, s, "local:tiny", img, digest, "32m")
 		if err != nil {
 			t.Fatalf("ensureCaseSensitiveRootfs existing: %v", err)
 		}
@@ -272,9 +294,21 @@ func TestEnsureCaseSensitiveRootfsClosesMountOnUnpackError(t *testing.T) {
 	t.Setenv("HDIUTIL_DETACH_LOG", detachLog)
 	s := openTestStore(t)
 
-	_, _, err := ensureCaseSensitiveRootfs(commonFlags{store: s.root}, s, "local:missing", "sha256:"+strings.Repeat("a", 64), "32m")
-	if err == nil || !strings.Contains(err.Error(), "not pulled") {
-		t.Fatalf("ensureCaseSensitiveRootfs err = %v, want unpack not-pulled error", err)
+	// The image is resolved by the caller now, so an unpack failure has to come
+	// from the image content, not a missing ref (that is caught upstream in
+	// resolveImageForUse). A fifo entry is an unsupported special file, so
+	// unpackImage fails and ensureCaseSensitiveRootfs must still detach the
+	// mount it attached.
+	bad := testImageWithLayers(t, testTarLayer(t,
+		tarEntry{header: tar.Header{Name: "dev/fifo", Typeflag: tar.TypeFifo, Mode: 0o644}}))
+	digest, err := s.addImage("local:bad", bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = ensureCaseSensitiveRootfs(commonFlags{store: s.root}, s, "local:bad", bad, digest, "32m")
+	if err == nil || !strings.Contains(err.Error(), "fifo") {
+		t.Fatalf("ensureCaseSensitiveRootfs err = %v, want unpack fifo error", err)
 	}
 	b, readErr := os.ReadFile(detachLog)
 	if readErr != nil {
@@ -328,7 +362,7 @@ func TestCmdRunDefaultCaseSensitivePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	runNowUnixNano = func() int64 { return 789 }
-	ensureCaseSensitiveRootfsForRun = func(cf commonFlags, _ *store, ref, digest, size string) (*csMount, string, error) {
+	ensureCaseSensitiveRootfsForRun = func(cf commonFlags, _ *store, ref string, img v1.Image, digest, size string) (*csMount, string, error) {
 		if cf.store != s.root || ref != "local:a" || size != "" {
 			t.Fatalf("ensure from cmdRun got store=%q ref=%q size=%q", cf.store, ref, size)
 		}
@@ -361,4 +395,119 @@ func TestCmdRunDefaultCaseSensitivePath(t *testing.T) {
 	}()
 	err := cmdRun([]string{"--store", s.root, "local:a"})
 	t.Fatalf("cmdRun returned %v, want exit panic", err)
+}
+
+// TestRunCaseSensitiveNoCloneCreatesNoMarkerDir pins that a --no-clone run
+// leaves no run-<pid>-<ns> placeholder in the volume: liveness now rides on
+// the bundle's run.lock (held via the csMount), not on a marker directory, so
+// none is created and none is cleaned up.
+func TestRunCaseSensitiveNoCloneCreatesNoMarkerDir(t *testing.T) {
+	withCSRunSeams(t)
+	mount := t.TempDir()
+	base := filepath.Join(mount, "rootfs")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &csMount{mountPath: mount}
+	runNowUnixNano = func() int64 { return 789 }
+	cloneName := filepath.Join(mount, fmt.Sprintf("run-%d-789", os.Getpid()))
+	ensureCaseSensitiveRootfsForRun = func(commonFlags, *store, string, v1.Image, string, string) (*csMount, string, error) {
+		return m, base, nil
+	}
+	clonefileForRun = func(string, string, int) error {
+		t.Fatal("clonefile called with --no-clone")
+		return nil
+	}
+	spawnElfuseWaitForRun = func(rootfs string, spec *runSpec) (int, error) {
+		if rootfs != base {
+			t.Fatalf("spawn rootfs = %q, want base rootfs", rootfs)
+		}
+		if _, err := os.Lstat(cloneName); !os.IsNotExist(err) {
+			t.Fatalf("--no-clone created a placeholder %q: %v, want none", cloneName, err)
+		}
+		return 0, nil
+	}
+	cleanupCloneAndMountForRun = func(clone string, keep bool, cm *csMount) error {
+		return removeClone(clone, keep)
+	}
+	osExitForRun = func(code int) { panic(runExitCode(code)) }
+
+	defer func() {
+		r := recover()
+		code, ok := r.(runExitCode)
+		if !ok || code != 0 {
+			t.Fatalf("runCaseSensitive panic = %T %v, want exit code 0", r, r)
+		}
+	}()
+	err := runCaseSensitive(commonFlags{}, &store{}, "local:a", nil, "sha256:"+strings.Repeat("6", 64),
+		&v1.ConfigFile{Config: v1.Config{Cmd: []string{"/cmd"}}},
+		runFlags{noClone: true},
+		nil)
+	t.Fatalf("runCaseSensitive returned %v, want exit panic", err)
+}
+
+// TestRunCaseSensitiveKeepWritesKeepMarker pins that a --keep run records a
+// keep sidecar beside (not inside) its COW clone so a later sweep preserves the
+// clone after this run exits and releases run.lock, and so image content or a
+// guest cannot forge the keep by writing /.elfuse-keep in the clone.
+func TestRunCaseSensitiveKeepWritesKeepMarker(t *testing.T) {
+	withCSRunSeams(t)
+	mount := t.TempDir()
+	base := filepath.Join(mount, "rootfs")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &csMount{mountPath: mount}
+	runNowUnixNano = func() int64 { return 321 }
+	cloneDir := filepath.Join(mount, fmt.Sprintf("run-%d-321", os.Getpid()))
+	ensureCaseSensitiveRootfsForRun = func(commonFlags, *store, string, v1.Image, string, string) (*csMount, string, error) {
+		return m, base, nil
+	}
+	clonefileForRun = func(src, dst string, flags int) error {
+		return os.MkdirAll(dst, 0o755)
+	}
+	spawnElfuseWaitForRun = func(rootfs string, spec *runSpec) (int, error) {
+		if rootfs != cloneDir {
+			t.Fatalf("spawn rootfs = %q, want clone %q", rootfs, cloneDir)
+		}
+		if _, err := os.Stat(cloneKeepMarkerPath(mount, filepath.Base(cloneDir))); err != nil {
+			t.Fatalf("keep marker during run: %v, want present", err)
+		}
+		// The keep record must live OUTSIDE the clone (the guest's /), so
+		// image content or the guest cannot forge it.
+		if _, err := os.Stat(filepath.Join(cloneDir, ".elfuse-keep")); !os.IsNotExist(err) {
+			t.Fatalf("keep record found inside the clone: %v, want only the sidecar", err)
+		}
+		return 0, nil
+	}
+	cleanupCloneAndMountForRun = func(string, bool, *csMount) error {
+		t.Fatal("cleanup called with --keep")
+		return nil
+	}
+	sidecarWritten := false
+	writeKeptSidecarForRun = func(*csMount) error {
+		sidecarWritten = true
+		return nil
+	}
+	osExitForRun = func(code int) { panic(runExitCode(code)) }
+
+	defer func() {
+		r := recover()
+		code, ok := r.(runExitCode)
+		if !ok || code != 0 {
+			t.Fatalf("runCaseSensitive panic = %T %v, want exit code 0", r, r)
+		}
+		// The kept clone with its marker survives: a later sweep skips it.
+		if listed := listSweepableClones(mount); len(listed) != 0 {
+			t.Fatalf("listSweepableClones = %v, want the kept clone skipped", listed)
+		}
+		if !sidecarWritten {
+			t.Error("--keep did not write the kept sidecar")
+		}
+	}()
+	err := runCaseSensitive(commonFlags{}, &store{}, "local:a", nil, "sha256:"+strings.Repeat("6", 64),
+		&v1.ConfigFile{Config: v1.Config{Cmd: []string{"/cmd"}}},
+		runFlags{keepRootfs: true},
+		nil)
+	t.Fatalf("runCaseSensitive returned %v, want exit panic", err)
 }

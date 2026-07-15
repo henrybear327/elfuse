@@ -232,16 +232,6 @@ func writeSpotlightMarker(mountPath string) error {
 	return touchFile(filepath.Join(mountPath, ".metadata_never_index"))
 }
 
-// touchFile creates (or truncates) an empty marker file. The markers carry
-// no content; only their existence matters.
-func touchFile(path string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	return f.Close()
-}
-
 // isMountPoint reports whether path is currently a mount point by comparing its
 // device id against its parent's.
 func isMountPoint(path string) bool {

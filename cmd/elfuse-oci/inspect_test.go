@@ -113,6 +113,80 @@ func TestInspectHumanIncludesCreatedEnvAndLayers(t *testing.T) {
 	}
 }
 
+// TestInspectHoldsStoreLock pins #2: inspect resolves and reads image metadata
+// under the store lock, so a concurrent rmi cannot delete blobs mid-inspect.
+// The proof is that inspect blocks while another holder keeps the lock and
+// completes once it is released.
+func TestInspectHoldsStoreLock(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.addImage("local:tiny", tinyImage(t)); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := s.lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		var buf bytes.Buffer
+		done <- inspect(&buf, s, "local:tiny", false)
+	}()
+
+	select {
+	case <-done:
+		unlock()
+		t.Fatal("inspect completed while the store lock was held; it does not take the lock")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("inspect after unlock: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("inspect did not complete after the store lock was released")
+	}
+}
+
+// TestInspectAndListAgreeOnVariant pins #13: an image with a platform variant
+// (linux/arm/v7) must show the full os/arch/variant in inspect, matching list,
+// not the truncated os/arch.
+func TestInspectAndListAgreeOnVariant(t *testing.T) {
+	s := openTestStore(t)
+	img := tinyImage(t)
+	cfg, err := img.ConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Architecture = "arm"
+	cfg.Variant = "v7"
+	img, err = mutate.ConfigFile(img, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.addImage("local:v7", img); err != nil {
+		t.Fatal(err)
+	}
+
+	var ins bytes.Buffer
+	if err := inspect(&ins, s, "local:v7", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ins.String(), "linux/arm/v7") {
+		t.Fatalf("inspect platform missing variant:\n%s", ins.String())
+	}
+	var lst bytes.Buffer
+	if err := list(&lst, s, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lst.String(), "linux/arm/v7") {
+		t.Fatalf("list platform missing variant:\n%s", lst.String())
+	}
+}
+
 func TestInspectMissingRefAndConfigErrors(t *testing.T) {
 	s := openTestStore(t)
 	if err := inspect(&bytes.Buffer{}, s, "local:missing", false); err == nil || !strings.Contains(err.Error(), "not pulled") {

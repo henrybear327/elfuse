@@ -25,6 +25,20 @@ type tarEntry struct {
 	body   string
 }
 
+// unpackRef resolves ref to its pinned image and unpacks it into dest, the
+// two-step the production callers do (resolve under the store lock, then
+// unpack the resolved image). It fails the test if the ref cannot be
+// resolved; the returned error is unpackImage's, so callers testing unpack
+// failures still see them.
+func unpackRef(t *testing.T, s *store, ref, dest string) error {
+	t.Helper()
+	img, err := s.image(ref)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", ref, err)
+	}
+	return unpackImage(img, dest)
+}
+
 func testTarLayer(t *testing.T, entries ...tarEntry) v1.Layer {
 	t.Helper()
 	var buf bytes.Buffer
@@ -105,7 +119,7 @@ func TestUnpackImageAppliesLayersInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	if err := unpackImage(s, "local:layered", dest); err != nil {
+	if err := unpackRef(t, s, "local:layered", dest); err != nil {
 		t.Fatalf("unpackImage: %v", err)
 	}
 
@@ -151,7 +165,7 @@ func TestUnpackImageCleansUpPartialRootfs(t *testing.T) {
 
 	parent := t.TempDir()
 	dest := filepath.Join(parent, "rootfs")
-	if err := unpackImage(s, "local:partial", dest); err == nil {
+	if err := unpackRef(t, s, "local:partial", dest); err == nil {
 		t.Fatal("unpackImage succeeded, want failure on fifo entry")
 	}
 	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
@@ -170,7 +184,7 @@ func TestUnpackImageCleansUpPartialRootfs(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := unpackImage(s, "local:partial", pre); err == nil {
+	if err := unpackRef(t, s, "local:partial", pre); err == nil {
 		t.Fatal("unpackImage succeeded, want failure on fifo entry")
 	}
 	if _, err := os.Stat(sentinel); err != nil {
@@ -194,7 +208,7 @@ func TestUnpackImagePreexistingDestUnpacksInPlace(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := unpackImage(s, "local:merge", dest); err != nil {
+	if err := unpackRef(t, s, "local:merge", dest); err != nil {
 		t.Fatalf("unpackImage: %v", err)
 	}
 	if b, err := os.ReadFile(sentinel); err != nil || string(b) != "keep" {
@@ -221,7 +235,7 @@ func TestApplyEntryRootNoOpsHardlinkEscapeAndSymlinkReplacement(t *testing.T) {
 	root, dir := newRoot(t)
 	for _, name := range []string{".", "/"} {
 		h := regHeader(name, 0o644, 0)
-		if err := applyEntry(root, &h, strings.NewReader(""), map[string]bool{}); err != nil {
+		if err := applyEntry(root, &h, strings.NewReader(""), newLayerPaths()); err != nil {
 			t.Fatalf("applyEntry root no-op %q: %v", name, err)
 		}
 	}
@@ -234,7 +248,7 @@ func TestApplyEntryRootNoOpsHardlinkEscapeAndSymlinkReplacement(t *testing.T) {
 	}
 
 	hardlink := linkHeader("escape-link", "../outside")
-	if err := applyEntry(root, &hardlink, strings.NewReader(""), map[string]bool{}); err == nil {
+	if err := applyEntry(root, &hardlink, strings.NewReader(""), newLayerPaths()); err == nil {
 		t.Fatal("applyEntry accepted hardlink target escaping root")
 	}
 
@@ -246,7 +260,7 @@ func TestApplyEntryRootNoOpsHardlinkEscapeAndSymlinkReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := regHeader("replace-me", 0o644, int64(len("inside")))
-	if err := applyEntry(root, &file, strings.NewReader("inside"), map[string]bool{}); err != nil {
+	if err := applyEntry(root, &file, strings.NewReader("inside"), newLayerPaths()); err != nil {
 		t.Fatalf("applyEntry replacing symlink: %v", err)
 	}
 	if b, err := os.ReadFile(outside); err != nil || string(b) != "outside" {
@@ -264,7 +278,7 @@ func TestApplyEntryAdditionalErrorBranches(t *testing.T) {
 	t.Run("unsupported tar type", func(t *testing.T) {
 		root, _ := newRoot(t)
 		h := tar.Header{Name: "weird", Typeflag: 'x'}
-		err := applyEntry(root, &h, strings.NewReader(""), map[string]bool{})
+		err := applyEntry(root, &h, strings.NewReader(""), newLayerPaths())
 		if err == nil || !strings.Contains(err.Error(), "unsupported tar type") || !strings.Contains(err.Error(), tarTypeName('x')) {
 			t.Fatalf("unsupported type err = %v, want tar type error", err)
 		}
@@ -273,7 +287,7 @@ func TestApplyEntryAdditionalErrorBranches(t *testing.T) {
 	t.Run("absolute symlink to root", func(t *testing.T) {
 		root, dir := newRoot(t)
 		h := symHeader("usr/root-link", "/")
-		if err := applyEntry(root, &h, strings.NewReader(""), map[string]bool{}); err != nil {
+		if err := applyEntry(root, &h, strings.NewReader(""), newLayerPaths()); err != nil {
 			t.Fatalf("applyEntry symlink to root: %v", err)
 		}
 		target, err := os.Readlink(filepath.Join(dir, "usr", "root-link"))
@@ -288,14 +302,14 @@ func TestApplyEntryAdditionalErrorBranches(t *testing.T) {
 	t.Run("parent path is regular file", func(t *testing.T) {
 		root, dir := newRoot(t)
 		parent := regHeader("parent", 0o644, 0)
-		if err := applyEntry(root, &parent, strings.NewReader(""), map[string]bool{}); err != nil {
+		if err := applyEntry(root, &parent, strings.NewReader(""), newLayerPaths()); err != nil {
 			t.Fatal(err)
 		}
 		// A non-directory on the parent path is replaced with a real
 		// directory (containerd/Docker behavior), not an error: layers may
 		// legitimately turn a lower layer's file into a directory.
 		child := regHeader("parent/child", 0o644, 0)
-		if err := applyEntry(root, &child, strings.NewReader(""), map[string]bool{}); err != nil {
+		if err := applyEntry(root, &child, strings.NewReader(""), newLayerPaths()); err != nil {
 			t.Fatalf("applyEntry child under regular-file parent: %v, want file replaced by directory", err)
 		}
 		fi, err := os.Lstat(filepath.Join(dir, "parent"))
@@ -310,7 +324,7 @@ func TestApplyEntryAdditionalErrorBranches(t *testing.T) {
 	t.Run("opaque missing directory is no-op", func(t *testing.T) {
 		root, _ := newRoot(t)
 		h := tar.Header{Name: "missing/.wh..wh..opq", Typeflag: tar.TypeReg}
-		if err := applyEntry(root, &h, strings.NewReader(""), map[string]bool{}); err != nil {
+		if err := applyEntry(root, &h, strings.NewReader(""), newLayerPaths()); err != nil {
 			t.Fatalf("opaque missing dir: %v", err)
 		}
 	})
@@ -318,14 +332,14 @@ func TestApplyEntryAdditionalErrorBranches(t *testing.T) {
 	t.Run("opaque marker under lower-layer regular file replaces it", func(t *testing.T) {
 		root, dir := newRoot(t)
 		file := regHeader("notdir", 0o644, 0)
-		if err := applyEntry(root, &file, strings.NewReader(""), map[string]bool{}); err != nil {
+		if err := applyEntry(root, &file, strings.NewReader(""), newLayerPaths()); err != nil {
 			t.Fatal(err)
 		}
 		// The opaque marker hides all lower content under the name, so a
 		// lower layer's non-directory there is replaced with an empty real
 		// directory rather than cleared through or rejected.
 		h := tar.Header{Name: "notdir/.wh..wh..opq", Typeflag: tar.TypeReg}
-		if err := applyEntry(root, &h, strings.NewReader(""), map[string]bool{}); err != nil {
+		if err := applyEntry(root, &h, strings.NewReader(""), newLayerPaths()); err != nil {
 			t.Fatalf("opaque marker under regular file: %v, want file replaced by empty directory", err)
 		}
 		fi, err := os.Lstat(filepath.Join(dir, "notdir"))
@@ -337,12 +351,12 @@ func TestApplyEntryAdditionalErrorBranches(t *testing.T) {
 	t.Run("opaque marker under same-layer regular file is a no-op", func(t *testing.T) {
 		root, dir := newRoot(t)
 		file := regHeader("notdir", 0o644, 0)
-		applied := map[string]bool{}
-		if err := applyEntry(root, &file, strings.NewReader(""), applied); err != nil {
+		lp := newLayerPaths()
+		if err := applyEntry(root, &file, strings.NewReader(""), lp); err != nil {
 			t.Fatal(err)
 		}
 		h := tar.Header{Name: "notdir/.wh..wh..opq", Typeflag: tar.TypeReg}
-		if err := applyEntry(root, &h, strings.NewReader(""), applied); err != nil {
+		if err := applyEntry(root, &h, strings.NewReader(""), lp); err != nil {
 			t.Fatalf("opaque marker under same-layer file: %v, want no-op", err)
 		}
 		fi, err := os.Lstat(filepath.Join(dir, "notdir"))
@@ -403,7 +417,7 @@ func TestUnpackOpaqueAfterSameLayerChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	if err := unpackImage(s, "local:opq-late", dest); err != nil {
+	if err := unpackRef(t, s, "local:opq-late", dest); err != nil {
 		t.Fatalf("unpackImage: %v", err)
 	}
 
@@ -412,6 +426,40 @@ func TestUnpackOpaqueAfterSameLayerChildren(t *testing.T) {
 	}
 	if b, err := os.ReadFile(filepath.Join(dest, "opt", "new")); err != nil || string(b) != "new" {
 		t.Fatalf("opt/new = %q, err=%v; want same-layer addition to survive the late marker", b, err)
+	}
+}
+
+// TestUnpackOpaqueAfterImplicitParentChildren pins #1: a late opaque marker
+// must preserve the current layer's descendants even when their immediate
+// parent directory has no tar entry of its own (an implicit parent, created
+// only because a deeper file needed it). Here the upper layer writes
+// dir/sub/file with NO dir/sub entry, then an opaque marker on dir: dir/sub and
+// its file must survive while the lower layer's dir/old is cleared.
+func TestUnpackOpaqueAfterImplicitParentChildren(t *testing.T) {
+	lower := testTarLayer(t,
+		tarEntry{header: dirHeader("dir", 0o755)},
+		tarEntry{header: regHeader("dir/old", 0o644, 0), body: "hidden"},
+	)
+	upper := testTarLayer(t,
+		// No dir/sub entry: the parent is implicit, created for dir/sub/file.
+		tarEntry{header: regHeader("dir/sub/file", 0o644, 0), body: "kept"},
+		tarEntry{header: tar.Header{Name: "dir/.wh..wh..opq", Typeflag: tar.TypeReg, Mode: 0o644}},
+	)
+
+	s := openTestStore(t)
+	if _, err := s.addImage("local:opq-implicit", testImageWithLayers(t, lower, upper)); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	if err := unpackRef(t, s, "local:opq-implicit", dest); err != nil {
+		t.Fatalf("unpackImage: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "dir", "old")); !os.IsNotExist(err) {
+		t.Fatalf("opaque-hidden dir/old = %v, want IsNotExist", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "dir", "sub", "file")); err != nil || string(b) != "kept" {
+		t.Fatalf("dir/sub/file = %q, err=%v; want the implicit-parent child to survive the late marker", b, err)
 	}
 }
 
@@ -433,7 +481,7 @@ func TestUnpackRejectsBareWhiteout(t *testing.T) {
 	defer root.Close()
 
 	hdr := tar.Header{Name: "opt/.wh.", Typeflag: tar.TypeReg, Mode: 0o644}
-	if err := applyEntry(root, &hdr, strings.NewReader(""), map[string]bool{}); err == nil {
+	if err := applyEntry(root, &hdr, strings.NewReader(""), newLayerPaths()); err == nil {
 		t.Fatal("bare .wh. entry applied, want invalid-whiteout error")
 	}
 	if _, err := os.Stat(filepath.Join(dest, "opt", "keep")); err != nil {
@@ -460,7 +508,7 @@ func TestUnpackDirReplacesLowerSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	if err := unpackImage(s, "local:dir-over-link", dest); err != nil {
+	if err := unpackRef(t, s, "local:dir-over-link", dest); err != nil {
 		t.Fatalf("unpackImage: %v", err)
 	}
 
@@ -498,7 +546,7 @@ func TestUnpackParentSymlinkReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	if err := unpackImage(s, "local:parent-link", dest); err != nil {
+	if err := unpackRef(t, s, "local:parent-link", dest); err != nil {
 		t.Fatalf("unpackImage: %v", err)
 	}
 
@@ -534,7 +582,7 @@ func TestUnpackDirEntryParentSymlinkReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	if err := unpackImage(s, "local:parent-link-dir", dest); err != nil {
+	if err := unpackRef(t, s, "local:parent-link-dir", dest); err != nil {
 		t.Fatalf("unpackImage: %v", err)
 	}
 
@@ -573,7 +621,7 @@ func TestUnpackOpaqueThroughSymlinkKeepsTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	if err := unpackImage(s, "local:opaque-link", dest); err != nil {
+	if err := unpackRef(t, s, "local:opaque-link", dest); err != nil {
 		t.Fatalf("unpackImage: %v", err)
 	}
 

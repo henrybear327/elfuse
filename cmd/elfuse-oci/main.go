@@ -18,10 +18,14 @@
 //	elfuse-oci run     [--store DIR] [--entrypoint E] [--env K=V]...
 //	                         [--user UID[:GID]] [--workdir DIR] [--platform ...]
 //	                         <ref> [args...]
+//	elfuse-oci list   [--store DIR] [--json]            (alias: images)
+//	elfuse-oci rmi    [--store DIR] [--force] <ref|digest>
+//	elfuse-oci prune  [--store DIR] [--cache] [--all] [--dry-run]
 //
 // <ref> is an OCI image reference (docker.io/library/alpine:3, ghcr.io/...,
-// localhost:5000/foo:tag, or name@sha256:...). The default store is
-// $ELFUSE_OCI_STORE or ~/.local/share/elfuse/oci.
+// localhost:5000/foo:tag, or name@sha256:...). `rmi` also accepts a unique
+// sha256 digest prefix from `list`. The default store is $ELFUSE_OCI_STORE or
+// ~/.local/share/elfuse/oci.
 package main
 
 import (
@@ -46,6 +50,9 @@ commands:
   unpack   Unpack a stored image's layers into a rootfs directory
   inspect  Print a stored image's manifest + config
   run      Pull + unpack + exec the image's entrypoint under elfuse
+  list     List refs pinned in the store with digest/platform/size (alias: images)
+  rmi      Remove a ref or unique digest and garbage-collect unreachable blobs
+  prune    Garbage-collect unreachable blobs; --cache also drops rootfs/sparsebundle caches
   help     Show this help
   version  Print the elfuse-oci version
 
@@ -72,6 +79,19 @@ run flags:
                      clone (mutations persist; macOS only)
   --keep             Keep the per-run COW clone and mount for inspection
                      (macOS only)
+
+list flags:
+  --json             Emit a JSON array of {ref,digest,platform,created,size,layers}
+
+rmi flags:
+  --force            Also discard run --keep retained output held in the cache;
+                     without it rmi refuses. A cold cache is always reclaimed
+                     with its image; a cache a live run uses is never removed
+
+prune flags:
+  --cache            Also drop elfuse unpacked caches (rootfs/ and, on macOS, cs/)
+  --all              With --cache, drop caches even for still-pulled refs
+  --dry-run          Report what would be reclaimed without deleting
 `)
 }
 
@@ -108,6 +128,12 @@ func dispatch(cmd string, rest []string) error {
 		return cmdInspect(rest)
 	case "run":
 		return cmdRun(rest)
+	case "list", "images":
+		return cmdList(rest)
+	case "rmi":
+		return cmdRmi(rest)
+	case "prune":
+		return cmdPrune(rest)
 	default:
 		usage()
 		return fmt.Errorf("unknown command: %s", cmd)

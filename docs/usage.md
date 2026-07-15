@@ -216,3 +216,188 @@ That has a few direct implications:
   work entirely inside the VM. Programs that link against `libfuse`
   (sshfs, ntfs-3g, AppImage runtimes) run without macFUSE, FUSE-T, or
   FSKit on the host.
+
+## OCI Images
+
+elfuse can run programs from OCI images. All image work is handled by
+`build/elfuse-oci` (Go); execution still goes through the normal
+`build/elfuse --sysroot` runtime, so `elfuse` itself has no OCI commands.
+
+```sh
+build/elfuse-oci <command> [flags]
+```
+
+This consumes the OCI image format for distribution; it is not a container
+runtime. There are no namespaces, cgroups, port mapping, daemon, `docker exec`,
+or image build/push, and the rootfs is the guest's root, not an isolation
+boundary. See
+[oci-design.md](oci-design.md#scope-and-limitations) for the exact list of what
+is and is not implemented, and for the design model.
+
+### Store And Platform
+
+`elfuse-oci` stores images in an OCI image-layout directory. The default
+store is `$ELFUSE_OCI_STORE` when set, otherwise `~/.local/share/elfuse/oci`.
+Use `--store DIR` on any subcommand to override it.
+
+Pulls default to `linux/arm64`. Use `--platform os/arch[/variant]` to select
+another platform, such as `linux/amd64` for a Rosetta-backed guest:
+
+```sh
+build/elfuse-oci pull --platform linux/amd64 alpine:3
+```
+
+### Commands
+
+```sh
+build/elfuse-oci pull [--store DIR] [--platform os/arch[/variant]] <ref>
+```
+
+Pull `<ref>` into the local store and pin it by its original reference.
+
+```sh
+build/elfuse-oci inspect [--store DIR] [--json] <ref>
+```
+
+Print the stored image's manifest and config summary. `--json` prints the raw
+config JSON.
+
+```sh
+build/elfuse-oci unpack [--store DIR] [--rootfs DIR] <ref>
+```
+
+Unpack the stored image's layers into a rootfs directory. Without `--rootfs`,
+the store's digest-keyed rootfs cache is used.
+
+```sh
+build/elfuse-oci run [flags] <ref> [args...]
+```
+
+Run an image. If `<ref>` is not present, `run` pulls it first; if the rootfs
+cache is missing, it unpacks it first.
+
+```sh
+build/elfuse-oci list [--store DIR] [--json]      # alias: images
+```
+
+List pinned refs, their manifest digests, platform, compressed layer size, and
+layer count.
+
+```sh
+build/elfuse-oci rmi [--store DIR] [--force] <ref|digest>
+```
+
+Remove a ref, or a unique SHA-256 digest prefix from `list`, and
+garbage-collect blobs no remaining ref reaches. Removing the last ref for an
+image also reclaims its unpacked cache. `rmi` refuses while a live run still
+uses the cache (never overridable), and refuses without `--force` when the
+cache holds `run --keep` output.
+
+```sh
+build/elfuse-oci prune [--store DIR] [--cache] [--all] [--dry-run]
+```
+
+Garbage-collect unreachable blobs. `--cache` also removes unpacked rootfs
+caches; with `--cache`, `--all` removes them even for still-pulled refs.
+`--dry-run` reports what would be removed.
+
+### Running Images
+
+```sh
+make elfuse elfuse-oci
+
+build/elfuse-oci run alpine:3 /bin/sh -c 'echo hello'
+```
+
+`run` accepts the common flags plus these run-specific flags:
+
+| Flag | Meaning |
+|------|---------|
+| `--entrypoint PATH` | Replace the image Entrypoint. The image Cmd is dropped. |
+| `--env KEY=VALUE` | Set or replace a guest environment variable. Repeatable. |
+| `--env KEY` | Import `KEY` from the host environment when present. |
+| `--clear-env` | Start from an empty environment instead of image `Env`. |
+| `--user UID[:GID]` | Run as a numeric user and optional group. |
+| `--user name[:group]` | Resolve names through rootfs `/etc/passwd` and `/etc/group`. |
+| `--workdir DIR` | Set the initial guest working directory. Must be absolute. |
+| `--rootfs DIR` | Use an explicit rootfs directory. |
+| `--plain-rootfs` | Use a plain directory cache instead of the macOS sparsebundle. |
+| `--sparse-size SIZE` | Set the sparsebundle virtual size. Default is `16g`. |
+| `--no-clone` | Run against the cached base rootfs directly. Mutations persist. |
+| `--keep` | Keep the per-run clone and sparsebundle mount for inspection. |
+
+The command vector follows Docker-style rules: with no CLI args, the image
+Entrypoint plus Cmd is used; CLI args after `<ref>` replace image Cmd but keep
+image Entrypoint; `--entrypoint` replaces image Entrypoint and discards Cmd; an
+empty final command is an error. A relative path command (`./server`) resolves
+against the working directory, and a bare name resolves via the merged `PATH`
+inside the image rootfs (see `oci-design.md` for the `argv[0]` caveat).
+
+Environment resolution starts from image `Env` (or an empty environment under
+`--clear-env`); each `--env KEY=VALUE` sets or appends, and a bare `--env KEY`
+imports the host value when set. `--user` defaults to image `User`, then root;
+symbolic users and groups are resolved after the rootfs exists, and a name that
+fails to resolve is an error.
+
+### macOS Rootfs Behavior
+
+By default, `run` uses a case-sensitive APFS sparsebundle per image digest so
+the guest's case-sensitive filenames do not collide on a case-insensitive host
+volume. The unpacked image lives as a cached base tree inside the sparsebundle,
+and each run gets an APFS copy-on-write clone of it, so guest writes do not
+mutate the cached rootfs. The clone is removed and the sparsebundle detached
+when the guest exits; `--keep` leaves both for inspection, and `prune --cache`
+reaps stale caches (including clones left by killed runs) later.
+
+Use `--plain-rootfs` or `--rootfs DIR` when you explicitly want the regular
+directory path.
+
+### Runtime Files
+
+Before launching the guest, `run` writes these files into the run rootfs:
+
+| File | Source |
+|------|--------|
+| `/etc/resolv.conf` | Host resolver config, with a fallback nameserver if needed. |
+| `/etc/hosts` | localhost plus the host name. |
+| `/etc/hostname` | Host name. |
+
+The `resolv.conf` fallback (used only when the host's own config is unreadable
+or empty) is Google's public `8.8.8.8`; on hosts using private or split-horizon
+DNS, fix the host `/etc/resolv.conf` if guest lookups must stay on the local
+resolver. The C runtime also serves synthetic `/proc` and selected `/dev`
+entries to every guest, image-launched or not.
+
+### Host Fallback And PATH
+
+The image rootfs is a root, not a boundary: an absolute guest path absent from
+the rootfs falls back to the literal host path, the same mechanism that lets a
+plain positional `elfuse <binary>` run reach host resources such as
+`/etc/resolv.conf`. The guest-private prefixes (`/tmp`, `/var/tmp`, `.ccache`)
+are the exception and always resolve inside the rootfs; see
+[sysroot.md](sysroot.md) for the dispatch model.
+
+The visible consequence is the guest `PATH` search. With an image `PATH`
+searching `/usr/bin` before `/bin`, a bare `gzip` in an image that ships it only
+at `/bin/gzip` resolves to the host's incompatible `/usr/bin/gzip` (a macOS
+Mach-O) first. Prefer usr-merged images, invoke by absolute path, or reorder the
+search with `--env PATH=...`. When neither the image config nor `--env` provides
+a `PATH`, `run` appends Docker's conventional default
+(`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`). See
+[oci-design.md](oci-design.md#run-paths) for the rationale.
+
+### Lifecycle
+
+The store keeps image blobs separately from unpacked rootfs caches, and garbage
+collection is reachability-based: removing a ref never deletes blobs another ref
+still reaches, and removing one of several refs to the same digest keeps the
+shared cache. A normal cleanup sequence:
+
+```sh
+build/elfuse-oci list
+build/elfuse-oci rmi alpine:3
+build/elfuse-oci prune --cache --dry-run
+build/elfuse-oci prune --cache
+```
+
+See [oci-design.md](oci-design.md#lifecycle) for the GC and cache-safety model.

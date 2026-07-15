@@ -52,6 +52,7 @@ boot-time overhead those tools impose.
 - Xcode Command Line Tools, `clang`, `codesign`, and GNU `make`
 - GNU `objcopy` or `llvm-objcopy`
 - Hypervisor entitlement: `com.apple.security.hypervisor`
+- Go, for building the `elfuse-oci` OCI CLI
 
 To build only (`make elfuse`) without running tests, just the 
 Xcode Command Line Tools and `objcopy` (`brew install binutils`) suffice.
@@ -101,11 +102,43 @@ state.
 The build signs `build/elfuse` before use. Override the signing identity with
 `SIGN_IDENTITY="Developer ID ..."` when needed.
 
+## OCI Images
+
+OCI images are handled by `elfuse-oci`, a Go companion binary that owns
+the whole image lifecycle and invokes `elfuse` purely as the runtime. The point
+is distribution, not containment: an image is consumed as a packaged Linux root
+filesystem, replacing the hand-built `--sysroot` trees that dynamically-linked
+guests previously required. The execution model is unchanged (Linux ELF, elfuse
+syscall translation, macOS kernel), with no VM and no Linux kernel in the loop.
+
+This is not a container runtime. The image rootfs is the guest's root, not an
+isolation boundary: an absolute guest path absent from the rootfs falls back to
+the literal host path, and the guest shares the host's network identity, PID
+space, and clock. There are no namespaces, cgroups, port mapping, or daemon.
+The target is CLI tooling, compilers, and scripting userspace;
+[docs/oci-design.md](docs/oci-design.md#scope-and-limitations) lists exactly
+which OCI features are implemented.
+
+```sh
+make elfuse elfuse-oci
+
+build/elfuse-oci pull alpine:3
+build/elfuse-oci run alpine:3 /bin/sh -c 'echo hello from elfuse'
+```
+
+Images are stored under `$ELFUSE_OCI_STORE`, or `~/.local/share/elfuse/oci`
+by default. On macOS, `run` uses a case-sensitive APFS sparsebundle and a
+per-run copy-on-write rootfs clone so normal APFS case folding does not
+corrupt Linux filenames.
+
+See [docs/usage.md](docs/usage.md#oci-images) for commands and flags, and
+[docs/oci-design.md](docs/oci-design.md) for the implementation model.
+
 ## Documentation
 
 - [docs/usage.md](docs/usage.md): command-line options, x86_64 via
-  Rosetta, dynamic linking via `--sysroot`, and attaching `gdb` /
-  `lldb` to the built-in stub.
+  Rosetta, dynamic linking via `--sysroot`, OCI images, and attaching
+  `gdb` / `lldb` to the built-in stub.
 - [docs/testing.md](docs/testing.md): build prerequisites, the
   `make check` flow, the QEMU and Rosetta cross-check matrices, and
   fixture handling.
@@ -113,6 +146,9 @@ The build signs `build/elfuse` before use. Override the signing identity with
   reference -- runtime lifecycle, HVF constraints, EL1 shim and HVC
   protocol, page-table splitting, syscall translation tables, threads
   / futex, fork / clone IPC, signals, ptrace, and the GDB stub.
+- [docs/oci-design.md](docs/oci-design.md): how elfuse-oci, the image
+  store, layer unpacker, sparsebundle run path, and lifecycle commands
+  fit into elfuse.
 
 ## Build And Validation
 
@@ -123,6 +159,7 @@ make elfuse        # build and codesign build/elfuse
 make check         # quick unit suite + BusyBox applet smoke
 make test-gdbstub  # debugger integration
 make test-matrix   # cross-check elfuse against QEMU on the same corpus
+make oci-test      # elfuse-oci unit and conformance tests
 make lint          # clang-tidy
 ```
 
@@ -141,6 +178,8 @@ do.
 - Linux kernel features that have no user-space-syscall analog:
   namespaces, cgroups, kernel modules, eBPF, `io_uring`, KVM, perf
   events.
+- Docker-compatible container runtime features such as port mapping,
+  detached containers, `docker exec`, image build/push, and daemon APIs.
 - Intel Macs. Apple Silicon only (M1 and later).
 - Hosting a VM from inside a guest. The guest cannot use HVF or KVM.
 - One guest process tree per `elfuse` host process. HVF allows one VM

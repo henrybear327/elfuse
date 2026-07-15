@@ -101,7 +101,9 @@ endef
 .PHONY: all elfuse
 .PHONY: gen-syscall-dispatch check-syscall-dispatch
 
-all: elfuse elfuse-oci
+# Plain `make` must keep building with only the C toolchain; elfuse-oci is an
+# explicit opt-in target because it needs Go (`make elfuse elfuse-oci`).
+all: elfuse
 
 ## Regenerate build/dispatch.h from src/syscall/dispatch.tbl
 gen-syscall-dispatch:
@@ -135,12 +137,45 @@ OCI_SRCS := $(shell find cmd/elfuse-oci -type f -name '*.go' 2>/dev/null)
 .PHONY: elfuse-oci
 elfuse-oci: $(OCI_BIN)
 
+# OCI image-layout conformance + cross-tool interop. Pulls fixtures into a
+# throwaway store and asserts the on-disk layout is spec-shaped and readable by
+# crane/skopeo/umoci (whichever are installed locally; all are required in CI).
+# Pure Go + jq; no HVF, runs on Linux. Requires network to pull fixtures.
+.PHONY: oci-interop
+oci-interop: $(OCI_BIN)
+	$(Q)scripts/oci-interop.sh
+
+# Go unit tests for the OCI image CLI (offline). Set ELFUSE_OCI_NETTEST=1
+# to also exercise the network pull round-trip conformance test.
+.PHONY: oci-test
+oci-test:
+	$(Q)$(GO) test ./cmd/elfuse-oci/
+
+# gofmt + go vet gate for the OCI image CLI. `go vet` is run for both GOOS
+# values so the darwin-only sparsebundle files are checked from Linux CI and the
+# non-darwin stubs are checked from a macOS host. The darwin pass pins
+# GOARCH=arm64 (the only supported darwin target, and what CI checks) so an
+# amd64 Linux host does not silently vet darwin/amd64 instead. oci-lint
+# bundles both so a local run matches the CI gate.
+.PHONY: oci-vet oci-fmt-check oci-lint
+oci-vet:
+	$(Q)GOOS=darwin GOARCH=arm64 $(GO) vet ./cmd/elfuse-oci/
+	$(Q)GOOS=linux $(GO) vet ./cmd/elfuse-oci/
+
+oci-fmt-check:
+	$(Q)out="$$(gofmt -l cmd/elfuse-oci)"; \
+	if [ -n "$$out" ]; then \
+		echo "gofmt needs to run on:"; echo "$$out"; exit 1; \
+	fi
+
+oci-lint: oci-fmt-check oci-vet
+
 # rm -f first: `go build -o` follows an existing symlink at the output path,
 # so a stale build/elfuse-oci symlink would clobber build/elfuse.
 $(OCI_BIN): go.mod $(OCI_SRCS) | $(BUILD_DIR)
 	@echo "  GO      $@"
 	$(Q)rm -f $@
-	$(Q)cd $(CURDIR) && $(GO) build -ldflags "-X main.version=$(VERSION)" \
+	$(Q)$(GO) build -ldflags "-X main.version=$(VERSION)" \
 		-o $@ ./cmd/elfuse-oci
 
 # Native test binaries (macOS, Hypervisor.framework)

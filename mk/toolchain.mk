@@ -42,3 +42,8 @@ SHIM_ASFLAGS ?= -arch arm64
 
 # clang-format
 CLANG_FORMAT ?= clang-format
+
+# Go toolchain for the OCI image CLI (build/elfuse-oci). It is a
+# pure Go program with no HVF dependency, so it builds and runs on Linux CI
+# too (for spec-conformance / interop tests). `go` from PATH by default.
+GO ?= go

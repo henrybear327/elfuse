@@ -993,6 +993,13 @@ How it works:
    disagree about where a path lives. [filenames.md](filenames.md) covers how
    a name is spelled once it lands on the sysroot volume.
 
+That dispatch applies to image-launched guests as well: the sysroot is a root,
+not a boundary, and `elfuse-oci run` inherits it unchanged. A guest `PATH`
+search whose candidate is absent under the sysroot can therefore resolve to a
+host binary; `run` compensates by guaranteeing the guest a `PATH` (Docker's
+conventional default when the image env provides none), and callers can
+reorder the search with `--env PATH=...`.
+
 The sysroot is inherited by fork children via IPC state transfer.
 `sys_execve` also loads the interpreter for dynamically linked targets, so
 tools that `execve` dynamic children (`env`, `nice`, `nohup`) work

@@ -18,14 +18,6 @@ const (
 	csCacheDirName     = "cs"
 )
 
-// legacyCacheNameForRef reproduces the pre-digest cache naming scheme, which
-// flattened the ref itself into a single (intentionally lossy) path
-// component. New caches are keyed by digest (cacheKeyForDigest); this helper
-// survives to document the old layout.
-func legacyCacheNameForRef(ref string) string {
-	return strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(ref)
-}
-
 // cacheKeyForDigest returns the relative cache key used under rootfs/ and cs/.
 // The current store writes sha256 blobs only; keep the algorithm component in
 // the path so the layout remains explicit and non-lossy.
@@ -45,16 +37,34 @@ func cacheKeyForDigest(digest string) (string, error) {
 	return filepath.Join(h.Algorithm, h.Hex), nil
 }
 
+// insideStore reports whether path lies under one of the store's managed
+// trees (the rootfs/ digest caches or the cs/ bundle dirs). Lexical only:
+// the caller guards a user-supplied --rootfs against naming a tree the
+// store's sweeps may reclaim, and a symlinked alias of the store is that
+// user's own arrangement.
+func insideStore(store, path string) bool {
+	for _, base := range []string{
+		filepath.Join(store, rootfsCacheDirName),
+		filepath.Join(store, csCacheDirName),
+	} {
+		rel, err := filepath.Rel(base, filepath.Clean(path))
+		if err != nil {
+			continue
+		}
+		if rel == "." || (rel != ".." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+			return true
+		}
+	}
+	return false
+}
+
 func defaultRootfsForDigest(store, digest string) (string, error) {
 	key, err := cacheKeyForDigest(digest)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(store, rootfsCacheDirName, key), nil
-}
-
-func legacyRootfsForRef(store, ref string) string {
-	return filepath.Join(store, rootfsCacheDirName, legacyCacheNameForRef(ref))
 }
 
 // csBundleDirForDigest is <store>/cs/<algo>/<hex>: it holds the case-sensitive

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/google/go-containerregistry/pkg/v1"
@@ -85,7 +87,47 @@ func writeIfAbsent(path string, data []byte) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	// Durable even on cold-store bootstrap: a crash mid-write must not leave a
+	// truncated oci-layout or index.json that later opens fail to parse.
+	return writeFileDurable(path, data, 0o644)
+}
+
+// writeFileDurable writes data to path atomically and durably: a uniquely
+// named temp sibling is written, fsynced, and renamed into place, then the
+// parent directory is fsynced so the rename itself survives a crash. A crash
+// leaves either the prior file or the complete new one, never a truncated
+// mix. This is the store's shared durability primitive for refs.json and
+// index.json; rmi's crash-ordering rule (index.json committed before
+// refs.json) holds only if each write is individually durable, which the
+// layout package's plain os.WriteFile is not.
+func writeFileDurable(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	// A unique temp name: a fixed name would let two writers clobber each
+	// other's half-written temp even before the rename race.
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	return fsyncDir(dir)
 }
 
 // refPins maps an image reference to its manifest digest ("sha256:...").
@@ -113,37 +155,10 @@ func (s *store) savePins(p refPins) error {
 	if err != nil {
 		return err
 	}
-	// Unique temp name: a fixed name would let two writers clobber each
-	// other's half-written temp even before the rename race.
-	tmp, err := os.CreateTemp(s.root, ".refs.json.*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // no-op once the rename succeeds
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		return err
-	}
-	// Durability, not just atomicity: rmi's crash-ordering argument (drop the
-	// pin before dropping the descriptor) only holds if the new refs.json
-	// cannot revert to an old pin after a crash. Sync the temp file before the
-	// rename and the directory after it, so the rename is durable once this
-	// returns.
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp.Name(), filepath.Join(s.root, "refs.json")); err != nil {
-		return err
-	}
-	return fsyncDir(s.root)
+	// Durability, not just atomicity: rmi's crash-ordering argument (commit the
+	// index.json descriptor removal before dropping the pin) only holds if the
+	// new refs.json cannot revert to an old pin after a crash.
+	return writeFileDurable(filepath.Join(s.root, "refs.json"), b, 0o644)
 }
 
 // fsyncDir flushes a directory's entries (renames, unlinks) to stable
@@ -155,6 +170,70 @@ func fsyncDir(dir string) error {
 	}
 	defer f.Close()
 	return f.Sync()
+}
+
+// fsyncFile flushes an existing file's data to stable storage. Used to make a
+// blob durable before the pin that references it is committed.
+func fsyncFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
+
+// syncAppendedImage makes img's on-disk state durable after AppendImage but
+// before the pin is committed: the config and layer blobs, then index.json,
+// then the store directory. Without this the pin (refs.json) is fsynced while
+// the blobs and index it references may still sit in the page cache, so a
+// crash could leave a durable pin over content that never reached disk, which
+// every later resolve of the ref then fails on. The layout package writes
+// blobs and index.json with plain os.WriteFile, so the durability is ours to
+// add here.
+func (s *store) syncAppendedImage(img v1.Image) error {
+	digests, err := imageBlobDigests(img)
+	if err != nil {
+		return err
+	}
+	for _, h := range digests {
+		p := filepath.Join(s.root, "blobs", h.Algorithm, h.Hex)
+		if err := fsyncFile(p); err != nil {
+			return err
+		}
+	}
+	if err := fsyncFile(filepath.Join(s.root, "index.json")); err != nil {
+		return err
+	}
+	return fsyncDir(s.root)
+}
+
+// imageBlobDigests returns the hashes of every blob img introduces: its
+// manifest, config, and layers.
+func imageBlobDigests(img v1.Image) ([]v1.Hash, error) {
+	var hs []v1.Hash
+	mh, err := img.Digest()
+	if err != nil {
+		return nil, err
+	}
+	hs = append(hs, mh)
+	ch, err := img.ConfigName()
+	if err != nil {
+		return nil, err
+	}
+	hs = append(hs, ch)
+	layers, err := img.Layers()
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range layers {
+		lh, err := l.Digest()
+		if err != nil {
+			return nil, err
+		}
+		hs = append(hs, lh)
+	}
+	return hs, nil
 }
 
 // lock takes an exclusive advisory flock on <root>/.lock and returns the
@@ -219,6 +298,56 @@ func (s *store) digestFor(ref string) (string, error) {
 	return d, nil
 }
 
+// resolvePinnedTarget resolves an exact pulled ref, or a unique sha256 digest
+// prefix such as the 12-character digest printed by `list`.
+func resolvePinnedTarget(pins refPins, target string) (string, string, error) {
+	if d, ok := pins[target]; ok {
+		return target, d, nil
+	}
+
+	prefix, ok := digestPrefix(target)
+	if !ok {
+		return "", "", fmt.Errorf("store: %q %w (run `elfuse-oci pull %s` first)", target, errNotPulled, target)
+	}
+
+	var matches []string
+	matchDigest := ""
+	for ref, digest := range pins {
+		h, err := v1.NewHash(digest)
+		if err != nil {
+			return "", "", fmt.Errorf("store: pinned digest for %q: %w", ref, err)
+		}
+		if h.Algorithm == "sha256" && strings.HasPrefix(h.Hex, prefix) {
+			matches = append(matches, ref)
+			matchDigest = digest
+		}
+	}
+	sort.Strings(matches)
+
+	switch len(matches) {
+	case 0:
+		return "", "", fmt.Errorf("store: digest %q %w", target, errNotPulled)
+	case 1:
+		return matches[0], matchDigest, nil
+	default:
+		return "", "", fmt.Errorf("store: digest %q is ambiguous; matches refs: %s", target, strings.Join(matches, ", "))
+	}
+}
+
+func digestPrefix(target string) (string, bool) {
+	if i := strings.IndexByte(target, ':'); i >= 0 {
+		if target[:i] != "sha256" {
+			return "", false
+		}
+		target = target[i+1:]
+	}
+	target = strings.ToLower(target)
+	if len(target) < 12 || len(target) > 64 || !isLowerHex(target) {
+		return "", false
+	}
+	return target, true
+}
+
 // addImage appends img to the layout index if its manifest is not already
 // present (dedup by digest), and pins ref to that digest. Returns the digest.
 // The store lock covers the whole check-append-pin sequence: index.json is
@@ -243,6 +372,12 @@ func (s *store) addImage(ref string, img v1.Image) (string, error) {
 		if !present {
 			if err := s.path.AppendImage(img); err != nil {
 				return fmt.Errorf("store: append image: %w", err)
+			}
+			// Make the blobs and index.json durable before the pin that will
+			// point at them, so a crash never strands a fsynced pin over
+			// content still in the page cache.
+			if err := s.syncAppendedImage(img); err != nil {
+				return fmt.Errorf("store: sync appended image: %w", err)
 			}
 		}
 		return s.pinLocked(ref, d.String())

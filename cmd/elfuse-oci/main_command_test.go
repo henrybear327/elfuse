@@ -5,8 +5,12 @@ package main
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-containerregistry/pkg/crane"
+	"github.com/google/go-containerregistry/pkg/v1"
 )
 
 func TestRunDispatchHelpVersionAndErrors(t *testing.T) {
@@ -80,5 +84,70 @@ func TestMainSubprocessExitBehavior(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "elfuse-oci: no command given") {
 		t.Fatalf("main no-arg stderr = %q, want formatted error", stderr)
+	}
+}
+
+func TestRunDispatchesAllSubcommands(t *testing.T) {
+	root := t.TempDir()
+	img := tinyImage(t)
+	withFakeCranePull(t, func(ref string, opts ...crane.Option) (v1.Image, error) {
+		if ref != "local:tiny" {
+			t.Fatalf("pull ref = %q, want local:tiny", ref)
+		}
+		return img, nil
+	})
+
+	stdout, stderr, err := captureOutput(t, func() error {
+		return run([]string{"pull", "--store", root, "local:tiny"})
+	})
+	if err != nil || !strings.Contains(stderr, "Pulled local:tiny") {
+		t.Fatalf("run pull stderr=%q err=%v, want pull summary", stderr, err)
+	}
+
+	for _, cmd := range []string{"list", "images"} {
+		stdout, _, err = captureOutput(t, func() error {
+			return run([]string{cmd, "--store", root})
+		})
+		if err != nil || !strings.Contains(stdout, "local:tiny") {
+			t.Fatalf("run %s stdout=%q err=%v, want list row", cmd, stdout, err)
+		}
+	}
+
+	stdout, _, err = captureOutput(t, func() error {
+		return run([]string{"inspect", "--store", root, "local:tiny"})
+	})
+	if err != nil || !strings.Contains(stdout, "Ref:         local:tiny") {
+		t.Fatalf("run inspect stdout=%q err=%v, want inspect output", stdout, err)
+	}
+
+	unpackRoot := filepath.Join(t.TempDir(), "unpack-rootfs")
+	_, stderr, err = captureOutput(t, func() error {
+		return run([]string{"unpack", "--store", root, "--rootfs", unpackRoot, "local:tiny"})
+	})
+	if err != nil || !strings.Contains(stderr, "Unpacked local:tiny") {
+		t.Fatalf("run unpack stderr=%q err=%v, want unpack summary", stderr, err)
+	}
+
+	withFakeExecElfuse(t, func(rootfs string, spec *runSpec, _ *flockFile) error { return nil })
+	runRoot := filepath.Join(t.TempDir(), "run-rootfs")
+	_, _, err = captureOutput(t, func() error {
+		return run([]string{"run", "--store", root, "--plain-rootfs", "--rootfs", runRoot, "local:tiny"})
+	})
+	if err != nil {
+		t.Fatalf("run run --plain-rootfs: %v", err)
+	}
+
+	_, stderr, err = captureOutput(t, func() error {
+		return run([]string{"prune", "--store", root, "--dry-run"})
+	})
+	if err != nil || !strings.Contains(stderr, "Would reclaim") {
+		t.Fatalf("run prune stderr=%q err=%v, want dry-run summary", stderr, err)
+	}
+
+	_, stderr, err = captureOutput(t, func() error {
+		return run([]string{"rmi", "--store", root, "local:tiny"})
+	})
+	if err != nil || !strings.Contains(stderr, "Removed local:tiny") {
+		t.Fatalf("run rmi stderr=%q err=%v, want rmi summary", stderr, err)
 	}
 }

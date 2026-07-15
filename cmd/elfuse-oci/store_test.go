@@ -245,3 +245,16 @@ func TestLoadPinsCorruptNullAndPinError(t *testing.T) {
 		})
 	}
 }
+
+func TestCacheKeyForDigestRejectsInvalidAndUnsupported(t *testing.T) {
+	if _, err := cacheKeyForDigest("not-a-digest"); err == nil {
+		t.Fatal("cacheKeyForDigest accepted malformed digest")
+	}
+	if _, err := defaultRootfsForDigest(t.TempDir(), "not-a-digest"); err == nil {
+		t.Fatal("defaultRootfsForDigest accepted malformed digest")
+	}
+	unsupported := "sha512:" + strings.Repeat("1", 128)
+	if _, err := cacheKeyForDigest(unsupported); err == nil {
+		t.Fatalf("cacheKeyForDigest(%q) succeeded, want rejection", unsupported)
+	}
+}

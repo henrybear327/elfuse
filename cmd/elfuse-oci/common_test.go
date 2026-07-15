@@ -60,6 +60,22 @@ func TestParsePullArgs(t *testing.T) {
 	}
 }
 
+func TestParseUnpackArgs(t *testing.T) {
+	cf, rootfs, ref, err := parseUnpackArgs([]string{"--rootfs=/tmp/rootfs", "alpine:3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.platform != defaultPlatform {
+		t.Errorf("platform = %+v, want default %+v", cf.platform, defaultPlatform)
+	}
+	if rootfs != "/tmp/rootfs" {
+		t.Errorf("rootfs = %q, want /tmp/rootfs", rootfs)
+	}
+	if ref != "alpine:3" {
+		t.Errorf("ref = %q, want alpine:3", ref)
+	}
+}
+
 func TestParseInspectArgs(t *testing.T) {
 	_, asJSON, ref, err := parseInspectArgs([]string{"--json", "alpine:3"})
 	if err != nil {
@@ -80,7 +96,7 @@ func TestParseCommandFlagErrors(t *testing.T) {
 	}{
 		{"malformed platform", func() error { _, _, err := parsePullArgs([]string{"--platform", "bogus", "alpine:3"}); return err }()},
 		{"unknown flag", func() error { _, _, err := parsePullArgs([]string{"--unknown", "alpine:3"}); return err }()},
-		{"missing ref", func() error { _, _, err := parsePullArgs(nil); return err }()},
+		{"missing flag value", func() error { _, _, _, err := parseUnpackArgs([]string{"--rootfs"}); return err }()},
 	}
 	for _, tc := range cases {
 		if tc.err == nil {

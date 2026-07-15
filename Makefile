@@ -25,6 +25,7 @@ SRCS := \
     core/vdso.c \
     core/shim-globals.c \
     core/bootstrap.c \
+    core/launch.c \
     core/rosetta.c \
     core/sysroot.c \
     runtime/thread.c \

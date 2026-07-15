@@ -99,6 +99,10 @@ func TestParseRunArgs(t *testing.T) {
 		"--user", "1000:1000",
 		"--workdir", "/work",
 		"--rootfs", "/tmp/rootfs",
+		"--plain-rootfs",
+		"--sparse-size", "32g",
+		"--no-clone",
+		"--keep",
 		"alpine:3",
 		"-c", "echo hi",
 	})
@@ -116,6 +120,9 @@ func TestParseRunArgs(t *testing.T) {
 	}
 	if rf.entrypoint != "/bin/sh" || rf.user != "1000:1000" || rf.workdir != "/work" || rf.rootfs != "/tmp/rootfs" {
 		t.Errorf("run flags = %+v", rf)
+	}
+	if !rf.plainRootfs || rf.sparseSize != "32g" || !rf.noClone || !rf.keepRootfs {
+		t.Errorf("sparse run flags = %+v", rf)
 	}
 	if !rf.clearEnv {
 		t.Error("clearEnv = false, want true")

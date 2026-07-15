@@ -56,3 +56,13 @@ func defaultRootfsForDigest(store, digest string) (string, error) {
 func legacyRootfsForRef(store, ref string) string {
 	return filepath.Join(store, rootfsCacheDirName, legacyCacheNameForRef(ref))
 }
+
+// csBundleDirForDigest is <store>/cs/<algo>/<hex>: it holds the case-sensitive
+// sparsebundle image and the attach mount point for one pinned manifest digest.
+func csBundleDirForDigest(store, digest string) (string, error) {
+	key, err := cacheKeyForDigest(digest)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(store, csCacheDirName, key), nil
+}

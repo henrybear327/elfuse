@@ -101,7 +101,7 @@ endef
 .PHONY: all elfuse
 .PHONY: gen-syscall-dispatch check-syscall-dispatch
 
-all: elfuse
+all: elfuse elfuse-oci
 
 ## Regenerate build/dispatch.h from src/syscall/dispatch.tbl
 gen-syscall-dispatch:
@@ -125,6 +125,23 @@ elfuse: $(ELFUSE_BIN)
 
 $(ELFUSE_BIN): $(OBJS) | $(BUILD_DIR)
 	$(call link-and-sign,$@,$(OBJS))
+
+# OCI image CLI (Go). Pure Go, no HVF entitlement or codesigning required,
+# so it also builds under Linux for spec-conformance / interop CI. The version
+# is stamped from the same VERSION string the C binary uses.
+OCI_BIN := $(BUILD_DIR)/elfuse-oci
+OCI_SRCS := $(shell find cmd/elfuse-oci -type f -name '*.go' 2>/dev/null)
+
+.PHONY: elfuse-oci
+elfuse-oci: $(OCI_BIN)
+
+# rm -f first: `go build -o` follows an existing symlink at the output path,
+# so a stale build/elfuse-oci symlink would clobber build/elfuse.
+$(OCI_BIN): go.mod $(OCI_SRCS) | $(BUILD_DIR)
+	@echo "  GO      $@"
+	$(Q)rm -f $@
+	$(Q)cd $(CURDIR) && $(GO) build -ldflags "-X main.version=$(VERSION)" \
+		-o $@ ./cmd/elfuse-oci
 
 # Native test binaries (macOS, Hypervisor.framework)
 

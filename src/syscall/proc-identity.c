@@ -31,6 +31,10 @@ static _Atomic int32_t guest_has_ctty = 1;
 
 static _Atomic bool fakeroot_enabled = false;
 
+static _Atomic bool initial_ids_staged = false;
+static _Atomic uint32_t initial_uid = GUEST_UID;
+static _Atomic uint32_t initial_gid = GUEST_GID;
+
 void proc_set_fakeroot_enabled(bool enabled)
 {
     atomic_store(&fakeroot_enabled, enabled);
@@ -39,6 +43,13 @@ void proc_set_fakeroot_enabled(bool enabled)
 bool proc_fakeroot_enabled(void)
 {
     return atomic_load(&fakeroot_enabled);
+}
+
+void proc_set_initial_ids(uint32_t uid, uint32_t gid)
+{
+    atomic_store(&initial_uid, uid);
+    atomic_store(&initial_gid, gid);
+    atomic_store(&initial_ids_staged, true);
 }
 
 void proc_identity_init(void)
@@ -53,6 +64,19 @@ void proc_identity_init(void)
     if (proc_fakeroot_enabled()) {
         uid = 0;
         gid = 0;
+    }
+
+    /* An explicit --user request wins over the defaults and over fakeroot.
+     * It is staged before init rather than applied afterwards because
+     * build_linux_stack snapshots these values into auxv AT_UID/AT_GID; a
+     * post-init override would leave getauxval() disagreeing with getuid().
+     * Consume the staged value so it applies only to the bring-up it was
+     * staged for; a later launch in the same host process without credentials
+     * falls back to the defaults instead of inheriting the prior identity.
+     */
+    if (atomic_exchange(&initial_ids_staged, false)) {
+        uid = atomic_load(&initial_uid);
+        gid = atomic_load(&initial_gid);
     }
 
     emu_uid = uid;

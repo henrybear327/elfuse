@@ -15,9 +15,11 @@
 
 #include <Hypervisor/Hypervisor.h>
 #include <Hypervisor/hv_vcpu.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "core/bootstrap.h"
@@ -27,6 +29,7 @@
 
 #include "runtime/futex.h" /* futex_interrupt_request */
 #include "runtime/thread.h"
+#include "syscall/path.h"
 #include "syscall/poll.h" /* wakeup_pipe_signal */
 #include "syscall/proc.h"
 
@@ -72,6 +75,14 @@ int elfuse_launch(const launch_args_t *args)
                                      ? args->guest_argv[0]
                                      : args->elf_path;
 
+    /* Stage --user before bring-up: prepare's proc_init re-seeds the identity
+     * state, and build_linux_stack snapshots it into auxv AT_UID/AT_GID.
+     * Setting the ids after prepare would leave getauxval() reporting the
+     * default identity while getuid() reports the requested one.
+     */
+    if (args->has_creds)
+        proc_set_initial_ids(args->uid, args->gid);
+
     if (guest_bootstrap_prepare(
             &g, args->elf_path, elf_host_temp, elf_guest_path, args->sysroot,
             args->guest_argc, args->guest_argv, envp_use, shim_bin,
@@ -87,6 +98,18 @@ int elfuse_launch(const launch_args_t *args)
         elf_host_temp = false;
     }
 
+    /* Reject GDB for a Rosetta (x86_64) guest here, not just in main(): the
+     * stub exposes the aarch64 shim's register/memory view, which is the wrong
+     * architecture for a Rosetta-translated x86_64 guest. main() rejects it up
+     * front via a static ELF probe, but enforcing it in elfuse_launch (once
+     * bring-up has set g.is_rosetta) makes every caller inherit the constraint,
+     * including the planned OCI run helper.
+     */
+    if (args->gdb_port > 0 && g.is_rosetta) {
+        log_error("--gdb is not supported for x86_64 (Rosetta) guests");
+        goto fail;
+    }
+
     if (args->sysroot) {
         bool case_sensitive = true;
         bool case_preserving = true;
@@ -97,6 +120,32 @@ int elfuse_launch(const launch_args_t *args)
             proc_set_sysroot_casefold(false);
     } else {
         proc_set_sysroot_casefold(false);
+    }
+
+    /* Apply the guest's initial working directory. The guest cwd IS the host
+     * process cwd (sys_chdir translates a guest path and calls host chdir),
+     * so --workdir DIR does the same: translate DIR against the sysroot (now
+     * that casefold is configured above) and chdir to the resulting host path,
+     * then refresh the cached guest-visible cwd so the first getcwd sees DIR.
+     * This mirrors the plain real-directory branch of sys_chdir; FUSE-mounted
+     * or /proc-virtual workdirs are not supported through this flag (neither
+     * is a realistic image WorkingDir).
+     */
+    if (args->cwd_guest && args->cwd_guest[0] != '\0') {
+        path_translation_t tx;
+        if (path_translate_at(LINUX_AT_FDCWD, args->cwd_guest, PATH_TR_NONE,
+                              &tx) < 0) {
+            log_error("failed to resolve working directory %s: %s",
+                      args->cwd_guest, strerror(errno));
+            goto fail;
+        }
+        if (chdir(tx.host_path) < 0) {
+            log_error("failed to set working directory %s: %s", args->cwd_guest,
+                      strerror(errno));
+            goto fail;
+        }
+        if (proc_cwd_refresh() < 0)
+            proc_cwd_invalidate();
     }
 
     hv_vcpu_t vcpu;

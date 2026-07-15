@@ -7,33 +7,16 @@
  * fresh HVF VM until it exits". It is shared between main() (legacy
  * positional-ELF CLI) and future launchers such as the OCI run helper.
  *
- * The function owns the guest_t, the vCPU, the GDB stub, the run loop,
- * the diagnostic dumps, and guest teardown; it does NOT own the
- * elf_path / sysroot / guest_argv heap copies or the sysroot_mount the
- * host CLI may have provisioned; those stay with the caller so
- * behaviors that need the original CLI argv (proctitle rewriting,
- * --create-sysroot detach on exit, host cwd save+restore) remain
- * coherent regardless of how the launch was kicked off.
+ * The function owns the guest_t, the vCPU, the GDB stub, the run loop, the
+ * diagnostic dumps, and guest teardown; it does NOT own the elf_path /
+ * sysroot / guest_argv heap copies or the sysroot_mount the host CLI may
+ * have provisioned. Those stay with the caller so behaviors that need the
+ * original CLI argv (proctitle rewriting, --create-sysroot detach on exit,
+ * host cwd save+restore) stay coherent however the launch was kicked off.
  *
- * Lifetime / ownership contract:
- *
- *   - The caller owns every pointer in launch_args_t. elfuse_launch reads
- *     them and does not free them; const-qualified pointers stay valid
- *     for the duration of the call.
- *   - envp may be NULL; the host process environ is used in that case.
- *   - guest_argv is the string array the guest sees as its argv.
- *     guest_argv[0] is the guest-visible entrypoint path (what the guest
- *     reads back via /proc/self/exe and argv[0]); elf_path is the
- *     resolved host path to that binary. The two differ when path
- *     translation or a FUSE-materialized temp is involved.
- *   - elf_host_temp is true when elf_path is a FUSE-materialized temp
- *     that must be unlinked once guest_bootstrap_prepare has loaded it
- *     (skipped for Rosetta guests, which reopen the path). The caller
- *     owns the unlink for any pre-prepare failure; elfuse_launch owns it
- *     from the prepare call onward.
- *   - fork_child_fd / vfork_notify_fd are forwarded for fork-child-routed
- *     launches; main() dispatches the fork-child path before reaching
- *     elfuse_launch and so passes -1.
+ * The caller owns every pointer in launch_args_t for the duration of the
+ * call; elfuse_launch reads but never frees them. Per-field lifetime and
+ * ownership notes live on the struct members below.
  */
 
 #pragma once
@@ -42,13 +25,15 @@
 #include <stdint.h>
 
 typedef struct {
-    /* Host filesystem path to the guest ELF (resolved; may be a
-     * FUSE-materialized temp when elf_host_temp is true).
+    /* Host path to the guest ELF; may be a FUSE-materialized temp when
+     * elf_host_temp is set.
      */
     const char *elf_path;
 
-    /* True when elf_path is a temp to unlink after guest_bootstrap_prepare
-     * loads it.
+    /* elf_path is a FUSE-materialized temp to unlink once
+     * guest_bootstrap_prepare has loaded it (kept for Rosetta guests, which
+     * reopen the path). The caller owns the unlink on any pre-prepare
+     * failure; elfuse_launch owns it from the prepare call onward.
      */
     bool elf_host_temp;
 
@@ -57,8 +42,10 @@ typedef struct {
      */
     const char *sysroot;
 
-    /* String array the guest sees as its argv. guest_argv[0] is the
-     * guest-visible entrypoint path.
+    /* Argv the guest sees. guest_argv[0] is the guest-visible entrypoint
+     * path (what the guest reads back via /proc/self/exe and argv[0]); it
+     * differs from elf_path (the resolved host path) under path translation
+     * or a FUSE-materialized temp.
      */
     int guest_argc;
     const char **guest_argv;
@@ -68,6 +55,21 @@ typedef struct {
      * convention: guest programs may mutate their environment.
      */
     char **envp;
+
+    /* When true, stage uid/gid as the guest identity before bring-up so the
+     * auxv AT_UID/AT_GID snapshot and getuid()/getgid() agree. When false,
+     * uid/gid are ignored and the guest runs under the compile-time default
+     * GUEST_UID/GUEST_GID (0 under fakeroot), NOT the host identity; a
+     * launcher that wants the host identity must set has_creds and pass
+     * getuid()/getgid().
+     */
+    bool has_creds;
+    uint32_t uid, gid;
+
+    /* Guest-absolute initial working directory. NULL inherits the host
+     * cwd (the caller may chdir first to control it).
+     */
+    const char *cwd_guest;
 
     /* GDB Remote Serial Protocol port (0 disables the stub) and whether
      * to halt before the first guest instruction.

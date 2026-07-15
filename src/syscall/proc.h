@@ -108,6 +108,14 @@ bool proc_rosetta_active(void);
 void proc_set_fakeroot_enabled(bool enabled);
 bool proc_fakeroot_enabled(void);
 
+/* Stage the initial guest credentials (--user) before proc_init.
+ * proc_identity_init applies them in place of the GUEST_UID/GUEST_GID
+ * defaults, so the auxv AT_UID/AT_GID snapshot taken by build_linux_stack
+ * matches what getuid()/getgid() later report. The staged value is consumed
+ * by the next proc_identity_init, so it applies to a single bring-up only.
+ */
+void proc_set_initial_ids(uint32_t uid, uint32_t gid);
+
 /* Store the guest command line for /proc/self/cmdline emulation. argv is a
  * NULL-terminated array of strings.
  */

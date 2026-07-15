@@ -7,7 +7,12 @@
 #   scan-macos    : LLVM scan-build via `make analyze`
 #   infer-macos   : Facebook Infer capture + analyze over the full build
 #   runtime-macos : HVF runtime tests on self-hosted Apple Silicon,
-#                   including release, ASAN, UBSAN, and TSAN variants
+#                   including release, ASAN, UBSAN, and TSAN variants,
+#                   plus the end-to-end OCI run and image-lifecycle checks
+#   oci-conformance : OCI image-layout conformance + cross-tool interop
+#                   (crane/skopeo/umoci) on Linux
+#   oci-macos     : elfuse-oci darwin build, unit tests, sparsebundle
+#                   round-trip, and a run-less image-lifecycle smoke
 #
 # Runtime and sanitizer tests require Hypervisor.framework, which
 # GitHub-hosted macOS runners do not expose. Those tests run on self-hosted
@@ -94,12 +99,13 @@ jobs:
         run: .ci/check-security.sh
 
       - name: shellcheck
-        # Scoped to .ci/ -- tests/ has pre-existing warnings that the
-        # repository's own check-format target already surfaces.
+        # Scoped to .ci/ and scripts/; tests/ has pre-existing warnings that
+        # the repository's own check-format target already surfaces.
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          mapfile -d '' files < <(git ls-files -z -- '.ci/*.sh')
+          # git pathspec globs cross '/', so 'scripts/*.sh' covers scripts/ci/ too.
+          mapfile -d '' files < <(git ls-files -z -- '.ci/*.sh' 'scripts/*.sh')
           shellcheck --severity=warning "${files[@]}"
 
       - name: cppcheck
@@ -551,6 +557,15 @@ jobs:
 
           ls -l "$ROSETTA"
 
+      - name: Set up Go
+        # Only the release leg runs the OCI run smoke below, which needs the Go
+        # toolchain to build build/elfuse-oci.
+        if: ${{ matrix.run_matrix }}
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Build elfuse
         # make does not track EXTRA_CFLAGS changes, so an object built for one
         # sanitizer must not be reused for another. Checkout already wipes
@@ -579,6 +594,44 @@ jobs:
         # test-matrix already cover Linux syscall compatibility).
         run: |
           make EXTRA_CFLAGS="$EXTRA_CFLAGS" ${{ matrix.check_target }}
+
+      - name: OCI run smoke (pull -> sparsebundle -> COW clone -> HVF boot)
+        # The only leg that exercises the full default `run` path end to end:
+        # pull an image, provision the case-sensitive sparsebundle, COW-clone it,
+        # boot the guest under HVF, and propagate its exit status. Release leg
+        # only (sanitizer legs skip the fixture/qemu-heavy paths).
+        if: ${{ matrix.run_matrix }}
+        run: |
+          set -euo pipefail
+          # Same persistent-disk convention as the fixture cache above:
+          # checkout wipes the workspace but this self-hosted runner's disk
+          # survives. pull is idempotent per digest, so a warm store skips
+          # the image blob downloads (only the manifest HEAD/GET goes
+          # out) and the warm sparsebundle cache skips the unpack. env:
+          # values don't expand $HOME, so export here instead.
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-store"
+          make build/elfuse-oci
+          scripts/ci/oci-run-smoke.sh
+
+      - name: OCI image lifecycle (pull -> inspect -> list -> run -> rmi -> prune)
+        # Walks the whole user-facing image lifecycle on the only leg with
+        # HVF. python:3.12-slim adds what the alpine smoke above does not:
+        # an --entrypoint override, a glibc dynamically-linked guest, and
+        # the teardown half of the lifecycle (see the phase functions in
+        # scripts/ci/oci-lifecycle.sh). Separate store from the smoke step
+        # so the empty-store assertions are meaningful. Release leg only.
+        if: ${{ matrix.run_matrix }}
+        env:
+          ELFUSE_OCI_STORE: ${{ runner.temp }}/oci-lifecycle-store
+          IMG: python:3.12-slim
+        run: |
+          set -euo pipefail
+          # Built by the smoke step above; the make target is idempotent.
+          make build/elfuse-oci
+          # The seed store lives on the runner's persistent disk (env: does
+          # not expand $HOME, so export here instead).
+          export ELFUSE_OCI_SEED_STORE="$HOME/.cache/elfuse-ci/oci-seed-store"
+          scripts/ci/oci-lifecycle.sh
 
       - name: Test matrix
         if: ${{ matrix.run_matrix }}
@@ -611,3 +664,132 @@ jobs:
           else
             echo "No externals/test-fixtures to save"
           fi
+
+  # OCI image-layout conformance + cross-tool interop on Linux. elfuse-oci
+  # is pure Go (no Hypervisor.framework), so pull/inspect/unpack and the
+  # conformance tests run in hosted CI; only `run` needs HVF and is excluded.
+  # The on-disk store is the contract: it must be a valid OCI image-layout that
+  # crane/skopeo/umoci can read and that agrees with registry truth.
+  oci-conformance:
+    name: OCI conformance + interop (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Pinned to elfuse-oci's go-containerregistry version so the crane
+      # CLI reads layouts with the same schema handling it writes with.
+      GGCR_VERSION: v0.21.7
+      # umoci release tag for the interop gate; built from a checkout below.
+      UMOCI_VERSION: v0.6.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install jq + skopeo
+        # skopeo reads our layout via the oci: transport. CI treats it as part
+        # of the conformance gate; local runs may omit it and get a skipped
+        # interop section from scripts/oci-interop.sh.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq skopeo
+
+      - name: Install crane + umoci from source
+        # crane (registry-truth comparison) and umoci (layout parse) are Go
+        # tools; install crane at elfuse-oci's ggcr version where applicable.
+        run: |
+          set -euo pipefail
+          go install github.com/google/go-containerregistry/cmd/crane@${GGCR_VERSION}
+          # `go install pkg@version` refuses umoci: its go.mod carries replace
+          # directives. Build from a pinned checkout instead, where replace
+          # directives apply; a read-only `umoci list --layout` conformance
+          # check needs nothing newer.
+          git clone --quiet --depth 1 --branch "$UMOCI_VERSION" \
+            https://github.com/opencontainers/umoci.git "$RUNNER_TEMP/umoci"
+          (cd "$RUNNER_TEMP/umoci" && \
+            go build -o "$(go env GOPATH)/bin/umoci" ./cmd/umoci)
+          echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
+
+      - name: Build elfuse-oci
+        # Pure Go target; does not require the C toolchain or HVF.
+        run: make build/elfuse-oci
+
+      - name: Go fmt + vet (Linux and darwin cross-check)
+        # The Makefile gate, so CI and local runs cannot drift. oci-lint vets
+        # native, darwin/arm64, and linux; the darwin pass compile-checks the
+        # sparsebundle files (csrun.go, sparsebundle.go, cache_darwin.go)
+        # that never build on this Linux runner.
+        run: make oci-lint
+
+      - name: CLI lifecycle smoke (pull/list/inspect/unpack/rmi/prune)
+        # Exercises the built binary through the same user-facing flow that the
+        # Go unit tests model in-process. `run` itself remains covered by Go
+        # orchestration tests here and by macOS/HVF runtime jobs. --unpack adds
+        # the unpack + cache-reclaiming rmi phase to the shared smoke.
+        run: scripts/ci/oci-cli-smoke.sh --unpack
+
+      - name: Go unit + conformance tests (with network pull round-trip)
+        # ELFUSE_OCI_NETTEST enables the pull round-trip that re-opens the store
+        # with crane's independent layout reader and asserts digest agreement.
+        env:
+          ELFUSE_OCI_NETTEST: "1"
+        run: go test -race ./cmd/elfuse-oci/
+
+      - name: Cross-tool interop (crane + skopeo + umoci)
+        # Pulls fixtures, then asserts the on-disk layout is spec-shaped and
+        # that available tools read it and agree with registry truth.
+        run: scripts/oci-interop.sh
+
+  # Darwin elfuse-oci build + tests on a hosted macOS runner. The default `run`
+  # path (csrun.go, sparsebundle.go, cache_darwin.go) only compiles on darwin, so
+  # the Linux job above can only cross-vet it; this job actually builds and runs
+  # it, and drives the run-less image lifecycle (pull/inspect/list/rmi/prune)
+  # through the darwin binary. Hosted runners provide hdiutil + case-sensitive
+  # APFS (so the real sparsebundle round-trip runs) even though they lack
+  # Hypervisor.framework; the HVF-backed guest boot is covered by the
+  # self-hosted runtime-macos job.
+  oci-macos:
+    name: OCI image CLI (macOS Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build elfuse-oci
+        run: make build/elfuse-oci
+
+      - name: Go unit tests (darwin native)
+        # Runs the whole suite on darwin, exercising the sparsebundle/clone seams
+        # in csrun/sparsebundle/cache_darwin that the Linux job cannot compile.
+        # -race: the darwin concurrency-sensitive code (sweep/provision/clone,
+        # cache-removal lock discipline) compiles only here, so this is the only
+        # place the race detector ever sees it.
+        run: go test -race ./cmd/elfuse-oci/
+
+      - name: Sparsebundle round-trip (hdiutil + case-sensitive APFS)
+        # ELFUSE_OCI_DARWIN_CS un-skips the real hdiutil create/attach/detach +
+        # case-sensitive APFS sweep; hosted runners have hdiutil and APFS.
+        env:
+          ELFUSE_OCI_DARWIN_CS: "1"
+        run: go test -run TestDarwinCSSweep ./cmd/elfuse-oci/
+
+      - name: CLI lifecycle smoke (pull/inspect/list/rmi/prune, no HVF)
+        # The same shared smoke the Linux job drives, but through the darwin
+        # binary: everything short of `run` (which needs HVF) works end to
+        # end on a hosted runner. Without --unpack every rmi takes the
+        # cache-free path (nothing was ever unpacked, no --force involved)
+        # that the Linux job's cache-reclaiming flow does not cover. jq
+        # ships on the macos-15 image.
+        run: scripts/ci/oci-cli-smoke.sh

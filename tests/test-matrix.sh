@@ -274,6 +274,7 @@ QEMU_SKIP="
     test-mmap-hint
     test-msync
     test-credentials
+    test-credentials-fakeroot
     test-sched-policy
     test-rseq
     test-tier-a
@@ -748,6 +749,7 @@ run_unit_tests()
 
     printf "\nCredential/identity emulation\n"
     test_rc "$runner" "test-credentials" 0 "$bindir/test-credentials"
+    test_rc "$runner" "test-credentials-fakeroot" 0 --fakeroot "$bindir/test-credentials"
 
     printf "\nScheduler policy stub\n"
     test_rc "$runner" "test-sched-policy" 0 "$bindir/test-sched-policy"

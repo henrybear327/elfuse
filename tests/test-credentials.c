@@ -10,6 +10,7 @@
  */
 
 #include <sys/types.h> /* gid_t */
+#include <sys/wait.h>  /* waitpid */
 #include <unistd.h>    /* getgroups */
 
 #include "test-harness.h"
@@ -67,14 +68,22 @@ int main(void)
     TEST("setuid(expected) succeeds");
     EXPECT_TRUE(raw_syscall1(__NR_setuid, expected_id) == 0, "setuid failed");
 
-    /* setuid: setting to arbitrary value must fail with -EPERM */
-    TEST("setuid(other) returns -EPERM");
+    /* setuid: setting to arbitrary value must fail with -EPERM for non-root */
+    TEST("setuid(other) returns expected status");
     {
-        long rc = raw_syscall1(__NR_setuid, expected_id == 0 ? 1000 : 0);
-        if (rc == -1) /* -EPERM */
-            PASS();
+        pid_t pid = fork();
+        if (pid == 0) {
+            long rc = raw_syscall1(__NR_setuid, expected_id == 0 ? 1000 : 0);
+            _exit(rc == 0 ? 0 : 1);
+        }
+        int status;
+        waitpid(pid, &status, 0);
+        if (expected_id == 0)
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                        "setuid(1000) failed for root");
         else
-            FAIL("expected -EPERM");
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 1,
+                        "expected -EPERM");
     }
 
     /* setresuid: swap euid (no-op but must succeed) */
@@ -86,15 +95,23 @@ int main(void)
     }
 
     /* setresuid: set euid to a value not in {ruid, euid, suid} */
-    TEST("setresuid(-1,other,-1) returns -EPERM");
+    TEST("setresuid(-1,other,-1) returns expected status");
     {
-        long rc =
-            raw_syscall3(__NR_setresuid, (long) (unsigned) -1,
-                         expected_id == 0 ? 1000 : 42, (long) (unsigned) -1);
-        if (rc == -1) /* -EPERM */
-            PASS();
+        pid_t pid = fork();
+        if (pid == 0) {
+            long rc = raw_syscall3(__NR_setresuid, (long) (unsigned) -1,
+                                   expected_id == 0 ? 1000 : 42,
+                                   (long) (unsigned) -1);
+            _exit(rc == 0 ? 0 : 1);
+        }
+        int status;
+        waitpid(pid, &status, 0);
+        if (expected_id == 0)
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                        "setresuid failed for root");
         else
-            FAIL("expected -EPERM");
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 1,
+                        "expected -EPERM");
     }
 
     /* setreuid: ruid can only be set to current ruid or euid */
@@ -105,14 +122,22 @@ int main(void)
         EXPECT_TRUE(rc == 0, "setreuid(ruid,-1) failed");
     }
 
-    TEST("setreuid(other,-1) returns -EPERM");
+    TEST("setreuid(other,-1) returns expected status");
     {
-        long rc = raw_syscall2(__NR_setreuid, expected_id == 0 ? 1000 : 42,
-                               (long) (unsigned) -1);
-        if (rc == -1) /* -EPERM */
-            PASS();
+        pid_t pid = fork();
+        if (pid == 0) {
+            long rc = raw_syscall2(__NR_setreuid, expected_id == 0 ? 1000 : 42,
+                                   (long) (unsigned) -1);
+            _exit(rc == 0 ? 0 : 1);
+        }
+        int status;
+        waitpid(pid, &status, 0);
+        if (expected_id == 0)
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                        "setreuid failed for root");
         else
-            FAIL("expected -EPERM");
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 1,
+                        "expected -EPERM");
     }
 
     /* getresgid */
@@ -130,9 +155,22 @@ int main(void)
     TEST("setgid(expected) succeeds");
     EXPECT_TRUE(raw_syscall1(__NR_setgid, expected_id) == 0, "setgid failed");
 
-    TEST("setgid(other) returns -EPERM");
-    EXPECT_TRUE(raw_syscall1(__NR_setgid, expected_id == 0 ? 1000 : 0) == -1,
-                "expected -EPERM");
+    TEST("setgid(other) returns expected status");
+    {
+        pid_t pid = fork();
+        if (pid == 0) {
+            long rc = raw_syscall1(__NR_setgid, expected_id == 0 ? 1000 : 0);
+            _exit(rc == 0 ? 0 : 1);
+        }
+        int status;
+        waitpid(pid, &status, 0);
+        if (expected_id == 0)
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                        "setgid(1000) failed for root");
+        else
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 1,
+                        "expected -EPERM");
+    }
 
     /* setfsuid / setfsgid: Linux contract is to return the previous fsuid /
      * fsgid.
@@ -236,6 +274,42 @@ int main(void)
         long rc =
             raw_syscall3(__NR_sched_getaffinity, 0, sizeof(mask), (long) &mask);
         EXPECT_TRUE(rc > 0 && (mask & 1), "CPU0 not in mask");
+    }
+
+    if (expected_id == 0) {
+        TEST("privileged setreuid(1000, -1) sets real ID");
+        {
+            pid_t pid = fork();
+            if (pid == 0) {
+                long rc =
+                    raw_syscall2(__NR_setreuid, 1000, (long) (unsigned) -1);
+                _exit(rc == 0 ? 0 : 1);
+            }
+            int status;
+            waitpid(pid, &status, 0);
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                        "setreuid(1000, -1) failed");
+        }
+
+        TEST("privileged setuid(1000) resets ruid/euid/suid");
+        {
+            pid_t pid = fork();
+            if (pid == 0) {
+                long rc = raw_syscall1(__NR_setuid, 1000);
+                if (rc != 0)
+                    _exit(1);
+                unsigned int ruid = 0, euid = 0, suid = 0;
+                long grc = raw_syscall3(__NR_getresuid, (long) &ruid,
+                                        (long) &euid, (long) &suid);
+                if (grc == 0 && ruid == 1000 && euid == 1000 && suid == 1000)
+                    _exit(0);
+                _exit(2);
+            }
+            int status;
+            waitpid(pid, &status, 0);
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                        "uid triple not fully updated");
+        }
     }
 
     SUMMARY("test-credentials");

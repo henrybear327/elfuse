@@ -11,12 +11,12 @@
  * once the child is gone, hunts down and reaps every descendant left in
  * the child's session so one case cannot leak processes into the next.
  *
- * The post-deadline cleanup budget is a fixed constant so the harness
- * can cap the surrounding SSH session: TERM_GRACE_SEC + KILL_WAIT_SEC +
- * REAP_POLL_SEC plus one second of slack is 12 seconds, and the channel
- * allows 20 seconds beyond the test timeout (OUTER_CAP_SLACK_SEC in
- * tests/ltp/plugins/qemuchroot_chan.py; a harness selftest asserts the
- * inequality between the two files).
+ * The post-deadline cleanup budget is a fixed constant so the layers
+ * above can be capped: TERM_GRACE_SEC + KILL_WAIT_SEC + REAP_POLL_SEC
+ * plus one second of slack is 12 seconds, which must stay below
+ * QEMU_EXEC_SLACK_SEC in tests/ltp/ltp_harness/kirkdrive.py so the
+ * supervisor always reports before kirk cancels the command. A harness
+ * selftest asserts the inequality between the two files.
  *
  * Status is a single-line JSON file published atomically (exclusive
  * tempfile, fsync, rename). Exit status: the child's own exit code,

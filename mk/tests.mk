@@ -460,6 +460,18 @@ build-ltp-fixture:
 test-ltp-elfuse:
 	$(call RUN_LTP_TARGET,$(MAKE) $(ELFUSE_BIN),$(LTP_ENV) python3 tests/ltp/harness.py run --backend elfuse,test-ltp-elfuse)
 
+## Run the selected LTP tier in the qemu-system-aarch64 Linux reference VM
+test-ltp-qemu:
+	$(call RUN_LTP_TARGET,:,$(LTP_ENV) python3 tests/ltp/harness.py run --backend qemu,test-ltp-qemu)
+
+## Run the QEMU reference first, then the same LTP payload through elfuse
+test-ltp:
+	$(call RUN_LTP_TARGET,$(MAKE) $(ELFUSE_BIN),$(LTP_ENV) python3 tests/ltp/harness.py run --backend all,test-ltp)
+
+## Re-record the per-subtest baselines for both backends from a fresh run
+record-ltp-baseline:
+	$(call RUN_LTP_TARGET,$(MAKE) $(ELFUSE_BIN),$(LTP_ENV) python3 tests/ltp/harness.py record-baseline --backend all --tier all,record-ltp-baseline)
+
 ifeq ($(origin GUEST_COREUTILS), undefined)
   ifneq ($(wildcard $(FIXTURES_DIR)/aarch64-musl/dyn-bin),)
     GUEST_COREUTILS := $(FIXTURES_DIR)/aarch64-musl/dyn-bin

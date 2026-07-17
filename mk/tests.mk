@@ -416,6 +416,40 @@ test-all: check
 # Coreutils integration test
 FIXTURES_DIR ?= $(CURDIR)/externals/test-fixtures
 
+# Optional Linux Test Project syscall-conformance lane. The fixture and
+# results stay worktree-local by default so concurrent branches cannot
+# mutate each other's generated GPL-covered payloads or reports. All
+# selection and gating logic lives in tests/ltp/harness.py; these targets
+# only forward the knobs.
+LTP_FIXTURE_DIR ?= $(FIXTURES_DIR)/ltp-aarch64
+LTP_RESULTS_DIR ?= $(CURDIR)/$(BUILD_DIR)/ltp-results
+LTP_TIER ?= fast
+LTP_TEST ?=
+
+.PHONY: build-ltp-fixture test-ltp test-ltp-elfuse test-ltp-qemu record-ltp-baseline
+
+# Check the optional fixture before building elfuse or any helper, so a
+# missing opt-in payload stays a useful setup SKIP; the harness itself
+# uses rc 77 for the same contract.
+define RUN_LTP_TARGET
+	@set -e; \
+	$(1); \
+	rc=0; \
+	$(2) || rc=$$?; \
+	if [ "$$rc" = 77 ]; then \
+		printf "$(YELLOW)SKIP$(RESET) %s\n" "$(3)"; \
+	elif [ "$$rc" != 0 ]; then \
+		exit "$$rc"; \
+	fi
+endef
+
+LTP_ENV := LTP_FIXTURE_DIR="$(LTP_FIXTURE_DIR)" LTP_RESULTS_DIR="$(LTP_RESULTS_DIR)" \
+           LTP_TIER="$(LTP_TIER)" LTP_TEST="$(LTP_TEST)" CROSS_COMPILE="$(CROSS_COMPILE)"
+
+## Download, verify, cross-build, and stage the pinned LTP + kirk fixture
+build-ltp-fixture:
+	$(Q)$(LTP_ENV) python3 tests/ltp/harness.py build-fixture $(if $(filter-out 0,$(FORCE)),--force)
+
 ifeq ($(origin GUEST_COREUTILS), undefined)
   ifneq ($(wildcard $(FIXTURES_DIR)/aarch64-musl/dyn-bin),)
     GUEST_COREUTILS := $(FIXTURES_DIR)/aarch64-musl/dyn-bin

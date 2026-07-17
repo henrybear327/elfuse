@@ -429,10 +429,16 @@ LTP_TEST ?=
 .PHONY: build-ltp-fixture test-ltp test-ltp-elfuse test-ltp-qemu record-ltp-baseline
 
 # Check the optional fixture before building elfuse or any helper, so a
-# missing opt-in payload stays a useful setup SKIP; the harness itself
-# uses rc 77 for the same contract.
+# missing opt-in payload stays a useful setup SKIP even on hosts that
+# cannot compile the regular prerequisites; the harness itself uses
+# rc 77 for the same contract.
 define RUN_LTP_TARGET
 	@set -e; \
+	if [ ! -s "$(LTP_FIXTURE_DIR)/.complete" ]; then \
+		printf "LTP fixture is absent; run: make build-ltp-fixture\n"; \
+		printf "$(YELLOW)SKIP$(RESET) %s\n" "$(3)"; \
+		exit 0; \
+	fi; \
 	$(1); \
 	rc=0; \
 	$(2) || rc=$$?; \
@@ -449,6 +455,10 @@ LTP_ENV := LTP_FIXTURE_DIR="$(LTP_FIXTURE_DIR)" LTP_RESULTS_DIR="$(LTP_RESULTS_D
 ## Download, verify, cross-build, and stage the pinned LTP + kirk fixture
 build-ltp-fixture:
 	$(Q)$(LTP_ENV) python3 tests/ltp/harness.py build-fixture $(if $(filter-out 0,$(FORCE)),--force)
+
+## Run the selected LTP tier through elfuse under kirk (default: LTP_TIER=fast)
+test-ltp-elfuse:
+	$(call RUN_LTP_TARGET,$(MAKE) $(ELFUSE_BIN),$(LTP_ENV) python3 tests/ltp/harness.py run --backend elfuse,test-ltp-elfuse)
 
 ifeq ($(origin GUEST_COREUTILS), undefined)
   ifneq ($(wildcard $(FIXTURES_DIR)/aarch64-musl/dyn-bin),)

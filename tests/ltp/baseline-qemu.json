@@ -1,0 +1,280 @@
+{
+  "backend": "qemu",
+  "pin": {
+    "kirk_tag": "v4.1.0",
+    "ltp_commit": "3a64d78f58bdceba93ed321e91215fb969a047ed",
+    "ltp_release": "20260529"
+  },
+  "schema_version": 1,
+  "tests": {
+    "alarm02": {
+      "status": "PASS",
+      "subtests": {
+        "alarm02.c:34": {
+          "TPASS": 3
+        },
+        "alarm02.c:36": {
+          "TPASS": 3
+        }
+      }
+    },
+    "epoll_ctl01": {
+      "status": "PASS",
+      "subtests": {
+        "epoll_ctl01.c:115": {
+          "TPASS": 3
+        }
+      }
+    },
+    "epoll_wait03": {
+      "status": "PASS",
+      "subtests": {
+        "epoll_wait03.c:63": {
+          "TPASS": 5
+        }
+      }
+    },
+    "execve01": {
+      "status": "PASS",
+      "subtests": {
+        "execve01_child.c:34": {
+          "TPASS": 1
+        }
+      }
+    },
+    "exit_group01": {
+      "status": "PASS",
+      "subtests": {
+        "exit_group01.c:96": {
+          "TPASS": 1
+        }
+      }
+    },
+    "fcntl34": {
+      "status": "PASS",
+      "subtests": {
+        "fcntl34.c:124": {
+          "TPASS": 1
+        }
+      }
+    },
+    "fcntl36": {
+      "status": "PASS",
+      "subtests": {
+        "fcntl36.c:366": {
+          "TPASS": 7
+        }
+      }
+    },
+    "futex_wait01": {
+      "status": "PASS",
+      "subtests": {
+        "futex_wait01.c:62": {
+          "TPASS": 4
+        }
+      }
+    },
+    "futex_wait02": {
+      "status": "PASS",
+      "subtests": {
+        "futex_wait02.c:59": {
+          "TPASS": 1
+        }
+      }
+    },
+    "futex_wait03": {
+      "status": "PASS",
+      "subtests": {
+        "futex_wait03.c:56": {
+          "TPASS": 1
+        }
+      }
+    },
+    "futex_wake01": {
+      "status": "PASS",
+      "subtests": {
+        "futex_wake01.c:52": {
+          "TPASS": 6
+        }
+      }
+    },
+    "preadv02": {
+      "status": "PASS",
+      "subtests": {
+        "preadv02.c:77": {
+          "TPASS": 8
+        }
+      }
+    },
+    "pwritev02": {
+      "status": "PASS",
+      "subtests": {
+        "pwritev02.c:73": {
+          "TPASS": 7
+        }
+      }
+    },
+    "readv01": {
+      "status": "PASS",
+      "subtests": {
+        "readv01.c:71": {
+          "TPASS": 5
+        },
+        "readv01.c:85": {
+          "TPASS": 5
+        }
+      }
+    },
+    "readv02": {
+      "status": "PASS",
+      "subtests": {
+        "readv02.c:72": {
+          "TPASS": 5
+        }
+      }
+    },
+    "recv01": {
+      "status": "PASS",
+      "subtests": null
+    },
+    "recvmsg01": {
+      "status": "PASS",
+      "subtests": {
+        "recvmsg01.c:246": {
+          "TPASS": 10
+        }
+      }
+    },
+    "setitimer01": {
+      "status": "PASS",
+      "subtests": {
+        "setitimer01.c:108": {
+          "TPASS": 3
+        },
+        "setitimer01.c:122": {
+          "TPASS": 3
+        },
+        "setitimer01.c:75": {
+          "TPASS": 3
+        },
+        "setitimer01.c:78": {
+          "TPASS": 3
+        },
+        "setitimer01.c:80": {
+          "TPASS": 3
+        },
+        "setitimer01.c:81": {
+          "TPASS": 3
+        }
+      }
+    },
+    "setpgid01": {
+      "status": "PASS",
+      "subtests": {
+        "setpgid01.c:19": {
+          "TPASS": 1
+        },
+        "setpgid01.c:20": {
+          "TPASS": 1
+        },
+        "setpgid01.c:22": {
+          "TPASS": 1
+        },
+        "setpgid01.c:23": {
+          "TPASS": 1
+        },
+        "setpgid01.c:31": {
+          "TPASS": 1
+        },
+        "setpgid01.c:32": {
+          "TPASS": 1
+        },
+        "setpgid01.c:33": {
+          "TPASS": 1
+        }
+      }
+    },
+    "setpgid02": {
+      "status": "PASS",
+      "subtests": {
+        "setpgid02.c:52": {
+          "TPASS": 3
+        }
+      }
+    },
+    "setpgid03": {
+      "status": "PASS",
+      "subtests": {
+        "setpgid03.c:43": {
+          "TPASS": 1
+        },
+        "setpgid03.c:45": {
+          "TPASS": 1
+        },
+        "setpgid03.c:56": {
+          "TPASS": 1
+        }
+      }
+    },
+    "times01": {
+      "status": "PASS",
+      "subtests": {
+        "times01.c:23": {
+          "TPASS": 1
+        }
+      }
+    },
+    "times03": {
+      "status": "PASS",
+      "subtests": {
+        "times03.c:105": {
+          "TPASS": 1
+        },
+        "times03.c:111": {
+          "TPASS": 1
+        },
+        "times03.c:118": {
+          "TPASS": 1
+        },
+        "times03.c:124": {
+          "TPASS": 1
+        },
+        "times03.c:131": {
+          "TPASS": 1
+        },
+        "times03.c:136": {
+          "TPASS": 1
+        },
+        "times03.c:155": {
+          "TPASS": 1
+        },
+        "times03.c:163": {
+          "TPASS": 1
+        },
+        "times03.c:170": {
+          "TPASS": 1
+        },
+        "times03.c:175": {
+          "TPASS": 1
+        },
+        "times03.c:89": {
+          "TPASS": 1
+        },
+        "times03.c:94": {
+          "TPASS": 1
+        }
+      }
+    },
+    "writev01": {
+      "status": "PASS",
+      "subtests": {
+        "writev01.c:124": {
+          "TPASS": 4
+        },
+        "writev01.c:129": {
+          "TPASS": 2
+        }
+      }
+    }
+  }
+}

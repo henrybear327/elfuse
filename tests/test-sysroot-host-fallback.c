@@ -133,6 +133,22 @@ int main(int argc, char **argv)
     else
         PASS();
 
+    TEST("sysroot passwd file wins over synthetic intercept");
+    if (read_file_nul("/etc/passwd", buf, sizeof(buf)) <= 0)
+        FAIL("read /etc/passwd failed");
+    else if (strcmp(buf, "guest-passwd\n"))
+        FAIL("did not bypass /etc/passwd synthetic intercept");
+    else
+        PASS();
+
+    TEST("absent sysroot group file falls back to synthetic intercept");
+    if (read_file_nul("/etc/group", buf, sizeof(buf)) <= 0)
+        FAIL("read /etc/group failed");
+    else if (strncmp(buf, "root:x:0:\nstaff:x:20:\nuser:x:1000:\n", 32))
+        FAIL("did not fall back to synthetic group intercept");
+    else
+        PASS();
+
     SUMMARY("test-sysroot-host-fallback");
     return fails > 0 ? 1 : 0;
 }

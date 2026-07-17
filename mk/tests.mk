@@ -257,6 +257,8 @@ test-sysroot-host-fallback: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-host-fallbac
 	printf 'host-final\n' > "$$mirror/final.txt"; \
 	printf 'host-loses\n' > "$$mirror/both.txt"; \
 	printf 'sysroot-wins\n' > "$$sysroot$$mirror/both.txt"; \
+	mkdir -p "$$sysroot/etc"; \
+	printf 'guest-passwd\n' > "$$sysroot/etc/passwd"; \
 	$(ELFUSE_BIN) --sysroot "$$sysroot" \
 	    $(BUILD_DIR)/test-sysroot-host-fallback \
 	    "$$hostdir" "$$mirror/final.txt" "$$mirror/both.txt"

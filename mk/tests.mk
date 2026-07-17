@@ -124,6 +124,16 @@ check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
 	@$(MAKE) --no-print-directory test-rosetta-cli
 	@printf "\n$(BLUE)━━━ hot-syscall guardrail ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-bench-guardrail
+	@printf "\n$(BLUE)━━━ LTP harness selftests ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-ltp-harness
+
+## Hermetic selftests for the LTP conformance harness: pure Python plus a
+## shell smoke test of the exit-code contract; needs no fixture, kirk
+## checkout, cross toolchain, or network.
+.PHONY: test-ltp-harness
+test-ltp-harness:
+	@python3 -m unittest discover -s tests/ltp/selftest -t tests/ltp
+	@bash tests/ltp/test-harness-smoke.sh
 
 ## Hot-syscall performance guardrail: ensure getpid, libc clock_gettime,
 ## and 1-byte /dev/urandom reads stay under their TODO ns/op ceilings.

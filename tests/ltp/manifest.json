@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "comment": [
+    "Source of truth for the LTP conformance lane. The fixture builder",
+    "generates one runtest file per tier (elfuse-fast, elfuse-extended,",
+    "elfuse-nightly) from this list and stages every command and helper",
+    "into the pinned rootfs. Kirk consumes the generated runtest files.",
+    "result_format: new-api tests emit file.c:line TPASS/TFAIL lines and",
+    "a Summary block; legacy-exit tests (recv01 only) are judged by the",
+    "documented LTP exit bits at whole-binary granularity."
+  ],
+  "tests": [
+    {
+      "id": "readv01",
+      "command": "/opt/ltp/testcases/bin/readv01",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Basic readv success coverage"
+    },
+    {
+      "id": "readv02",
+      "command": "/opt/ltp/testcases/bin/readv02",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "High-signal readv errno coverage"
+    },
+    {
+      "id": "writev01",
+      "command": "/opt/ltp/testcases/bin/writev01",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Basic writev coverage"
+    },
+    {
+      "id": "preadv02",
+      "command": "/opt/ltp/testcases/bin/preadv02",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "High-signal preadv errno coverage"
+    },
+    {
+      "id": "pwritev02",
+      "command": "/opt/ltp/testcases/bin/pwritev02",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "High-signal pwritev errno coverage"
+    },
+    {
+      "id": "recv01",
+      "command": "/opt/ltp/testcases/bin/recv01",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "legacy-exit",
+      "helpers": [],
+      "data": [],
+      "notes": "Legacy recv errno coverage; not comprehensive recv semantics"
+    },
+    {
+      "id": "futex_wait01",
+      "command": "/opt/ltp/testcases/bin/futex_wait01",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Bounded futex wait coverage"
+    },
+    {
+      "id": "futex_wake01",
+      "command": "/opt/ltp/testcases/bin/futex_wake01",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Bounded futex wake coverage"
+    },
+    {
+      "id": "epoll_ctl01",
+      "command": "/opt/ltp/testcases/bin/epoll_ctl01",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Basic epoll_ctl add modify delete coverage"
+    },
+    {
+      "id": "epoll_wait03",
+      "command": "/opt/ltp/testcases/bin/epoll_wait03",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "High-signal epoll_wait errno coverage"
+    },
+    {
+      "id": "setpgid01",
+      "command": "/opt/ltp/testcases/bin/setpgid01",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Basic process-group behavior with normalized session layout"
+    },
+    {
+      "id": "times01",
+      "command": "/opt/ltp/testcases/bin/times01",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Basic times syscall coverage"
+    },
+    {
+      "id": "alarm02",
+      "command": "/opt/ltp/testcases/bin/alarm02",
+      "arguments": [],
+      "tier": "fast",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Bounded alarm scheduling coverage"
+    },
+    {
+      "id": "recvmsg01",
+      "command": "/opt/ltp/testcases/bin/recvmsg01",
+      "arguments": [],
+      "tier": "extended",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Extended recvmsg errno coverage"
+    },
+    {
+      "id": "futex_wait02",
+      "command": "/opt/ltp/testcases/bin/futex_wait02",
+      "arguments": [],
+      "tier": "extended",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Futex wait observing a sleeping parent through procfs"
+    },
+    {
+      "id": "futex_wait03",
+      "command": "/opt/ltp/testcases/bin/futex_wait03",
+      "arguments": [],
+      "tier": "extended",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Threaded futex wait observing process state in /proc/self/stat"
+    },
+    {
+      "id": "setitimer01",
+      "command": "/opt/ltp/testcases/bin/setitimer01",
+      "arguments": [],
+      "tier": "extended",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Interval timer signal coverage"
+    },
+    {
+      "id": "execve01",
+      "command": "/opt/ltp/testcases/bin/execve01",
+      "arguments": [],
+      "tier": "extended",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": ["execve01_child"],
+      "data": [],
+      "notes": "Exec argument and environment propagation"
+    },
+    {
+      "id": "exit_group01",
+      "command": "/opt/ltp/testcases/bin/exit_group01",
+      "arguments": [],
+      "tier": "extended",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Multithreaded exit_group coverage"
+    },
+    {
+      "id": "setpgid02",
+      "command": "/opt/ltp/testcases/bin/setpgid02",
+      "arguments": [],
+      "tier": "extended",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Process-group errno coverage reading /proc/sys/kernel/pid_max"
+    },
+    {
+      "id": "fcntl34",
+      "command": "/opt/ltp/testcases/bin/fcntl34",
+      "arguments": [],
+      "tier": "nightly",
+      "timeout_seconds": 300,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Stateful open-file-description lock coverage"
+    },
+    {
+      "id": "fcntl36",
+      "command": "/opt/ltp/testcases/bin/fcntl36",
+      "arguments": [],
+      "tier": "nightly",
+      "timeout_seconds": 300,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Timed open-file-description lock coverage"
+    },
+    {
+      "id": "times03",
+      "command": "/opt/ltp/testcases/bin/times03",
+      "arguments": [],
+      "tier": "nightly",
+      "timeout_seconds": 300,
+      "result_format": "new-api",
+      "helpers": [],
+      "data": [],
+      "notes": "Stateful child process times coverage"
+    },
+    {
+      "id": "setpgid03",
+      "command": "/opt/ltp/testcases/bin/setpgid03",
+      "arguments": [],
+      "tier": "nightly",
+      "timeout_seconds": 300,
+      "result_format": "new-api",
+      "helpers": ["setpgid03_child"],
+      "data": [],
+      "notes": "Stateful process-group error coverage with helper"
+    }
+  ]
+}

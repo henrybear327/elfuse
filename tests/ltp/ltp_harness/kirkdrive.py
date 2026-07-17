@@ -26,8 +26,15 @@ from typing import Any, Dict, List
 
 from ltp_harness import manifest as manifest_mod
 
-# The channel safety cap and the QEMU SSH outer cap sit this far above
-# kirk's per-execution timeout.
+# Timeout layering, from the inside out (T is the tier timeout times the
+# multiplier): the QEMU supervisor enforces T on the test and needs its
+# fixed cleanup budget (about 12s, see tests/ltp/helpers/qemu-supervisor.c)
+# afterwards; kirk's exec-timeout must therefore sit QEMU_EXEC_SLACK_SEC
+# above T on that backend so the supervisor always reports before kirk
+# cancels; and the channel's own per-command cap sits CHANNEL_CAP_SLACK_SEC
+# above T as the outermost belt. A harness selftest asserts
+# budget < QEMU_EXEC_SLACK_SEC < CHANNEL_CAP_SLACK_SEC.
+QEMU_EXEC_SLACK_SEC = 25
 CHANNEL_CAP_SLACK_SEC = 30
 
 # Fixed schedule overhead allowed beyond the sum of all test timeouts.
@@ -103,11 +110,18 @@ def _kirk_argv(
 
     exec_timeout = manifest_mod.tier_timeout(tests, args.tier, args.test)
     exec_timeout = int(exec_timeout * args.timeout_mul)
+    if backend == "qemu":
+        exec_timeout += QEMU_EXEC_SLACK_SEC
     selection = manifest_mod.select_tests(tests, args.tier, args.test)
     suite_timeout = (
         int(sum(t["timeout_seconds"] for t in selection) * args.timeout_mul)
         + SUITE_SLACK_SEC
     )
+    # Each qemu test's exec-timeout gains QEMU_EXEC_SLACK_SEC above, so the
+    # suite budget must cover that per-test slack too, or kirk's suite deadline
+    # can fire before the per-test deadlines have summed out.
+    if backend == "qemu":
+        suite_timeout += len(selection) * QEMU_EXEC_SLACK_SEC
 
     suites = sorted(
         {manifest_mod.suite_name(test["tier"]) for test in selection}
@@ -203,10 +217,10 @@ def run_backends(
         results_dir, "-".join(backends) if len(backends) > 1 else backends[0], args.tier
     )
 
-    exec_timeout = int(
+    tier_deadline = int(
         manifest_mod.tier_timeout(tests, args.tier, args.test) * args.timeout_mul
     )
-    channel_cap = exec_timeout + CHANNEL_CAP_SLACK_SEC
+    channel_cap = tier_deadline + CHANNEL_CAP_SLACK_SEC
 
     for backend in backends:
         if backend == "elfuse":
@@ -227,6 +241,7 @@ def run_backends(
                 paths=paths,
                 run_dir=run_dir,
                 repo_root=repo_root,
+                sup_timeout=tier_deadline,
                 channel_cap=channel_cap,
                 kirk_argv_builder=lambda options: _kirk_argv(
                     "qemu", options, args, tests, paths, run_dir

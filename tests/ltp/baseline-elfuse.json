@@ -1,0 +1,300 @@
+{
+  "backend": "elfuse",
+  "pin": {
+    "kirk_tag": "v4.1.0",
+    "ltp_commit": "3a64d78f58bdceba93ed321e91215fb969a047ed",
+    "ltp_release": "20260529"
+  },
+  "schema_version": 1,
+  "tests": {
+    "alarm02": {
+      "status": "PASS",
+      "subtests": {
+        "alarm02.c:34": {
+          "TPASS": 3
+        },
+        "alarm02.c:36": {
+          "TPASS": 3
+        }
+      }
+    },
+    "epoll_ctl01": {
+      "status": "PASS",
+      "subtests": {
+        "epoll_ctl01.c:115": {
+          "TPASS": 3
+        }
+      }
+    },
+    "epoll_wait03": {
+      "reason": "epoll_wait returns 1 where Linux reflects the registered event mask; epoll readiness/permission divergence",
+      "status": "FAIL",
+      "subtests": {
+        "epoll_wait03.c:63": {
+          "TFAIL": 1,
+          "TPASS": 4
+        }
+      }
+    },
+    "execve01": {
+      "reason": "the LTP shm IPC region is lost across execve (bad magic after exec); shm-over-exec interaction",
+      "status": "BROKEN",
+      "subtests": {
+        "tst_test.c:1936": {
+          "TBROK": 1
+        },
+        "tst_test.c:212": {
+          "TBROK": 1
+        },
+        "tst_test.c:544": {
+          "TBROK": 1
+        }
+      }
+    },
+    "exit_group01": {
+      "status": "PASS",
+      "subtests": {
+        "exit_group01.c:96": {
+          "TPASS": 1
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        }
+      }
+    },
+    "fcntl34": {
+      "status": "PASS",
+      "subtests": {
+        "fcntl34.c:124": {
+          "TPASS": 1
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        }
+      }
+    },
+    "fcntl36": {
+      "reason": "pthread_create fails EAGAIN under the test's thread fan-out; guest thread resource limit",
+      "status": "BROKEN",
+      "subtests": {
+        "fcntl36.c:316": {
+          "TBROK": 1
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        }
+      }
+    },
+    "futex_wait01": {
+      "status": "PASS",
+      "subtests": {
+        "futex_wait01.c:62": {
+          "TPASS": 4
+        }
+      }
+    },
+    "futex_wait02": {
+      "reason": "/proc/<pid>/stat of another guest process is not emulated (ENOENT); procfs process-enumeration gap",
+      "status": "BROKEN",
+      "subtests": {
+        "futex_wait02.c:33": {
+          "TBROK": 1
+        }
+      }
+    },
+    "futex_wait03": {
+      "reason": "reaches its variant setup then does not complete; sleeping-state /proc/self/stat and teardown gaps",
+      "status": "BROKEN",
+      "subtests": {}
+    },
+    "futex_wake01": {
+      "status": "PASS",
+      "subtests": {
+        "futex_wake01.c:52": {
+          "TPASS": 6
+        }
+      }
+    },
+    "preadv02": {
+      "reason": "preadv with an invalid argument succeeds where Linux returns EINVAL; preadv validation gap",
+      "status": "FAIL",
+      "subtests": {
+        "preadv02.c:77": {
+          "TPASS": 7
+        },
+        "preadv02.c:81": {
+          "TFAIL": 1
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        }
+      }
+    },
+    "pwritev02": {
+      "reason": "pwritev with an invalid argument succeeds where Linux returns EINVAL; pwritev validation gap",
+      "status": "FAIL",
+      "subtests": {
+        "pwritev02.c:73": {
+          "TPASS": 6
+        },
+        "pwritev02.c:77": {
+          "TFAIL": 1
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        }
+      }
+    },
+    "readv01": {
+      "status": "PASS",
+      "subtests": {
+        "readv01.c:71": {
+          "TPASS": 5
+        },
+        "readv01.c:85": {
+          "TPASS": 5
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        }
+      }
+    },
+    "readv02": {
+      "reason": "readv with an invalid iovec succeeds where Linux returns EFAULT/EINVAL; readv argument-validation gap",
+      "status": "FAIL",
+      "subtests": {
+        "readv02.c:72": {
+          "TFAIL": 1,
+          "TPASS": 4
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        }
+      }
+    },
+    "recv01": {
+      "reason": "MSG_ERRQUEUE recv flag is dropped (recv returns 0 instead of -1); the nested-fork PID collision that previously masked this is fixed",
+      "status": "FAIL",
+      "subtests": null
+    },
+    "recvmsg01": {
+      "reason": "reaches and passes its assertions but the test process does not terminate cleanly within the deadline; teardown/timeout gap",
+      "status": "BROKEN",
+      "subtests": {
+        "recvmsg01.c:246": {
+          "TPASS": 1
+        }
+      }
+    },
+    "setitimer01": {
+      "reason": "reaches and passes its assertions but does not terminate cleanly within the deadline; teardown/timeout gap",
+      "status": "BROKEN",
+      "subtests": {
+        "setitimer01.c:108": {
+          "TPASS": 1
+        },
+        "setitimer01.c:75": {
+          "TPASS": 1
+        },
+        "setitimer01.c:78": {
+          "TPASS": 1
+        },
+        "setitimer01.c:80": {
+          "TPASS": 1
+        },
+        "setitimer01.c:81": {
+          "TPASS": 1
+        }
+      }
+    },
+    "setpgid01": {
+      "status": "PASS",
+      "subtests": {
+        "setpgid01.c:19": {
+          "TPASS": 1
+        },
+        "setpgid01.c:20": {
+          "TPASS": 1
+        },
+        "setpgid01.c:22": {
+          "TPASS": 1
+        },
+        "setpgid01.c:23": {
+          "TPASS": 1
+        },
+        "setpgid01.c:31": {
+          "TPASS": 1
+        },
+        "setpgid01.c:32": {
+          "TPASS": 1
+        },
+        "setpgid01.c:33": {
+          "TPASS": 1
+        }
+      }
+    },
+    "setpgid02": {
+      "reason": "/proc/sys/kernel/pid_max is not readable (ENOENT); procfs sysctl gap",
+      "status": "BROKEN",
+      "subtests": {
+        "setpgid02.c:45": {
+          "TBROK": 1
+        }
+      }
+    },
+    "setpgid03": {
+      "reason": "tst_checkpoint (futex over /dev/shm) times out; cross-process checkpoint wake gap",
+      "status": "BROKEN",
+      "subtests": {
+        "setpgid03.c:28": {
+          "TBROK": 1
+        },
+        "setpgid03.c:41": {
+          "TBROK": 1
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        }
+      }
+    },
+    "times01": {
+      "status": "PASS",
+      "subtests": {
+        "times01.c:23": {
+          "TPASS": 1
+        }
+      }
+    },
+    "times03": {
+      "reason": "reaches and passes its assertions but does not terminate cleanly within the deadline; teardown/timeout gap",
+      "status": "BROKEN",
+      "subtests": {
+        "times03.c:89": {
+          "TPASS": 1
+        },
+        "times03.c:94": {
+          "TPASS": 1
+        }
+      }
+    },
+    "writev01": {
+      "reason": "writev accepts an oversized iov_len that Linux rejects with EINVAL, then the test dies on SIGPIPE (now correctly reported WIFSIGNALED); writev validation gap",
+      "status": "BROKEN",
+      "subtests": {
+        "tst_test.c:1948": {
+          "TBROK": 1
+        },
+        "tst_tmpdir.c:339": {
+          "TWARN": 1
+        },
+        "writev01.c:124": {
+          "TFAIL": 1,
+          "TPASS": 2
+        },
+        "writev01.c:129": {
+          "TPASS": 2
+        }
+      }
+    }
+  }
+}

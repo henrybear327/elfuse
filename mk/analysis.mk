@@ -10,7 +10,7 @@ INFER ?= infer
 # untracked mirrors under dot-directories.
 C_FORMAT_FILES := $(shell git ls-files --cached --others --exclude-standard \
                            -- 'src/**/*.[ch]' 'src/*.[ch]' \
-                           'tests/*.c' 'tests/*.h')
+                           'tests/*.c' 'tests/*.h' 'tests/ltp/helpers/*.c')
 SHELL_SCRIPTS := $(shell git ls-files --cached --others --exclude-standard \
                          -- '*.sh')
 PYTHON_FORMAT_FILES := $(shell git ls-files --cached --others \

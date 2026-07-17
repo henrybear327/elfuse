@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "comment": [
+    "Upstream pins for the LTP conformance lane. The fixture builder",
+    "refuses to build or verify against any other version, and every",
+    "recorded baseline embeds these values so a pin bump forces an",
+    "explicit baseline re-record. Busybox is resolved at build time",
+    "(LTP_BUSYBOX, then the checked-in fixture tree, then the Debian",
+    "busybox-static download) and its digest is recorded in the",
+    "generated fixture metadata instead of here."
+  ],
+  "ltp": {
+    "project": "linux-test-project/ltp",
+    "release": "20260529",
+    "commit": "3a64d78f58bdceba93ed321e91215fb969a047ed",
+    "archive_url": "https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz",
+    "archive_sha256": "685d83c6e370ac09201fb79593412f868fe031ee2890e204b5727fedcf51fb47",
+    "sha256_url": "https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz.sha256",
+    "source_date_epoch": 1780048197
+  },
+  "kirk": {
+    "project": "linux-test-project/kirk",
+    "tag": "v4.1.0",
+    "archive_url": "https://github.com/linux-test-project/kirk/archive/refs/tags/v4.1.0.tar.gz",
+    "archive_sha256": "dabc33925c2b4451afecfd63f880bc93e3aacd6994878cfa0b8d7870e7170f5b"
+  },
+  "license_boundary": "The downloaded LTP and kirk trees and the generated rootfs are external GPL-covered fixtures. They stay under externals/test-fixtures/, are ignored by Git, and must not be committed or distributed without a license and source-offer review."
+}

@@ -43,7 +43,6 @@ INDIRECT_COVERAGE: dict[str, str] = {
     "rt_sigsuspend": "Signal suspension is exercised by higher-level signal tests; direct raw coverage is timing-sensitive.",
     "rt_sigpending": "Signal pending state is exercised indirectly by the signal suite.",
     "ptrace": "Covered by debugger integration via tests/test-gdbstub.sh.",
-    "chroot": "Exercised only by the dynamic coreutils shell suite via the chroot(8) applet; the syscall itself has no dedicated C test (requires elevated privilege).",
     "rt_sigreturn": "Kernel-only return-from-handler trampoline; invoked implicitly by every signal handler exit. No userspace callers.",
     "get_robust_list": "Pthread-internal: glibc may set/get a robust-list pointer transparently during thread setup; rarely called directly by application code.",
     "set_robust_list": "Pthread-internal: glibc and musl issue set_robust_list during thread bring-up via a path that the audit corpus does not call directly.",

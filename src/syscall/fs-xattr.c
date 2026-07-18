@@ -86,7 +86,7 @@ int64_t sys_getxattr(guest_t *g,
     if (tx.fuse_path)
         return -LINUX_ENOSYS;
 
-    int opts = nofollow ? XATTR_NOFOLLOW : 0;
+    int opts = (nofollow || tx.is_dev_shm) ? XATTR_NOFOLLOW : 0;
 
     if (size == 0) {
         ssize_t ret = getxattr(tx.host_path, name, NULL, 0, 0, opts);
@@ -134,7 +134,7 @@ int64_t sys_setxattr(guest_t *g,
         return -LINUX_EFAULT;
     }
 
-    int opts = nofollow ? XATTR_NOFOLLOW : 0;
+    int opts = (nofollow || tx.is_dev_shm) ? XATTR_NOFOLLOW : 0;
     err = xattr_translate_flags(flags, &opts);
     if (err < 0) {
         free(buf);
@@ -163,7 +163,7 @@ int64_t sys_listxattr(guest_t *g,
     if (tx.fuse_path)
         return -LINUX_ENOSYS;
 
-    int opts = nofollow ? XATTR_NOFOLLOW : 0;
+    int opts = (nofollow || tx.is_dev_shm) ? XATTR_NOFOLLOW : 0;
 
     if (size == 0) {
         ssize_t ret = listxattr(tx.host_path, NULL, 0, opts);
@@ -199,7 +199,7 @@ int64_t sys_removexattr(guest_t *g,
     if (tx.fuse_path)
         return -LINUX_ENOSYS;
 
-    int opts = nofollow ? XATTR_NOFOLLOW : 0;
+    int opts = (nofollow || tx.is_dev_shm) ? XATTR_NOFOLLOW : 0;
     int ret = removexattr(tx.host_path, name, opts);
     return ret < 0 ? linux_errno() : 0;
 }

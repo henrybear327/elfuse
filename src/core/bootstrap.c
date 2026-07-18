@@ -227,6 +227,16 @@ static bool load_interpreter(guest_t *g,
                 return false;
             }
             interp_host_temp = true;
+        } else if (tx.is_dev_shm) {
+            /* A loader in /dev/shm is never legitimate, and elf_load() below
+             * opens it by path with no nofollow. Reject outright rather than
+             * risk following a symlink leaf onto the host. (The guest is not
+             * yet running, so no link can have been planted; a plain reject is
+             * race-free, unlike the runtime execve paths.)
+             */
+            log_error("refusing /dev/shm interpreter: %s",
+                      boot->elf_info.interp_path);
+            return false;
         } else {
             str_copy_trunc(boot->interp_resolved, tx.host_path,
                            sizeof(boot->interp_resolved));

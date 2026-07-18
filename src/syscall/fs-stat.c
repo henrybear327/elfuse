@@ -269,8 +269,10 @@ static int64_t stat_at_path(guest_t *g,
             }
         }
         if (intercepted == PROC_NOT_INTERCEPTED) {
-            int mac_flags = translate_at_flags(flags);
-            if (fstatat(dir_ref.fd, tx.host_path, mac_st, mac_flags) < 0) {
+            int mac_flags =
+                path_translation_at_flags(&tx, translate_at_flags(flags));
+            if (fstatat(path_translation_dirfd(&tx, &dir_ref), tx.host_path,
+                        mac_st, mac_flags) < 0) {
                 rc = linux_errno();
                 goto done;
             }
@@ -427,6 +429,32 @@ static int64_t sys_statfs_impl(guest_t *g,
                 return -LINUX_EFAULT;
             return 0;
         }
+    }
+
+    /* Report /dev/shm and its leaves as tmpfs, from the backing dir. statfs()
+     * on the leaf would follow a symlink onto the host and leak the host fs
+     * identity, so answer synthetically; lstat is the nofollow existence probe.
+     */
+    bool shm_root = !strcmp(tx.intercept_path, "/dev/shm") ||
+                    !strcmp(tx.intercept_path, "/dev/shm/");
+    if (tx.is_dev_shm || shm_root) {
+        const char *shm_dir = proc_get_shm_dir();
+        if (!shm_dir)
+            return linux_errno();
+        if (tx.is_dev_shm) {
+            struct stat leaf_st;
+            if (lstat(tx.host_path, &leaf_st) < 0)
+                return linux_errno();
+        }
+        struct statfs shm_fs;
+        if (statfs(shm_dir, &shm_fs) < 0)
+            return linux_errno();
+        linux_statfs_t lin_st;
+        translate_statfs(&shm_fs, &lin_st); /* sets f_namelen = 255 */
+        lin_st.f_type = 0x01021994;         /* TMPFS_MAGIC */
+        if (guest_write_small(g, buf_gva, &lin_st, sizeof(lin_st)) < 0)
+            return -LINUX_EFAULT;
+        return 0;
     }
 
     struct statfs mac_st;

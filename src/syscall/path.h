@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -27,10 +28,32 @@ typedef struct {
     const char *host_path;
     int proc_resolved;
     bool fuse_path;
+    /* Path was rewritten into the /dev/shm host backing dir. Follow-capable
+     * callers must force nofollow; see dev_shm_resolve_path() in procemu.c.
+     */
+    bool is_dev_shm;
     char proc_path[LINUX_PATH_MAX];
     char guest_buf[LINUX_PATH_MAX];
     char host_buf[LINUX_PATH_MAX];
 } path_translation_t;
+
+/* Host dirfd for a *at() call on a translated path. A shm redirect gives an
+ * absolute host path, so use AT_FDCWD (POSIX ignores dirfd for absolute paths).
+ */
+static inline host_fd_t path_translation_dirfd(const path_translation_t *tx,
+                                               const host_fd_ref_t *ref)
+{
+    return tx->is_dev_shm ? AT_FDCWD : ref->fd;
+}
+
+/* Force AT_SYMLINK_NOFOLLOW on the *at metadata calls for a shm redirect. One
+ * choke point for the never-follow invariant; see dev_shm_resolve_path().
+ */
+static inline int path_translation_at_flags(const path_translation_t *tx,
+                                            int at_flags)
+{
+    return tx->is_dev_shm ? (at_flags | AT_SYMLINK_NOFOLLOW) : at_flags;
+}
 
 /* Advance *pathp to the next '/'-separated component, skipping empty segments
  * from repeated slashes. Returns true with the component (not NUL-terminated)

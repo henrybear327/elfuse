@@ -683,11 +683,35 @@ static int proc_parse_fd_index(const char *path,
     return (int) n;
 }
 
-/* Resolve a /dev/shm/<suffix> guest path to a host path inside the per-UID shm
- * dir. Rejects empty, traversing, or compound suffixes with EACCES; reports
- * ENAMETOOLONG when the host path overflows. The same validation runs in
- * proc_intercept_open and proc_intercept_stat, so the helper is one source of
- * truth for the security gate.
+/* Map a guest /dev/shm/<name> path to its host backing path, and gate the name.
+ *
+ * macOS has no /dev/shm, so elfuse backs POSIX shared memory with a per-UID
+ * host directory (/tmp/elfuse-shm-<uid>/). This is the single source of truth
+ * for that mapping. Callers proc_intercept_open, proc_intercept_stat, and
+ * path_translate_at (which records the hit in path_translation_t.is_dev_shm)
+ * all resolve through here, so one guest shm path never resolves two ways
+ * (e.g. open landing in the backing dir while chmod falls through to the
+ * sysroot).
+ *
+ * A POSIX shm name is always a single flat component: glibc's __shm_get_name
+ * (posix/shm-directory.c) strips the leading slash and rejects an empty name or
+ * any embedded '/' with EINVAL. This enforces the same shape, also rejects the
+ * ".." component (whole-component compare, so a flat name like "a..b" is fine),
+ * and returns EACCES (ENAMETOOLONG on overflow).
+ *
+ * The never-follow invariant lives here. On Linux /dev/shm is an in-namespace
+ * tmpfs, so a symlink planted at a shm leaf resolves inside that namespace.
+ * elfuse's backing store is a plain host directory, so the same symlink would
+ * resolve onto the host filesystem, escaping the sandbox. A symlink leaf is
+ * never legitimate anyway: glibc's shm_open (sysdeps/posix/shm_open.c) opens
+ * objects with O_NOFOLLOW. So every shm op must act on the leaf without
+ * following it. Because this resolver hands back an absolute host path that
+ * bypasses the sysroot, that duty is spread across syscall families and
+ * funneled through: path_translation_at_flags() (AT_SYMLINK_NOFOLLOW on the *at
+ * metadata calls), shm_open_leaf() (O_NOFOLLOW fd for truncate/chdir), proc
+ * open (O_NOFOLLOW), xattr (XATTR_NOFOLLOW), stat (lstat), linkat (clears
+ * AT_SYMLINK_FOLLOW), and statfs (answered synthetically, never touching the
+ * leaf).
  */
 static int dev_shm_resolve_path(const char *guest_suffix,
                                 char *host_path,
@@ -696,8 +720,8 @@ static int dev_shm_resolve_path(const char *guest_suffix,
     const char *shm = shm_dir_path();
     if (!shm)
         return -1;
-    if (strstr(guest_suffix, "..") || strchr(guest_suffix, '/') ||
-        guest_suffix[0] == '\0') {
+    if (guest_suffix[0] == '\0' || strchr(guest_suffix, '/') ||
+        !strcmp(guest_suffix, "..")) {
         errno = EACCES;
         return -1;
     }
@@ -3497,12 +3521,15 @@ int proc_intercept_stat(const char *path, struct stat *st)
                            path); /* sticky bit, like real /dev/shm */
         return 0;
     }
-    /* /dev/shm/<name> files: check the host temp dir */
+    /* /dev/shm/<name> files: check the host backing dir, and lstat rather than
+     * stat so a planted symlink leaf is never followed (see
+     * dev_shm_resolve_path).
+     */
     if (!strncmp(path, "/dev/shm/", 9)) {
         char host_path[512];
         if (dev_shm_resolve_path(path + 9, host_path, sizeof(host_path)) < 0)
             return -1;
-        return stat(host_path, st);
+        return lstat(host_path, st);
     }
 
     /* /dev/pts directory and /dev/pts/N slave entries. glibc ptsname(3) stats

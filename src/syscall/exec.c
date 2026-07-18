@@ -160,18 +160,33 @@ static void exec_cleanup_inputs(char **argv,
     free(envp_buf);
 }
 
+/* Open an execve image (binary or interpreter). For a shm redirect, force
+ * O_NOFOLLOW so a symlink leaf cannot point the exec at a host file; a real
+ * binary in /dev/shm still opens. See dev_shm_resolve_path().
+ */
+static int exec_open_image(const char *host_path, bool shm_nofollow)
+{
+    int oflags = O_RDONLY | O_CLOEXEC;
+    if (shm_nofollow)
+        oflags |= O_NOFOLLOW;
+    return open(host_path, oflags);
+}
+
 static int exec_resolve_guest_host_path(const char *guest_path,
                                         char *host_path,
                                         size_t host_path_sz,
-                                        bool *host_path_temp)
+                                        bool *host_path_temp,
+                                        bool *shm_nofollow)
 {
     path_translation_t tx;
-    if (!guest_path || !host_path || host_path_sz == 0 || !host_path_temp) {
+    if (!guest_path || !host_path || host_path_sz == 0 || !host_path_temp ||
+        !shm_nofollow) {
         errno = EINVAL;
         return -1;
     }
 
     *host_path_temp = false;
+    *shm_nofollow = false;
     if (path_translate_at(LINUX_AT_FDCWD, guest_path, PATH_TR_NONE, &tx) < 0)
         return -1;
     if (tx.fuse_path) {
@@ -190,6 +205,7 @@ static int exec_resolve_guest_host_path(const char *guest_path,
         errno = ENAMETOOLONG;
         return -1;
     }
+    *shm_nofollow = tx.is_dev_shm;
     return 0;
 }
 
@@ -197,11 +213,13 @@ static int exec_resolve_interp_host_path(const char *sysroot,
                                          const char *interp_guest_path,
                                          char *interp_host_path,
                                          size_t interp_host_path_sz,
-                                         bool *interp_host_temp)
+                                         bool *interp_host_temp,
+                                         bool *shm_nofollow)
 {
     char interp_candidate[LINUX_PATH_MAX];
     elf_resolve_interp(sysroot, interp_guest_path, interp_candidate,
                        sizeof(interp_candidate));
+    *shm_nofollow = false;
     if (strcmp(interp_candidate, interp_guest_path) != 0) {
         size_t len = str_copy_trunc(interp_host_path, interp_candidate,
                                     interp_host_path_sz);
@@ -214,7 +232,8 @@ static int exec_resolve_interp_host_path(const char *sysroot,
     }
 
     return exec_resolve_guest_host_path(interp_guest_path, interp_host_path,
-                                        interp_host_path_sz, interp_host_temp);
+                                        interp_host_path_sz, interp_host_temp,
+                                        shm_nofollow);
 }
 
 /* Read a NULL-terminated pointer array from guest memory. Each pointer in the
@@ -387,6 +406,10 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     char path_host_buf[LINUX_PATH_MAX];
     const char *path_host = path;
     bool path_host_temp = false;
+    /* Whether path_host is a shm redirect leaf (drives O_NOFOLLOW on the exec
+     * open). Re-evaluated whenever path_host is repointed to an interpreter.
+     */
+    bool path_host_shm = false;
     char interp_host_buf[LINUX_PATH_MAX];
     bool interp_host_temp = false;
 
@@ -455,6 +478,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
             path_host_temp = true;
         } else {
             str_copy_trunc(path_host_buf, tx.host_path, sizeof(path_host_buf));
+            path_host_shm = tx.is_dev_shm;
         }
         path_host = path_host_buf;
     }
@@ -471,7 +495,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
 
     /* Open the directly-executed file first and bind it to an fd to avoid
      * TOCTOU. */
-    exec_fd = open(path_host, O_RDONLY | O_CLOEXEC);
+    exec_fd = exec_open_image(path_host, path_host_shm);
     if (exec_fd < 0) {
         err = linux_errno();
         goto fail;
@@ -616,15 +640,17 @@ int64_t sys_execve(hv_vcpu_t vcpu,
                 goto fail;
             interp_host_temp = true;
             path_host = interp_host_buf;
+            path_host_shm = false;
         } else {
             str_copy_trunc(path_host_buf, interp_tx.host_path,
                            sizeof(path_host_buf));
             path_host = path_host_buf;
+            path_host_shm = interp_tx.is_dev_shm;
         }
 
         /* Close old fd and open the new interpreter */
         close(exec_fd);
-        exec_fd = open(path_host, O_RDONLY | O_CLOEXEC);
+        exec_fd = exec_open_image(path_host, path_host_shm);
         if (exec_fd < 0) {
             err = linux_errno();
             goto fail;
@@ -734,6 +760,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
      * itself via fd 3, so the aarch64-only interpreter pre-load below is
      * skipped for rosetta exec.
      */
+    bool interp_shm = false;
     if (!target_is_rosetta && elf_info.interp_path[0] != '\0') {
         char sysroot_snap[LINUX_PATH_MAX];
         bool have_sr =
@@ -741,7 +768,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         if (exec_resolve_interp_host_path(have_sr ? sysroot_snap : NULL,
                                           elf_info.interp_path, interp_resolved,
                                           sizeof(interp_resolved),
-                                          &interp_host_temp) < 0) {
+                                          &interp_host_temp, &interp_shm) < 0) {
             log_error("execve: failed to resolve interpreter: %s",
                       elf_info.interp_path);
             err = -LINUX_ENOEXEC;
@@ -754,7 +781,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
 
         log_debug("execve: pre-validating interpreter: %s", interp_resolved);
 
-        interp_fd = open(interp_resolved, O_RDONLY | O_CLOEXEC);
+        interp_fd = exec_open_image(interp_resolved, interp_shm);
         if (interp_fd < 0) {
             log_error("execve: failed to open interpreter: %s",
                       interp_resolved);

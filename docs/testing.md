@@ -79,6 +79,7 @@ make check
 make test-rosetta-all
 make test-gdbstub
 make test-matrix
+make test-gvisor-conformance-qemu
 make lint
 make clean
 ```
@@ -118,6 +119,11 @@ What they do:
 - `make test-gdbstub`: debugger integration checks against the built-in GDB stub
 - `make test-matrix`: cross-check `elfuse` (aarch64), QEMU (aarch64),
   and `elfuse` (x86_64-via-Rosetta) on overlapping corpora
+- `make test-gvisor-conformance-qemu`: run the pinned gVisor syscall test
+  binaries on the QEMU AArch64 Linux reference. The combined
+  `make test-gvisor-conformance` adds the `elfuse` lane, which
+  intentionally exits nonzero at the current baseline (see gVisor
+  Syscall Conformance below)
 - `make lint`: static analysis through `clang-tidy`
 
 ## Quick Iteration
@@ -147,6 +153,251 @@ or run all matrix modes back-to-back with `make test-matrix`.
 `make check` already runs the BusyBox applet suite as a second stage, so a
 green `make check` covers BusyBox validation. Use `make test-busybox` to
 iterate on a single applet failure without rerunning the unit suite.
+
+## gVisor Syscall Conformance
+
+The conformance lane runs unmodified gVisor syscall test binaries through
+two backends and compares the outcomes: the QEMU AArch64 Linux reference
+kernel provides the ground truth, and elfuse must match it. The payload is
+built from gVisor at pinned commit
+`c30a6d1b6f26b353ca5d6ff5a288d96ed820e89c` (master, 2026-07-15). The enabled
+suites are the opt-in allowlist in `tests/conformance/gvisor/targets.txt`
+(the reference-feasible single-process syscall tests; suites that need a
+network stack, elevated privilege, namespaces, host `/proc`, or a pty are
+declined there). gVisor and elfuse are both Apache-2.0 projects. The lane is
+opt-in and separate from `make check` and the test matrix.
+
+### Building the payload
+
+```sh
+make build-gvisor-tests
+```
+
+The build script clones `google/gvisor` at the pin into
+`externals/gvisor/<pin>` (refusing to touch a dirty checkout), builds the
+selected targets as fully static AArch64 binaries through gVisor's
+supported Bazel make wrapper (`make copy` on Linux; `make build` plus
+container artifact extraction on macOS), verifies every artifact with
+`readelf`
+(ELF64, AArch64, a loadable segment, no `PT_INTERP`, no `DT_NEEDED`), and
+installs the result into `build/gvisor-tests`. The static link keeps
+`--eh-frame-hdr` (`PT_GNU_EH_FRAME`) so that `pthread_cancel` and thread-exit
+stack unwinding resolve their frames; without it the fully-static binaries
+abort at teardown in any test that cancels or joins a thread.
+
+On macOS the wrapper runs Bazel inside Docker, so a running Docker daemon
+and GNU xargs (`brew install findutils`) are required. The macOS Bazel
+cache must stay in a Docker volume (a bind-mounted cache breaks Bazel's
+sandbox on virtiofs), so the script extracts the artifacts from the build
+container with `docker cp`. On Linux hosts with a native Bazel, set
+`GVISOR_DOCKER_BUILD=false` to build without Docker; this is what CI does.
+Override the checkout with `GVISOR_CHECKOUT`, the output directory with
+`GVISOR_TESTS_DIR`, and the `readelf` used for validation with
+`GVISOR_READELF`.
+
+### Running the lane
+
+```sh
+make test-gvisor-conformance-qemu
+make test-gvisor-conformance-elfuse
+make test-gvisor-conformance       # QEMU reference first, then elfuse
+```
+
+The runner can also be invoked directly:
+
+```sh
+tests/run-gvisor-conformance.sh qemu-aarch64
+tests/run-gvisor-conformance.sh elfuse-aarch64
+tests/run-gvisor-conformance.sh all
+```
+
+A missing payload directory is reported as a skip with the build command;
+nothing is downloaded implicitly. All modes require Python 3.9+ and GNU
+`timeout` (Homebrew coreutils provides `gtimeout`); QEMU mode additionally
+requires `qemu-system-aarch64` and the normal repository test fixtures. The
+runner aligns locale, timezone, working directory, scratch and `GTEST_*`
+variables, umask, and resource limits on both backends, and runs the QEMU
+reference guest with `QEMU_MEM=6144` (some tests, e.g.
+`ReadvTestNoFixture.TruncatedAtMax`, allocate ~2 GiB and fault on the
+default 2 GiB guest). This is scoped to the lane; the general test matrix is
+unaffected.
+
+Execution is whole-binary batched: each binary is first listed with
+`--gtest_list_tests` and strictly parsed, then executed once with XML
+output under `GVISOR_SUITE_TIMEOUT` (default 600 s), and every planned test
+is classified from the XML with an exit-code cross-check. When a binary
+crashes, times out, or produces inconsistent output, the unresolved tests
+are re-run one at a time with `--gtest_filter` under `GVISOR_CASE_TIMEOUT`
+(default 30 s), so a mid-suite crash is attributed to the exact test that
+caused it instead of hiding the results of the others.
+
+### Expectations
+
+`tests/conformance/gvisor/expectations.tsv` holds one row per test per
+backend and must exactly cover the discovered listing; wildcard rows,
+duplicate rows, and stale rows are all rejected. The states are:
+
+- `PASS`: a well-formed passing test with the matching exit status
+- `SKIP`: a legitimate environment skip reported by GoogleTest, with a
+  concrete reason
+- `XFAIL`: an expected assertion failure with a concrete reason and an
+  issue or reference; only a clean, well-formed failure satisfies it
+- `EXCLUDE`: the test is not executed on that backend at all, with a
+  concrete reason. Reserved for tests that are unusable against the
+  reference itself, for example tests that crash the reference kernel in
+  this environment.
+
+A passing XFAIL is `XPASS` and fails the lane because the baseline is
+stale. Crashes, signals, timeouts, transport errors, and malformed output
+are always fatal and cannot satisfy `XFAIL`. Do not add `XFAIL` or
+`EXCLUDE` rows just to make a newly exposed elfuse semantic difference
+green.
+
+The manifest is bootstrapped from the reference backend rather than written
+by hand:
+
+```sh
+GVISOR_BOOTSTRAP=1 tests/run-gvisor-conformance.sh qemu-aarch64
+python3 tests/lib/gvisor_conformance.py expectations-init \
+    --root build/gvisor-conformance-results/<run-id> \
+    --output tests/conformance/gvisor/expectations.tsv
+```
+
+`expectations-init` turns the observed reference results into draft rows
+and marks everything that needs human judgement with `REVIEW`; review and
+resolve every marker before committing the manifest. The same procedure
+applies on a pin bump: rebuild the payload, re-bootstrap on QEMU, and
+review the manifest diff.
+
+### Results
+
+Complete per-test stdout, stderr, XML, process metadata, and human logs are
+kept under `build/gvisor-conformance-results/<run-id>/`, along with
+aggregate JSON and JUnit output per backend and overall. Set
+`GVISOR_RESULTS_DIR` to choose another results base; the runner still
+creates a unique run-id directory beneath it.
+
+### CI topology
+
+CI splits the lane across two runners. A Linux ARM64 job builds the payload
+with a host Bazel (`GVISOR_DOCKER_BUILD=false`), caches it keyed by the
+gVisor pin (with a recipe salt, so a build-flag change such as
+`--eh-frame-hdr` invalidates stale caches), runs the target drift audit
+(`check-gvisor-targets`), and uploads the payload as an artifact; the macOS
+runtime job downloads the artifact and runs the QEMU reference lane. The
+128-suite reference lane runs thousands of tests and can take tens of
+minutes (suites that crash or exit inconsistently with their XML trigger
+isolated per-test reruns), so the runtime job's timeout is sized
+accordingly. The elfuse lane remains explicit local validation until the
+gaps recorded in the manifest are fixed.
+
+### Baseline (2026-07-19)
+
+The opt-in set in `targets.txt` enables 128 suites; the payload discovers
+2319 tests. The QEMU AArch64 Linux reference passes them cleanly except for
+43 that do not run cleanly against the reference itself in this environment
+and are `EXCLUDE`d on both backends, leaving 2276 planned tests per backend:
+
+| Backend | PASS | SKIP | EXCLUDE |
+| --- | ---: | ---: | ---: |
+| QEMU AArch64 Linux reference | 2237 | 39 | 43 |
+
+elfuse runs the same 2276 planned tests and is intentionally red at this
+baseline (measured with `make test-gvisor-conformance-elfuse`); every
+reference-PASS test is expected `PASS`, so each divergence is a real elfuse
+gap. CI runs only the QEMU reference lane.
+
+The 39 SKIPs are gVisor-specific tests that skip on a real kernel
+(`!IsRunningOnGvisor()`) or are version-gated. The 43 reference exclusions
+group as:
+
+- architecture x86-isms: e.g. `FPSigTest.NestedSignals` checks `xmm`
+  registers, which do not exist on AArch64;
+- tests that `execve` a companion binary the single-file payload does not
+  ship (all `RseqTest.*`, `SigaltstackTest.ResetByExecve`,
+  `PrctlTest.OrphansReparentedToSubreaper`);
+- missing guest devices or mounts: `/dev/fuse` (`DevTest.*Fuse`,
+  `IoctlTest.FIOASYNCHandlesFuseFD`), `/dev/mqueue` (`MqTest.Open*`);
+- environment specifics: `AffinityTest.*` (CPU-mask size),
+  `GetrusageTest.Grandchild`, `Pipes/PipeTest.PipeFdCount/*`, `KeysTest`;
+- a timestamp test that is flaky at clock-tick granularity
+  (`OpenTest.TruncateNoSizeChangeUpdatesTimestamps`);
+- hard crashers on the reference (`ConcurrencyTest.MultiProcessConcurrency`,
+  `PollTest.InvalidFds`, `FaultTest.InRange`).
+
+Two upstream suites do not build against the pinned tree without extra
+helpers (`exec_test`, `sticky_test`) and two link no GoogleTest cases
+(`fpsig_mut_test`, `time_test`); all four are left out of `targets.txt`.
+Fix the runtime, not the manifest.
+
+### Known elfuse gaps (remediation order)
+
+Across the full 128-suite corpus elfuse is broadly red; run `make
+test-gvisor-conformance-elfuse` for the current breakdown. Some gaps are
+whole missing syscalls (for example `io_setup` returns `ENOSYS`, so the
+`aio` suite fails at setup); others are semantic divergences in calls that
+are already implemented. The original five hand-picked suites (`readv`,
+`fcntl`, `epoll`, `futex`, `ppoll`) remain the highest-leverage starting
+points: their divergences collapse into a small number of root causes, and
+fixing a cluster's core often clears its advanced cases too. A rough fix
+order by leverage and independence follows.
+
+1. `readv` zero-length iovec. A `{bad_address, 0}` entry must be address
+   validated and fault with `EFAULT` before the zero-length shortcut. One
+   isolated test, the smallest fix.
+2. `fcntl` `F_SETSIG`/`F_GETSIG`. These commands return `EINVAL`, which alone
+   gates the whole `FcntlSignalTest` suite plus the `FcntlTest` `SetSig`
+   cases, about 21 tests from one feature in `src/syscall/fs.c`.
+3. Localized `fcntl` and `ppoll` fixes: validate `F_SETOWN`/`F_SETOWN_EX`
+   owners so a bad pid, tid, or process group returns `ESRCH` (about 5);
+   treat `O_PATH` descriptors specially so disallowed commands return `EBADF`
+   (about 6); honor `ppoll`'s temporary signal mask and validate its size
+   (4).
+4. `futex` `FUTEX_WAIT` returning `EAGAIN` instead of parking. Waiters never
+   block, so `FUTEX_WAKE` finds nobody and the wake counts come out zero. One
+   likely root cause in the wait value-check path in `src/runtime/futex.c`,
+   with high fan-out across the futex suite.
+5. POSIX byte-range record locks. `FcntlLockTest` exercises classic
+   `F_SETLK`, `F_SETLKW`, and `F_GETLK` conflict, blocking, and multi-process
+   semantics, which are distinct from the OFD locks already implemented.
+   About 15 tests and a subsystem rather than a one-liner.
+6. `epoll` readiness and lifecycle. Readiness is never reported, so
+   `epoll_wait` blocks to the timeout on several cases; the rest need
+   `EPOLLHUP`/`EPOLLERR` delivered independently of the requested mask,
+   regular files rejected with `EPERM`, and cycle detection. About 13 tests,
+   including six hangs, in `src/syscall/poll.c`.
+7. `futex` advanced paths: `FUTEX_WAKE_OP`, wrong-kind detection,
+   priority-inheritance (`FUTEX_LOCK_PI`, two of which crash), and the
+   interprocess shared and copy-on-write cases. Best attempted after the core
+   wait fix, which may resolve several.
+
+Any `TIMEOUT` and `SIGNAL` results should each be reproduced in isolation
+first. They are valid tests, since the QEMU reference passes them, but the
+elfuse hang or crash should be confirmed as a genuine semantic gap rather than
+an artifact of the heavier GoogleTest runtime before a root cause is assigned.
+
+### Adding coverage
+
+Opting a new suite in is a three-step change:
+
+1. add its Bazel label to `tests/conformance/gvisor/targets.txt` (the binary
+   name is derived from the label);
+2. `make build-gvisor-tests` to build the new binary;
+3. regenerate `tests/conformance/gvisor/expectations.tsv`
+   (`GVISOR_BOOTSTRAP=1` run on `qemu-aarch64`, then `expectations-init`).
+
+Until step 3 the exact-cover manifest deliberately fails the `plan` step,
+because the new suite's tests have no rows yet. Qualify every new suite on
+QEMU before interpreting its elfuse results: a suite that does not run
+cleanly against the reference (crashes, x86-only, needs a companion binary
+or a device the guest lacks) belongs in the `# DECLINED` block of
+`targets.txt`, not in the enabled set.
+
+`make check-gvisor-targets` lists the upstream `*_test` targets that are
+available at the pin but not yet enabled (opt-in candidates), and fails if
+an enabled label no longer exists after a pin bump. It needs the gVisor
+checkout that `make build-gvisor-tests` creates, and skips cleanly when the
+checkout is absent.
 
 ## Test Matrix
 

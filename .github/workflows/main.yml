@@ -334,10 +334,79 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  # Build the pinned gVisor syscall test payload on Linux. gVisor's Bazel
+  # build does not run on macOS hosts and the macOS runners have no Docker,
+  # while the produced binaries are static AArch64 Linux ELFs the runtime
+  # job can consume directly.
+  gvisor-tests:
+    name: gVisor test payload (Linux ARM64)
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve gVisor pin
+        id: pin
+        run: |
+          . tests/lib/gvisor-common.sh
+          echo "pin=${GVISOR_PIN}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache built payload
+        id: payload-cache
+        uses: actions/cache@v5
+        with:
+          path: build/gvisor-tests
+          # Keyed by the gVisor commit pin (c30a6d1b, gVisor master
+          # 2026-07-15), so the Bazel build reruns only on a pin bump. The v2
+          # salt invalidates caches from before the --eh-frame-hdr link fix, so
+          # a pin-unchanged recipe change does not serve stale binaries.
+          key: gvisor-tests-v2-${{ steps.pin.outputs.pin }}
+
+      - name: Install bazelisk
+        if: ${{ steps.payload-cache.outputs.cache-hit != 'true' }}
+        run: |
+          command -v bazel > /dev/null 2>&1 && exit 0
+          # bazelisk v1.29.0; it resolves the Bazel version gVisor pins.
+          sudo curl -fsSL -o /usr/local/bin/bazel \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-arm64
+          sudo chmod +x /usr/local/bin/bazel
+
+      - name: Build pinned gVisor tests
+        if: ${{ steps.payload-cache.outputs.cache-hit != 'true' }}
+        run: |
+          GVISOR_DOCKER_BUILD=false bash tests/build-gvisor-tests.sh
+
+      # Gate on the target allowlist only when the payload was just built (the
+      # gVisor checkout the audit reads exists only then; on a cache hit it is
+      # absent and there is nothing to reconcile). Fails on a stale enabled
+      # label after a pin bump; the available-but-not-enabled list is advisory.
+      - name: Audit gVisor target allowlist
+        if: ${{ steps.payload-cache.outputs.cache-hit != 'true' }}
+        run: |
+          python3 scripts/check-gvisor-targets.py
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gvisor-tests
+          path: build/gvisor-tests
+          retention-days: 7
+          if-no-files-found: error
+
   runtime-macos:
     name: Runtime (${{ matrix.name }})
-    needs: build-macos
+    # gvisor-tests is needed only so the Release leg can download the payload
+    # artifact; require success from build-macos alone so a failed upstream
+    # gVisor build cannot take the sanitizer legs down with it. The payload
+    # steps below check needs.gvisor-tests.result themselves.
+    needs: [build-macos, gvisor-tests]
     if: >
+      !cancelled() &&
+      needs.build-macos.result == 'success' &&
       github.repository == 'sysprog21/elfuse' &&
       (github.event_name == 'push' || github.event_name == 'pull_request')
     runs-on: [self-hosted, macOS, arm64]
@@ -359,10 +428,15 @@ jobs:
             ubsan_options: ''
             tsan_options: ''
             test_timeout: ''
-            job_timeout: 20
+            # The gVisor conformance lane now runs 128 suites (~2300 tests)
+            # on the QEMU reference; suites that crash or exit inconsistently
+            # with their XML trigger isolated 30s-per-case reruns, so the lane
+            # alone can take tens of minutes. Budget generously on top of the
+            # ~20-minute base so the job is not cancelled mid-lane.
+            job_timeout: 90
             run_matrix: true
             check_target: check
-            brew_pkgs: binutils qemu
+            brew_pkgs: binutils coreutils qemu
           - name: ASAN
             sanitizer: asan
             extra_cflags: -O1 -g -fsanitize=address -fno-omit-frame-pointer
@@ -584,6 +658,29 @@ jobs:
         if: ${{ matrix.run_matrix }}
         run: |
           bash tests/test-matrix.sh all
+
+      - name: Download gVisor test payload
+        if: ${{ matrix.run_matrix && needs.gvisor-tests.result == 'success' }}
+        uses: actions/download-artifact@v7
+        with:
+          name: gvisor-tests
+          path: build/gvisor-tests
+
+      - name: gVisor syscall conformance (QEMU reference)
+        if: ${{ matrix.run_matrix && needs.gvisor-tests.result == 'success' }}
+        run: |
+          # Artifact transport drops the executable bit.
+          chmod +x build/gvisor-tests/*
+          bash tests/run-gvisor-conformance.sh qemu-aarch64
+
+      - name: Upload gVisor conformance results
+        if: ${{ !cancelled() && matrix.run_matrix }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gvisor-conformance-${{ matrix.sanitizer }}-${{ runner.os }}-${{ runner.arch }}
+          path: build/gvisor-conformance-results
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Upload runtime binary
         if: ${{ !cancelled() }}

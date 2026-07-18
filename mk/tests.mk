@@ -9,6 +9,9 @@
         test-rosetta-glibc test-rosetta-madvise test-rosetta-msync \
         test-rosetta-mremap test-rosetta-all bench-rosetta \
         test-matrix test-matrix-elfuse-aarch64 test-matrix-qemu-aarch64 \
+        test-gvisor-conformance-parser build-gvisor-tests check-gvisor-targets \
+        test-gvisor-conformance test-gvisor-conformance-elfuse \
+        test-gvisor-conformance-qemu \
         test-full test-multi-vcpu test-rwx test-sysroot-rename \
         test-case-collision test-case-collision-fallback test-getdents64-overlong \
         test-sysroot-host-fallback test-sysroot-case-exact \
@@ -692,6 +695,34 @@ test-matrix-elfuse-aarch64: $(ELFUSE_BIN) $(TEST_DEPS)
 ## Run test matrix: qemu aarch64 mode
 test-matrix-qemu-aarch64: $(ELFUSE_BIN) $(TEST_DEPS)
 	@bash tests/test-matrix.sh qemu-aarch64
+
+# gVisor syscall conformance (pinned upstream GoogleTest binaries)
+GVISOR_TESTS_DIR ?= $(BUILD_DIR)/gvisor-tests
+
+## Run strict self-tests for gVisor conformance result parsing
+test-gvisor-conformance-parser:
+	@python3 tests/test-gvisor-conformance-parser.py
+
+## Build the pinned gVisor syscall test binaries (network/Bazel opt-in)
+build-gvisor-tests:
+	@bash tests/build-gvisor-tests.sh "$(GVISOR_TESTS_DIR)"
+
+## Run the pinned gVisor syscall tests through elfuse (missing payload is SKIP)
+test-gvisor-conformance-elfuse: $(ELFUSE_BIN) test-gvisor-conformance-parser
+	$(call RUN_OPTIONAL_SKIP77,GVISOR_TESTS_DIR="$(GVISOR_TESTS_DIR)" bash tests/run-gvisor-conformance.sh elfuse-aarch64,gVisor test payload is not built)
+
+## Run the pinned gVisor syscall tests on the QEMU Linux reference (missing payload is SKIP)
+test-gvisor-conformance-qemu: test-gvisor-conformance-parser
+	$(call RUN_OPTIONAL_SKIP77,GVISOR_TESTS_DIR="$(GVISOR_TESTS_DIR)" bash tests/run-gvisor-conformance.sh qemu-aarch64,gVisor test payload is not built)
+
+## Run the pinned gVisor syscall tests on QEMU first, then elfuse
+test-gvisor-conformance: $(ELFUSE_BIN) test-gvisor-conformance-parser
+	$(call RUN_OPTIONAL_SKIP77,GVISOR_TESTS_DIR="$(GVISOR_TESTS_DIR)" bash tests/run-gvisor-conformance.sh all,gVisor test payload is not built)
+
+## List upstream gVisor *_test targets available at the pin but not enabled in
+## targets.txt (needs the checkout from build-gvisor-tests; missing is a SKIP)
+check-gvisor-targets:
+	$(call RUN_OPTIONAL_SKIP77,python3 scripts/check-gvisor-targets.py,gVisor checkout not present)
 
 ## Run test matrix: elfuse x86_64-via-Rosetta mode
 test-matrix-elfuse-x86_64: $(ELFUSE_BIN) $(TEST_DEPS)

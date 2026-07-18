@@ -1,0 +1,66 @@
+name: HVF elfuse setup
+description: >
+  Shared setup for the self-hosted HVF workload jobs: fail fast if the run is
+  superseded by a newer PR commit, then fetch the prebuilt elfuse binary from
+  the build-macos job and build the pure-Go elfuse-oci CLI. Assumes the repo is
+  already checked out.
+
+runs:
+  using: composite
+  steps:
+    # Fail fast if this run targets a commit that is no longer the PR's HEAD.
+    # cancel-in-progress covers a newer push, but not a manual "Re-run jobs" on
+    # an old run, which would burn the self-hosted runner re-testing stale code.
+    # Mirrors the runtime-macos guard; fails (not cancels) because repo policy
+    # caps the token at actions: read. The lookup fails open.
+    - name: Fail fast if superseded by a newer PR commit
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        RUN_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -uo pipefail
+        latest=$(curl -fsSL \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER" \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])') \
+          || latest=""
+        echo "Run targets : $RUN_SHA"
+        echo "PR HEAD now : ${latest:-<unknown>}"
+        if [ -n "$latest" ] && [ "$latest" != "$RUN_SHA" ]; then
+          echo "::error::This run targets $RUN_SHA, but PR #$PR_NUMBER HEAD is now $latest -- the commit is no longer the latest. Failing instead of re-testing stale code on the self-hosted runner; re-run CI on the current commit."
+          exit 1
+        fi
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    # Reuse the arm64 elfuse binary built + entitlement-checked by build-macos
+    # instead of rebuilding the C project on the self-hosted runner five times.
+    # Mach-O code signatures (and their embedded HVF entitlement) travel inside
+    # the binary, so they survive the artifact zip round-trip; only the execute
+    # bit is lost and restored here.
+    - name: Download prebuilt elfuse binary
+      uses: actions/download-artifact@v7
+      with:
+        name: elfuse-${{ runner.os }}-${{ runner.arch }}
+        path: build
+
+    - name: Restore execute bit + verify HVF entitlement
+      shell: bash
+      run: |
+        set -euo pipefail
+        chmod +x build/elfuse
+        codesign -d --entitlements - build/elfuse 2>&1 \
+          | grep -q 'com\.apple\.security\.hypervisor'
+
+    - name: Build elfuse-oci
+      shell: bash
+      run: make build/elfuse-oci

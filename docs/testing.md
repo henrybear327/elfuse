@@ -201,10 +201,9 @@ ELFUSE_OCI_NETTEST=1 make oci-test   # add the registry pull round-trip
 make oci-interop                     # image-layout + cross-tool interop (needs jq)
 ```
 
-`make oci-interop` always requires `jq`; install `crane`, `skopeo`, and `umoci`
-too when you want the local run to match the CI cross-tool gate. The Darwin
-sparsebundle round-trip (real `hdiutil` + case-sensitive APFS) is gated behind an
-env var and runs only on macOS:
+Tool prerequisites for `make oci-interop` are listed under Build Requirements
+above. The Darwin sparsebundle round-trip (real `hdiutil` + case-sensitive
+APFS) is gated behind an env var and runs only on macOS:
 
 ```sh
 ELFUSE_OCI_DARWIN_CS=1 go test -run TestDarwinCSSweep ./cmd/elfuse-oci/
@@ -224,6 +223,40 @@ CI splits this coverage by what each runner can do:
   `ELFUSE_OCI_DARWIN_CS` sparsebundle round-trip, and a run-less
   pull/inspect/list/rmi/prune lifecycle smoke through the darwin binary.
   No HVF needed.
+- **macOS (self-hosted, HVF)**: the only place `elfuse-oci run` actually boots a
+  guest. An alpine:3 default-entrypoint smoke proves pull → sparsebundle →
+  COW clone → HVF launch → exit-code propagation; a pull → inspect → list →
+  run → rmi → prune lifecycle runs python:3.12-slim with an `--entrypoint`
+  override and asserts the teardown guardrails (a plain rmi reclaiming the
+  cold cache with the image, then a `run --keep` cache that rmi refuses
+  without `--force` and `--force` detaches and drops). Besides those, a
+  per-image workload suite
+  (`workload-python|node|go|jvm|c`) drives each image from issue #224 through its
+  characteristic operations, one job per image. The shared driver is
+  `scripts/ci/oci-workload.sh <key>`; each image's guest workload lives in
+  `scripts/ci/workloads/`:
+
+  - **python** (`python:3.12-slim`): a single-threaded SQLite insert plus
+    aggregate query, a 50-file write/read/checksum pass, and a JSON round-trip.
+  - **node** (`node:22-alpine`): in-guest compute (fs fan-out, crypto, zlib,
+    JSON) plus an HTTP server the job curls over the host loopback before
+    `/quit`.
+  - **go** (`golang:1.23-alpine`): `go version` plus a `gofmt` of a tiny file
+    (deliberately build-free; a full build overruns elfuse's fixed thread
+    table).
+  - **jvm** (`eclipse-temurin:21`): `javac` + `java` exercising collections,
+    file I/O, SHA-256, an 8-thread pool, and a subprocess.
+  - **c** (`gcc:14`): a small multi-file `make` project plus a larger single
+    translation unit compiled with `gcc -O1`.
+
+  `gcc:14` and `eclipse-temurin:21` are Debian/Ubuntu-based and ship the shadow
+  suite, so these jobs also exercise the unpack setuid/setgid degrade end to
+  end. Each job keeps a warm per-key store on the runner's persistent disk, so
+  only the first run pulls over the network. Run one locally with:
+
+  ```sh
+  ELFUSE_OCI_STORE=/tmp/elfuse-oci-store scripts/ci/oci-workload.sh c
+  ```
 
 ### Writing OCI unit-test fixtures
 
@@ -245,13 +278,6 @@ adversarially exercise those, not only escape-by-content:
   `cranePull`, `isMountPointFn`, ...) to stage a racing pull/rmi in the exact
   TOCTOU window rather than only single-command paths, and hold the store or
   cache flocks directly to assert a busy path refuses.
-- **macOS + HVF (self-hosted)**: end-to-end `elfuse-oci run` guest boots:
-  the alpine:3 default-entrypoint smoke that proves pull → sparsebundle →
-  COW clone → HVF launch → exit-code propagation, and a full
-  pull → inspect → list → run → rmi → prune lifecycle that runs
-  python:3.12-slim with an `--entrypoint` override and asserts both teardowns
-  (a plain rmi reclaiming the cold cache with the image, then a `run --keep`
-  cache that rmi refuses without `--force` and `--force` detaches and drops).
 
 ## Test Matrix
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Whole user-facing image lifecycle against a real HVF-booted guest, then
 # the teardown guardrails, one function per phase:
-#   run_workloads            pull/inspect/list, an --entrypoint override,
-#                            and a glibc dynamically-linked python workload
+#   run_workloads            pull/inspect/list and a glibc dynamically-
+#                            linked python one-liner via --entrypoint
 #   teardown_plain_rmi       a plain rmi reclaims the cold unpacked cache
 #                            with the image
 #   teardown_keep_guardrails rmi refuses to discard run --keep output
@@ -25,19 +25,10 @@ SEED="${ELFUSE_OCI_SEED_STORE:?set ELFUSE_OCI_SEED_STORE to the warm seed store 
 IMG="${IMG:-python:3.12-slim}"
 export ELFUSE_OCI_STORE
 
+# reap_guest (in oci-lib.sh) keeps a failed phase from leaking the
+# backgrounded guest.
 guest=""
-on_exit() {
-    rc=$?
-    # A failed phase must not leak the backgrounded guest: it would keep
-    # holding the per-digest flock (and its sleep) and poison the next
-    # prune/rmi on a persistent self-hosted runner.
-    if [ -n "$guest" ] && kill -0 "$guest" 2>/dev/null; then
-        kill "$guest" 2>/dev/null || true
-        wait "$guest" 2>/dev/null || true
-    fi
-    exit "$rc"
-}
-trap on_exit EXIT
+trap reap_guest EXIT
 
 # The teardowns leave the ephemeral store EMPTY (asserted), so the
 # lifecycle store itself cannot persist between CI runs. Keep a warm seed
@@ -67,16 +58,6 @@ run_workloads() {
         -c 'import json,math; print(json.dumps({"pi":round(math.pi,5),"ok":True}))')"
     printf 'guest said: %s\n' "$out"
     [ "$out" = '{"pi": 3.14159, "ok": true}' ] || fail "python one-liner said '$out'"
-
-    # A non-trivial application: concurrent SQLite writers (fcntl locking,
-    # fsync, WAL where the guest FS supports it) plus a 64-file
-    # write/read/checksum fan-out. Exercises far more of the dynamically-
-    # linked glibc guest than the one-liner above; prints a single sentinel
-    # token only on full success.
-    out="$("$BIN" run --entrypoint /usr/local/bin/python3 "$IMG" \
-        -c "$(cat "$OCI_CI_DIR/oci-python-workload.py")")"
-    printf 'python workload said: %s\n' "$out"
-    [ "$out" = elfuse-oci-python-workload-ok ] || fail "python workload said '$out'"
 }
 
 # The runs above left the cache warm and then detached on exit, so a plain

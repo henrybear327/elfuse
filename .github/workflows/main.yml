@@ -13,6 +13,9 @@
 #                   (crane/skopeo/umoci) on Linux
 #   oci-macos     : elfuse-oci darwin build, unit tests, sparsebundle
 #                   round-trip, and a run-less image-lifecycle smoke
+#   workload-*    : per-image real-workload smokes (python/node/go/jvm/c) that
+#                   boot each image under HVF on self-hosted Apple Silicon and
+#                   drive its characteristic operations (issue #224)
 #
 # Runtime and sanitizer tests require Hypervisor.framework, which
 # GitHub-hosted macOS runners do not expose. Those tests run on self-hosted
@@ -793,3 +796,143 @@ jobs:
         # that the Linux job's cache-reclaiming flow does not cover. jq
         # ships on the macos-15 image.
         run: scripts/ci/oci-cli-smoke.sh
+
+  # Per-image real-workload jobs (issue #224). Each boots a real image under HVF
+  # via `elfuse-oci run` and drives that image's characteristic operations so a
+  # code change that breaks any of them is caught on the PR. One job per image;
+  # all share .github/actions/hvf-elfuse-setup, which fetches the elfuse binary
+  # from build-macos and builds elfuse-oci. `run` needs Hypervisor.framework, so
+  # these are self-hosted only. Each keeps a warm per-key store on the runner's
+  # persistent disk so only the first run pulls over the network. gcc:14 and
+  # eclipse-temurin:21 ship the shadow suite, so they also exercise the unpack
+  # setuid/setgid degrade end to end.
+  workload-python:
+    name: Workload (Python)
+    needs: build-macos
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request')
+    runs-on: [self-hosted, macOS, arm64]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: workload-python-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: HVF elfuse setup
+        uses: ./.github/actions/hvf-elfuse-setup
+      - name: Run python workload
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-workload-python"
+          scripts/ci/oci-workload.sh python
+
+  workload-node:
+    name: Workload (Node)
+    needs: build-macos
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request')
+    runs-on: [self-hosted, macOS, arm64]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: workload-node-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: HVF elfuse setup
+        uses: ./.github/actions/hvf-elfuse-setup
+      - name: Run node workload
+        # Includes the HTTP-server phase: the guest binds 127.0.0.1 (elfuse maps
+        # sockets to host sockets, no netns), and this step curls it host-side.
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-workload-node"
+          scripts/ci/oci-workload.sh node
+
+  workload-go:
+    name: Workload (Go)
+    needs: build-macos
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request')
+    runs-on: [self-hosted, macOS, arm64]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: workload-go-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: HVF elfuse setup
+        uses: ./.github/actions/hvf-elfuse-setup
+      - name: Run go workload
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-workload-go"
+          scripts/ci/oci-workload.sh go
+
+  workload-jvm:
+    name: Workload (JVM)
+    needs: build-macos
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request')
+    runs-on: [self-hosted, macOS, arm64]
+    # javac + java startup and the compile step run slower than the lighter
+    # images, and eclipse-temurin is a large first pull.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: workload-jvm-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: HVF elfuse setup
+        uses: ./.github/actions/hvf-elfuse-setup
+      - name: Run jvm workload
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-workload-jvm"
+          scripts/ci/oci-workload.sh jvm
+
+  workload-c:
+    name: Workload (C)
+    needs: build-macos
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request')
+    runs-on: [self-hosted, macOS, arm64]
+    # gcc:14 is the largest first pull and the compile bursts (make + a heavier
+    # single TU) dominate the wall time.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: workload-c-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: HVF elfuse setup
+        uses: ./.github/actions/hvf-elfuse-setup
+      - name: Run c workload
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-workload-c"
+          scripts/ci/oci-workload.sh c

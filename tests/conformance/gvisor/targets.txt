@@ -1,0 +1,163 @@
+# targets.txt: enabled gVisor syscall test targets for the conformance lane.
+#
+# Copyright 2026 elfuse contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One Bazel label per line; blank lines and # comments are ignored. Binary
+# names are derived from each label's basename in tests/lib/gvisor-common.sh,
+# so this file is the single source of truth for what the lane builds and runs.
+#
+# Opting a new target in is a three-step change:
+#   1. add its label below
+#   2. make build-gvisor-tests                (builds the new binary)
+#   3. regenerate tests/conformance/gvisor/expectations.tsv
+#      (GVISOR_BOOTSTRAP=1 run on qemu-aarch64, then expectations-init)
+# Until step 3, the exact-cover manifest deliberately fails the "plan" step.
+#
+# Run "make check-gvisor-targets" to list upstream *_test targets that are
+# available at the pin but not enabled here (opt-in candidates).
+
+//test/syscalls/linux:access_test
+//test/syscalls/linux:affinity_test
+//test/syscalls/linux:aio_test
+//test/syscalls/linux:alarm_test
+//test/syscalls/linux:brk_test
+//test/syscalls/linux:chdir_test
+//test/syscalls/linux:chmod_test
+//test/syscalls/linux:chown_test
+//test/syscalls/linux:clock_getres_test
+//test/syscalls/linux:clock_gettime_test
+//test/syscalls/linux:clock_nanosleep_test
+//test/syscalls/linux:close_range_test
+//test/syscalls/linux:concurrency_test
+//test/syscalls/linux:creat_test
+//test/syscalls/linux:deleted_test
+//test/syscalls/linux:dev_test
+//test/syscalls/linux:dup_test
+//test/syscalls/linux:epoll_test
+//test/syscalls/linux:eventfd_test
+//test/syscalls/linux:exec_binary_test
+//test/syscalls/linux:exit_test
+//test/syscalls/linux:fadvise64_test
+//test/syscalls/linux:fallocate_test
+//test/syscalls/linux:fault_test
+//test/syscalls/linux:fchdir_test
+//test/syscalls/linux:fcntl_test
+//test/syscalls/linux:fifo_test
+//test/syscalls/linux:flock_test
+//test/syscalls/linux:fork_test
+//test/syscalls/linux:fpsig_fork_test
+//test/syscalls/linux:fpsig_nested_test
+//test/syscalls/linux:fsync_test
+//test/syscalls/linux:futex_test
+//test/syscalls/linux:getcpu_test
+//test/syscalls/linux:getdents_test
+//test/syscalls/linux:getrandom_test
+//test/syscalls/linux:getrusage_test
+//test/syscalls/linux:inotify_test
+//test/syscalls/linux:ioctl_test
+//test/syscalls/linux:iouring_test
+//test/syscalls/linux:itimer_test
+//test/syscalls/linux:keys_test
+//test/syscalls/linux:kill_test
+//test/syscalls/linux:link_test
+//test/syscalls/linux:lseek_test
+//test/syscalls/linux:madvise_test
+//test/syscalls/linux:membarrier_test
+//test/syscalls/linux:memfd_test
+//test/syscalls/linux:memory_accounting_test
+//test/syscalls/linux:mempolicy_test
+//test/syscalls/linux:mincore_test
+//test/syscalls/linux:mkdir_test
+//test/syscalls/linux:mknod_test
+//test/syscalls/linux:mlock_test
+//test/syscalls/linux:mmap_eternal_test
+//test/syscalls/linux:mmap_test
+//test/syscalls/linux:mq_test
+//test/syscalls/linux:mremap_test
+//test/syscalls/linux:msgqueue_test
+//test/syscalls/linux:msync_test
+//test/syscalls/linux:munmap_test
+//test/syscalls/linux:open_create_test
+//test/syscalls/linux:open_test
+//test/syscalls/linux:partial_bad_buffer_test
+//test/syscalls/linux:pause_test
+//test/syscalls/linux:personality_test
+//test/syscalls/linux:pidfd_test
+//test/syscalls/linux:pipe_test
+//test/syscalls/linux:poll_test
+//test/syscalls/linux:ppoll_test
+//test/syscalls/linux:prctl_setuid_test
+//test/syscalls/linux:prctl_test
+//test/syscalls/linux:pread64_test
+//test/syscalls/linux:preadv2_test
+//test/syscalls/linux:preadv_test
+//test/syscalls/linux:priority_test
+//test/syscalls/linux:process_vm_read_write_test
+//test/syscalls/linux:processes_test
+//test/syscalls/linux:pselect_test
+//test/syscalls/linux:pwrite64_test
+//test/syscalls/linux:pwritev2_test
+//test/syscalls/linux:read_test
+//test/syscalls/linux:readahead_test
+//test/syscalls/linux:readv_socket_test
+//test/syscalls/linux:readv_test
+//test/syscalls/linux:rename_test
+//test/syscalls/linux:rlimits_test
+//test/syscalls/linux:rseq_test
+//test/syscalls/linux:rtsignal_test
+//test/syscalls/linux:sched_test
+//test/syscalls/linux:sched_yield_test
+//test/syscalls/linux:select_test
+//test/syscalls/linux:semaphore_test
+//test/syscalls/linux:sendfile_socket_test
+//test/syscalls/linux:sendfile_test
+//test/syscalls/linux:setgid_test
+//test/syscalls/linux:shm_test
+//test/syscalls/linux:sigaction_test
+//test/syscalls/linux:sigaltstack_test
+//test/syscalls/linux:signalfd_test
+//test/syscalls/linux:sigprocmask_test
+//test/syscalls/linux:sigreturn_test
+//test/syscalls/linux:sigstop_test
+//test/syscalls/linux:sigtimedwait_test
+//test/syscalls/linux:splice_test
+//test/syscalls/linux:stat_test
+//test/syscalls/linux:stat_times_test
+//test/syscalls/linux:statfs_test
+//test/syscalls/linux:symlink_test
+//test/syscalls/linux:sync_file_range_test
+//test/syscalls/linux:sync_test
+//test/syscalls/linux:sysinfo_test
+//test/syscalls/linux:syslog_test
+//test/syscalls/linux:tgkill_test
+//test/syscalls/linux:timerfd_test
+//test/syscalls/linux:timers_test
+//test/syscalls/linux:tkill_test
+//test/syscalls/linux:truncate_test
+//test/syscalls/linux:uidgid_test
+//test/syscalls/linux:uname_test
+//test/syscalls/linux:unlink_test
+//test/syscalls/linux:utimes_test
+//test/syscalls/linux:vdso_clock_gettime_test
+//test/syscalls/linux:vdso_test
+//test/syscalls/linux:vfork_test
+//test/syscalls/linux:wait_test
+//test/syscalls/linux:write_test
+//test/syscalls/linux:xattr_test
+
+# DECLINED: upstream targets deliberately NOT enabled, grouped by why they sit
+# outside a single-process syscall translator on the QEMU reference. This block
+# is documentation only; "make check-gvisor-targets" reports anything listed
+# here (or newly added upstream) as an opt-in candidate.
+#
+# Networking stack (non-loopback sockets, netlink, iptables, packet, raw,
+#   tuntap, *_external): needs a real network stack or external peers.
+# Privilege and namespaces (capabilities, seccomp, ptrace, mount, chroot,
+#   setns, unshare, pivot_root, cgroup, fuse): needs privileged host setup.
+# proc host-specific (proc_*): asserts host-kernel /proc contents.
+# pty and devpts (pty_test, pty_root_test, host_pty_test): devpts is broken in
+#   the current fixture.
+# gVisor-only (kcov_test, getcpu_host_test): gVisor-internal expectations.
+# x86-only (32bit_test, arch_prctl_test, sysret_test, vsyscall_test,
+#   exceptions_test): not built on AArch64.

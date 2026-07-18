@@ -13,6 +13,10 @@
 #                   (crane/skopeo/umoci) on Linux
 #   oci-image-macos : elfuse-oci darwin build, unit tests, sparsebundle
 #                   round-trip, and a run-less image-lifecycle smoke
+#   workload      : per-image real-workload smokes (python/node/go/jvm/c, one
+#                   matrix leg each) that boot the image under HVF on
+#                   self-hosted Apple Silicon and drive its characteristic
+#                   operations
 #
 # Runtime and sanitizer tests require Hypervisor.framework, which
 # GitHub-hosted macOS runners do not expose. Those tests run on self-hosted
@@ -793,3 +797,59 @@ jobs:
         # that the Linux job's cache-reclaiming flow does not cover. jq
         # ships on the macos-15 image.
         run: scripts/ci/oci-cli-smoke.sh
+
+  # Per-image real-workload jobs, one matrix leg per profiled image. Each leg
+  # boots a real image under HVF via `elfuse-oci run` and drives that image's
+  # characteristic operations, so a code change that breaks any of them is
+  # caught on the PR. The legs differ only in the workload key and a timeout,
+  # so a matrix states the shared runner, guards, and setup action once and
+  # makes adding an image a one-line change. fail-fast is off because each
+  # image is an independent signal: one image regressing must not hide the
+  # state of the others.
+  #
+  # They share .github/actions/hvf-elfuse-setup, which fetches the elfuse
+  # binary from build-macos and builds elfuse-oci. `run` needs
+  # Hypervisor.framework, so these are self-hosted only. Each keeps a warm
+  # per-key store on the runner's persistent disk so only the first run pulls
+  # over the network. gcc:14 and eclipse-temurin:21 ship the shadow suite, so
+  # they also exercise the unpack setuid/setgid degrade end to end.
+  workload:
+    name: Workload (${{ matrix.name }})
+    needs: build-macos
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request')
+    runs-on: [self-hosted, macOS, arm64]
+    timeout-minutes: ${{ matrix.timeout }}
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: workload-${{ matrix.key }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The node lane includes the HTTP-server phase: the guest binds
+          # 127.0.0.1 (elfuse maps sockets to host sockets, no netns) and the
+          # workload curls it host-side.
+          - { key: python, name: Python, timeout: 30 }
+          - { key: node, name: Node, timeout: 30 }
+          - { key: go, name: Go, timeout: 30 }
+          # javac + java startup and the compile step run slower than the
+          # lighter images, and eclipse-temurin is a large first pull.
+          - { key: jvm, name: JVM, timeout: 45 }
+          # gcc:14 is the largest first pull and the compile bursts (make plus
+          # a heavier single TU) dominate the wall time.
+          - { key: c, name: C, timeout: 45 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: HVF elfuse setup
+        uses: ./.github/actions/hvf-elfuse-setup
+      - name: Run ${{ matrix.key }} workload
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-workload-${{ matrix.key }}"
+          scripts/ci/oci-workload.sh ${{ matrix.key }}

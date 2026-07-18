@@ -1,0 +1,93 @@
+# shellcheck shell=sh
+# JVM image workload, run in the guest via
+# `/bin/sh -c`: javac-compile a small program, then run it exercising
+# collections, file I/O, a SHA-256 digest, an 8-thread pool, and a subprocess
+# (the futex/clock_gettime-heavy signature). The program prints the sentinel
+# token itself on success. POSIX sh (dash). eclipse-temurin is Ubuntu-based, so
+# this also proves the setuid/setgid unpack degrade on a shadow-suite image.
+set -e
+
+# A guest path absent from the rootfs falls back to the literal host path, so a
+# generic name like /tmp/jvmwork would read and write whatever the runner left
+# in its own /tmp; an elfuse-owned name is created inside the rootfs instead.
+d=/tmp/elfuse-jvm-work
+rm -rf "$d"
+mkdir -p "$d"
+cd "$d"
+cat > Main.java <<'EOF'
+import java.nio.file.*;
+import java.security.MessageDigest;
+import java.util.*;
+import java.util.concurrent.*;
+
+public class Main {
+    static String sha256(byte[] b) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        byte[] d = md.digest(b);
+        StringBuilder sb = new StringBuilder();
+        for (byte x : d) sb.append(String.format("%02x", x));
+        return sb.toString();
+    }
+
+    public static void main(String[] args) throws Exception {
+        // Collections.
+        Map<Integer, Integer> m = new HashMap<>();
+        for (int i = 0; i < 1000; i++) m.put(i, i * i);
+        long collSum = 0;
+        for (int v : m.values()) collSum += v;
+
+        // File I/O + digest. Relative to the scratch dir the script cd'd into,
+        // so it stays inside the rootfs with no second absolute path to drift.
+        Path p = Paths.get("data.bin");
+        byte[] payload = new byte[65536];
+        for (int i = 0; i < payload.length; i++) payload[i] = (byte) (i & 0xff);
+        Files.write(p, payload);
+        byte[] back = Files.readAllBytes(p);
+        if (!Arrays.equals(payload, back)) {
+            System.err.println("file io mismatch");
+            System.exit(1);
+        }
+        String digest = sha256(back);
+
+        // 8 worker threads.
+        ExecutorService ex = Executors.newFixedThreadPool(8);
+        List<Future<Integer>> fs = new ArrayList<>();
+        for (int t = 0; t < 8; t++) {
+            final int base = t;
+            fs.add(ex.submit(() -> {
+                int s = 0;
+                for (int i = 0; i < 100000; i++) s += (base + i) & 7;
+                return s;
+            }));
+        }
+        long threadSum = 0;
+        for (Future<Integer> f : fs) threadSum += f.get();
+        ex.shutdown();
+
+        // Subprocess.
+        Process pr = new ProcessBuilder("/bin/echo", "child-ok")
+                .redirectErrorStream(true).start();
+        String childOut = new String(pr.getInputStream().readAllBytes()).trim();
+        int rc = pr.waitFor();
+        if (rc != 0 || !childOut.equals("child-ok")) {
+            System.err.println("subprocess failed: " + childOut);
+            System.exit(1);
+        }
+
+        // All inputs are fixed, so the results are exact constants: the
+        // collection sum is sum(i*i) for i in 0..999, each worker's sum is
+        // 350000 (100000 iterations over a full residue cycle of & 7, so
+        // base contributes nothing), and the digest is sha256 of the
+        // 65536-byte i & 0xff ramp.
+        if (collSum != 332833500L || threadSum != 2800000L
+                || !digest.equals("7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2")) {
+            System.err.println("sanity failed");
+            System.exit(1);
+        }
+        System.out.println("elfuse-oci-jvm-workload-ok");
+    }
+}
+EOF
+
+javac Main.java
+java Main

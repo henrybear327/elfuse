@@ -822,7 +822,7 @@ static void thread_force_exit_cb(thread_entry_t *t, void *ctx)
      * via thread_for_each, so this read is race-free. Same guard as
      * thread_interrupt_all / thread_quiesce_siblings.
      */
-    if (!t->vcpu)
+    if (!t->vcpu_valid)
         return;
     hv_vcpus_exit(&t->vcpu, 1);
 }

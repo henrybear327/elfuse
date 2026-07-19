@@ -300,7 +300,8 @@ const char *proc_resolve_sysroot_create_path(const char *path,
 #define PROC_TABLE_SIZE 1024
 
 typedef struct {
-    bool active;       /* Slot is in use */
+    bool active;       /* Slot is visible to guest wait operations */
+    bool reserved;     /* Fork admission reserved this slot before spawn */
     pid_t host_pid;    /* macOS process ID of child elfuse instance */
     int64_t guest_pid; /* Guest-visible PID assigned to child */
     int64_t pgid;      /* Child's process group, inherited at fork and updated
@@ -314,10 +315,20 @@ typedef struct {
     struct rusage rusage;
 } proc_entry_t;
 
-/* Register a child process in the process table.
- * Returns 0 on success, -1 if the table is full.
+/* Reserve bookkeeping before creating a helper process. A successful
+ * reservation guarantees proc_register_child() can make the child visible
+ * after fork IPC completes. Returns 0 or a negative Linux errno.
+ */
+int proc_reserve_child(int64_t guest_pid, int64_t pgid);
+
+/* Commit a previously reserved child after fork IPC is ready to release it.
+ * Returns 0 or a negative Linux errno if the reservation was lost or the
+ * lifecycle registry could not be updated.
  */
 int proc_register_child(pid_t host_pid, int64_t guest_pid, int64_t pgid);
+
+/* Roll back a reservation (or a just-committed entry on final IPC failure). */
+void proc_cancel_child(int64_t guest_pid);
 
 /* Mark a child as exited by host PID (for CLONE_VFORK wait). */
 void proc_mark_child_exited(pid_t host_pid, int status);
@@ -381,7 +392,7 @@ void proc_lifecycle_sync_self(guest_t *g);
 /* Notify the guest parent that this process reached a terminal state. Called
  * by fork-child teardown before the host process exits.
  */
-void proc_process_exit(int exit_code);
+void proc_process_exit(int wait_status);
 
 /* Pull a parent-published pgid update into this process's local identity. */
 void proc_registry_sync_self_pgid(guest_t *g);
@@ -491,4 +502,5 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                   hv_vcpu_exit_t *vexit,
                   guest_t *g,
                   bool verbose,
-                  int timeout_sec);
+                  int timeout_sec,
+                  int *wait_status_out);

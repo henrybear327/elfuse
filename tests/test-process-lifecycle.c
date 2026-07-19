@@ -12,11 +12,12 @@
  *   PID-01..02 process and thread IDs are unique across the fork family
  *   WAIT-01 WNOHANG does not consume a running child
  *   WAIT-02 WNOWAIT can be repeated before a consuming wait
- *   WAIT-03..04 waitid(P_PGID) honors process groups and auto-reap state
+ *   WAIT-03..05 waitid groups/auto-reap and signal termination status
  *   Z-01..06 zombie retention, no-zombie dispositions, and SIGCHLD timing
  *   O-01..03 orphan adoption by PID 1 and a child subreaper
  *   O-04..05 reserved for separate parent-death/job-control follow-ups
  *   O-06     non-reaping PID 1 retains an adopted exit status
+ *   O-07..08 blocking adoption wakeups, signal status, and adopted rusage
  */
 
 #include <errno.h>
@@ -26,7 +27,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -544,12 +547,12 @@ static void test_waitid_pgid_autoreap(void)
 
     int setpgid_ok = child > 0 && setpgid(child, child) == 0;
     siginfo_t live;
-    memset(&live, 0, sizeof(live));
+    memset(&live, 0xa5, sizeof(live));
     errno = 0;
     int live_rc =
         child > 0 ? waitid(P_PGID, (id_t) child, &live, WEXITED | WNOHANG) : -1;
     int live_errno = errno;
-    int live_ok = live_rc == 0 && live.si_pid == 0;
+    int live_ok = live_rc == 0 && live.si_pid == 0 && live.si_signo == 0;
 
     char byte = 'X';
     int released = child > 0 && write_full(release[1], &byte, 1) == 0;
@@ -568,13 +571,101 @@ static void test_waitid_pgid_autoreap(void)
     if (child < 0 || !setpgid_ok || !live_ok || !released || !gone_ok ||
         !gone_wait_ok || !restore_ok) {
         printf(
-            "[WAIT-04 child=%d setpgid=%d live=(rc=%d errno=%d pid=%d) "
+            "[WAIT-04 child=%d setpgid=%d "
+            "live=(rc=%d errno=%d signo=%d pid=%d) "
             "released=%d gone=%d final=(rc=%d errno=%d pid=%d) "
             "restore=%d] ",
-            (int) child, setpgid_ok, live_rc, live_errno, (int) live.si_pid,
-            released, gone_ok, gone_rc, gone_errno, (int) gone.si_pid,
-            restore_ok);
+            (int) child, setpgid_ok, live_rc, live_errno, live.si_signo,
+            (int) live.si_pid, released, gone_ok, gone_rc, gone_errno,
+            (int) gone.si_pid, restore_ok);
         FAIL("auto-reap waitid(P_PGID) did not track the requested group");
+        return;
+    }
+    PASS();
+}
+
+static void test_signal_wait_status(void)
+{
+    TEST("WAIT-05 parent SIGKILL preserves signal status");
+
+    pid_t normal = fork();
+    if (normal == 0)
+        _exit(137);
+    int normal_status = 0;
+    pid_t normal_ret = normal > 0 ? waitpid(normal, &normal_status, 0) : -1;
+    int normal_ok = normal_ret == normal && WIFEXITED(normal_status) &&
+                    WEXITSTATUS(normal_status) == 137;
+
+    _Atomic int *stop = mmap(NULL, sizeof(*stop), PROT_READ | PROT_WRITE,
+                             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    int ready[2];
+    int setup_ok = stop != MAP_FAILED && pipe(ready) == 0;
+    if (stop != MAP_FAILED)
+        atomic_store_explicit(stop, 0, memory_order_relaxed);
+
+    pid_t killed = setup_ok ? fork() : -1;
+    if (killed == 0) {
+        close(ready[0]);
+        char byte = 'R';
+        if (write_full(ready[1], &byte, 1) < 0)
+            _exit(4);
+        close(ready[1]);
+        volatile uint64_t work = 1;
+        while (!atomic_load_explicit(stop, memory_order_acquire))
+            work = work * 33u + 1u;
+        (void) work;
+        _exit(5);
+    }
+    if (setup_ok)
+        close(ready[1]);
+    char byte = 0;
+    int ready_ok = killed > 0 && read_full(ready[0], &byte, 1) == 0;
+    if (setup_ok)
+        close(ready[0]);
+    /* Let the child return from write(2) and enter EL0 compute code. This
+     * specifically checks that the cross-process signal doorbell interrupts a
+     * running vCPU whose valid Hypervisor.framework handle may be zero.
+     */
+    if (ready_ok)
+        usleep(20000);
+    errno = 0;
+    int kill_rc = ready_ok ? kill(killed, SIGKILL) : -1;
+    int kill_errno = errno;
+    int kill_ok = kill_rc == 0;
+    siginfo_t info;
+    memset(&info, 0, sizeof(info));
+    int peek_rc = -1;
+    for (int i = 0; kill_ok && i < 2000; i++) {
+        memset(&info, 0, sizeof(info));
+        peek_rc =
+            waitid(P_PID, (id_t) killed, &info, WEXITED | WNOWAIT | WNOHANG);
+        if (peek_rc < 0 || info.si_pid != 0)
+            break;
+        usleep(1000);
+    }
+    int peek_ok = peek_rc == 0 && info.si_pid == killed &&
+                  info.si_code == CLD_KILLED && info.si_status == SIGKILL;
+    if (!peek_ok && killed > 0)
+        atomic_store_explicit(stop, 1, memory_order_release);
+    int killed_status = 0;
+    pid_t killed_ret = killed > 0 ? waitpid(killed, &killed_status, 0) : -1;
+    int killed_ok = killed_ret == killed && WIFSIGNALED(killed_status) &&
+                    WTERMSIG(killed_status) == SIGKILL;
+    if (stop != MAP_FAILED)
+        munmap(stop, sizeof(*stop));
+
+    if (normal < 0 || !normal_ok || !setup_ok || killed < 0 || !ready_ok ||
+        !kill_ok || !peek_ok || !killed_ok) {
+        printf(
+            "[WAIT-05 normal=%d ret=%d status=0x%x ok=%d killed=%d "
+            "setup=%d ready=%d kill=(rc=%d errno=%d) "
+            "peek=(rc=%d pid=%d code=%d status=%d) "
+            "reap=(ret=%d status=0x%x ok=%d)] ",
+            (int) normal, (int) normal_ret, normal_status, normal_ok,
+            (int) killed, setup_ok, ready_ok, kill_rc, kill_errno, peek_rc,
+            (int) info.si_pid, info.si_code, info.si_status, (int) killed_ret,
+            killed_status, killed_ok);
+        FAIL("guest wait status lost the signal termination cause");
         return;
     }
     PASS();
@@ -1127,8 +1218,254 @@ static void test_pid1_retains_adopted_exit(void)
     PASS();
 }
 
+struct blocking_wait_result {
+    _Atomic int done;
+    pid_t pid;
+    int status;
+    int error;
+};
+
+static void *blocking_wait_any(void *opaque)
+{
+    struct blocking_wait_result *result = opaque;
+    errno = 0;
+    do {
+        result->pid = waitpid(-1, &result->status, 0);
+    } while (result->pid < 0 && errno == EINTR);
+    result->error = errno;
+    atomic_store_explicit(&result->done, 1, memory_order_release);
+    return NULL;
+}
+
+static void test_blocked_subreaper_imports_zombie(void)
+{
+    TEST("O-07 blocked subreaper wakes for adopted zombie");
+
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) < 0) {
+        FAIL("O-07 setting subreaper failed");
+        return;
+    }
+
+    int meta[2], release_branch[2], release_parent[2];
+    if (pipe(meta) < 0 || pipe(release_branch) < 0 ||
+        pipe(release_parent) < 0) {
+        FAIL("O-07 pipe failed");
+        return;
+    }
+
+    pid_t parent = fork();
+    if (parent == 0) {
+        close(meta[0]);
+        close(release_branch[1]);
+        close(release_parent[1]);
+        pid_t branch = fork();
+        if (branch == 0) {
+            close(release_parent[0]);
+            int life[2];
+            if (pipe(life) < 0)
+                _exit(2);
+            pid_t leaf = fork();
+            if (leaf == 0) {
+                close(life[0]);
+                close(meta[1]);
+                close(release_branch[0]);
+                _exit(90);
+            }
+            close(life[1]);
+            char byte;
+            ssize_t n;
+            do {
+                n = read(life[0], &byte, 1);
+            } while (n < 0 && errno == EINTR);
+            close(life[0]);
+            int meta_ok = leaf > 0 && n == 0 &&
+                          write_full(meta[1], &leaf, sizeof(leaf)) == 0;
+            close(meta[1]);
+            int release_ok = read_full(release_branch[0], &byte, 1) == 0;
+            close(release_branch[0]);
+            _exit(meta_ok && release_ok ? 91 : 3);
+        }
+        close(meta[1]);
+        close(release_branch[0]);
+        int branch_ok = branch > 0 && child_exited_cleanly(branch, 91);
+        char byte;
+        int release_ok = read_full(release_parent[0], &byte, 1) == 0;
+        close(release_parent[0]);
+        _exit(branch_ok && release_ok ? 92 : 4);
+    }
+
+    close(meta[1]);
+    close(release_branch[0]);
+    close(release_parent[0]);
+    pid_t leaf = -1;
+    int meta_ok = parent > 0 && read_full(meta[0], &leaf, sizeof(leaf)) == 0;
+    close(meta[0]);
+
+    /* Earlier cases may leave an asynchronously auto-reaped table entry long
+     * enough for one final nonblocking observation. Drain only statuses that
+     * are already ready; the live direct parent remains and makes the blocking
+     * wait below valid before the deeper zombie is adopted.
+     */
+    int stale_status;
+    while (waitpid(-1, &stale_status, WNOHANG) > 0)
+        ;
+
+    struct blocking_wait_result result;
+    memset(&result, 0, sizeof(result));
+    result.pid = -1;
+    pthread_t waiter;
+    int thread_ok = meta_ok && pthread_create(&waiter, NULL, blocking_wait_any,
+                                              &result) == 0;
+    if (thread_ok)
+        usleep(20000);
+    char byte = 'X';
+    int branch_released =
+        thread_ok && write_full(release_branch[1], &byte, 1) == 0;
+    close(release_branch[1]);
+
+    int woke_for_leaf = 0;
+    if (thread_ok) {
+        for (int i = 0; i < 3000; i++) {
+            if (atomic_load_explicit(&result.done, memory_order_acquire))
+                break;
+            usleep(1000);
+        }
+        woke_for_leaf =
+            atomic_load_explicit(&result.done, memory_order_acquire) &&
+            result.pid == leaf && WIFEXITED(result.status) &&
+            WEXITSTATUS(result.status) == 90;
+    }
+
+    int parent_released = write_full(release_parent[1], &byte, 1) == 0;
+    close(release_parent[1]);
+    if (thread_ok)
+        pthread_join(waiter, NULL);
+
+    int parent_ok;
+    if (result.pid == parent)
+        parent_ok =
+            WIFEXITED(result.status) && WEXITSTATUS(result.status) == 92;
+    else
+        parent_ok = parent > 0 && child_exited_cleanly(parent, 92);
+    if (result.pid != leaf && leaf > 0)
+        (void) waitpid(leaf, NULL, 0);
+    int clear_ok = prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) == 0;
+
+    if (!meta_ok || !thread_ok || !branch_released || !woke_for_leaf ||
+        !parent_released || !parent_ok || !clear_ok) {
+        printf(
+            "[O-07 parent=%d leaf=%d meta=%d thread=%d branch_release=%d "
+            "wait=(pid=%d status=0x%x errno=%d done=%d) woke_leaf=%d "
+            "parent_release=%d parent_ok=%d clear=%d] ",
+            (int) parent, (int) leaf, meta_ok, thread_ok, branch_released,
+            (int) result.pid, result.status, result.error,
+            atomic_load_explicit(&result.done, memory_order_acquire),
+            woke_for_leaf, parent_released, parent_ok, clear_ok);
+        FAIL("blocking wait missed the newly adopted zombie");
+        return;
+    }
+    PASS();
+}
+
+static void burn_cpu_ms(long duration_ms)
+{
+    struct timespec start, now;
+    if (clock_gettime(CLOCK_MONOTONIC, &start) < 0)
+        return;
+    volatile uint64_t work = 0;
+    do {
+        for (int i = 0; i < 10000; i++)
+            work = work * 33u + (uint64_t) i;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+            return;
+    } while ((now.tv_sec - start.tv_sec) * 1000L +
+                 (now.tv_nsec - start.tv_nsec) / 1000000L <
+             duration_ms);
+    (void) work;
+}
+
+static void test_adopted_signal_status_and_rusage(void)
+{
+    TEST("O-08 adopted signal status and rusage survive");
+
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) < 0) {
+        FAIL("O-08 setting subreaper failed");
+        return;
+    }
+    int meta[2];
+    if (pipe(meta) < 0) {
+        FAIL("O-08 pipe failed");
+        return;
+    }
+
+    pid_t middle = fork();
+    if (middle == 0) {
+        close(meta[0]);
+        int life[2];
+        if (pipe(life) < 0)
+            _exit(2);
+        pid_t leaf = fork();
+        if (leaf == 0) {
+            close(life[0]);
+            close(meta[1]);
+            burn_cpu_ms(75);
+            char byte = 'R';
+            if (write_full(life[1], &byte, 1) < 0)
+                _exit(3);
+            raise(SIGKILL);
+            _exit(5);
+        }
+        close(life[1]);
+        char byte;
+        int ready_ok = leaf > 0 && read_full(life[0], &byte, 1) == 0;
+        int kill_ok = ready_ok;
+        ssize_t n;
+        do {
+            n = read(life[0], &byte, 1);
+        } while (n < 0 && errno == EINTR);
+        close(life[0]);
+        int dead_ok = n == 0;
+        int meta_ok = write_full(meta[1], &leaf, sizeof(leaf)) == 0;
+        close(meta[1]);
+        _exit(ready_ok && kill_ok && dead_ok && meta_ok ? 93 : 4);
+    }
+
+    close(meta[1]);
+    pid_t leaf = -1;
+    int meta_ok = middle > 0 && read_full(meta[0], &leaf, sizeof(leaf)) == 0;
+    close(meta[0]);
+    int middle_ok = middle > 0 && child_exited_cleanly(middle, 93);
+
+    int status = 0;
+    struct rusage usage;
+    memset(&usage, 0, sizeof(usage));
+    errno = 0;
+    pid_t reaped = leaf > 0 ? wait4(leaf, &status, 0, &usage) : -1;
+    int wait_errno = errno;
+    int signal_ok =
+        reaped == leaf && WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL;
+    long long cpu_us =
+        (long long) usage.ru_utime.tv_sec * 1000000LL + usage.ru_utime.tv_usec +
+        (long long) usage.ru_stime.tv_sec * 1000000LL + usage.ru_stime.tv_usec;
+    int usage_ok = cpu_us > 0;
+    int clear_ok = prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) == 0;
+
+    if (!meta_ok || !middle_ok || !signal_ok || !usage_ok || !clear_ok) {
+        printf(
+            "[O-08 middle=%d leaf=%d meta=%d middle_ok=%d "
+            "wait=(ret=%d status=0x%x errno=%d) signal=%d cpu_us=%lld "
+            "usage=%d clear=%d] ",
+            (int) middle, (int) leaf, meta_ok, middle_ok, (int) reaped, status,
+            wait_errno, signal_ok, cpu_us, usage_ok, clear_ok);
+        FAIL("adopted wait lost signal status or resource usage");
+        return;
+    }
+    PASS();
+}
+
 int main(void)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
     printf("test-process-lifecycle: Linux process lifecycle semantics\n");
 
     test_nested_pid_uniqueness();
@@ -1137,6 +1474,7 @@ int main(void)
     test_waitid_wnowait_repeat();
     test_waitid_pgid_matching();
     test_waitid_pgid_autoreap();
+    test_signal_wait_status();
     test_delayed_zombie_reap();
     test_reverse_zombie_reap();
     test_zombie_table_pressure();
@@ -1147,6 +1485,8 @@ int main(void)
     test_orphan_reparent_to_subreaper();
     test_subreaper_adopts_zombie();
     test_pid1_retains_adopted_exit();
+    test_blocked_subreaper_imports_zombie();
+    test_adopted_signal_status_and_rusage();
 
     SUMMARY("test-process-lifecycle");
     return fails == 0 ? 0 : 1;

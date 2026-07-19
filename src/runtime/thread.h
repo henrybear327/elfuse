@@ -37,6 +37,9 @@
 typedef struct thread_entry {
     int64_t guest_tid;           /* Linux TID (unique per thread) */
     hv_vcpu_t vcpu;              /* HVF vCPU handle for this thread */
+    bool vcpu_valid;             /* Handle has been published and not destroyed.
+                                  * hv_vcpu_t value 0 is valid, so the handle
+                                  * itself cannot be used as a sentinel. */
     hv_vcpu_exit_t *vexit;       /* vCPU exit info pointer */
     pthread_t host_thread;       /* macOS host thread running this vCPU */
     bool host_thread_needs_join; /* host_thread was created joinable and nobody
@@ -138,7 +141,7 @@ typedef struct thread_entry {
     bool ptrace_cleanup_pending; /* Destroy condvars after last waiter leaves */
     int ptrace_cont_sig;         /* Signal to inject on resume (0=none) */
     bool ptrace_interrupt_pending;    /* PTRACE_INTERRUPT arrived while the vCPU
-                                       * was still in bring-up (t->vcpu == 0), so
+                                       * was still in bring-up (!vcpu_valid), so
                                        * it could not be delivered via
                                        * hv_vcpus_exit; the worker self-kicks at
                                        * publish to deliver it. Under thread_lock.
@@ -314,7 +317,7 @@ void thread_join_workers(void);
 /* Destroy all active worker vCPUs. Called during guest_destroy to ensure no
  * vCPUs remain active before hv_vm_destroy().
  */
-void thread_destroy_all_vcpus(void);
+bool thread_destroy_all_vcpus(hv_vcpu_t main_vcpu, bool main_vcpu_valid);
 
 /* Interrupt all active vCPUs by calling hv_vcpus_exit(). Used for signal
  * preemption: when a signal is queued while a vCPU is running in a tight loop

@@ -135,6 +135,10 @@ Apple HVF imposes a handful of constraints that shape the rest of the design:
   handled by the HVC #12 system-instruction trap path.
 - Only `HV_SYS_REG_*` constants from Hypervisor.framework may be used for
   register IDs.
+- `hv_vcpu_t` value zero is a valid handle (normally the first vCPU in a VM),
+  not an invalid sentinel. `guest_t` and `thread_entry_t` therefore track
+  handle ownership with a separate `vcpu_valid` flag; signal preemption,
+  quiesce, ptrace, and teardown must consult that flag before calling HVF.
 - Cross-thread vCPU register access is unreliable; all register access must
   happen on the owning thread. This drives the snapshot protocol used by
   both ptrace and the GDB stub.
@@ -462,9 +466,9 @@ are supported per VM.
 
 `src/runtime/thread.c` and `thread.h`:
 
-- `thread_entry_t` per thread holds the vCPU handle, host pthread, per-thread
-  signal mask, `clear_child_tid` (for `CLONE_CHILD_CLEARTID`), and the
-  thread's `SP_EL1` exception stack.
+- `thread_entry_t` per thread holds the vCPU handle plus its explicit validity,
+  host pthread, per-thread signal mask, `clear_child_tid` (for
+  `CLONE_CHILD_CLEARTID`), and the thread's `SP_EL1` exception stack.
 - `_Thread_local current_thread` gives O(1) access from syscall handlers.
 - Each thread receives a 4 KiB EL1 exception stack carved out of the shim
   data region.
@@ -541,7 +545,11 @@ state transfer:
 4. Child receives state, creates its own VM, restores registers directly
    into EL0 (bypassing the shim `_start` so callee-saved GPRs survive), and
    enters the vCPU loop with `X0 = 0` (the child return from `clone`).
-5. Parent records the child in the process table and returns the child PID.
+5. Before spawning, the parent allocates a namespace-wide guest PID and
+   reserves both a local process-table slot and shared lifecycle entry. After
+   IPC succeeds it commits the child's host PID, releases the child into guest
+   code, and returns the child PID. Allocation or admission failure returns
+   `EAGAIN` without allowing an untracked child to run.
 
 ### Process Lifecycle And Guest PID 1
 
@@ -552,6 +560,15 @@ automatically discard an adopted child's exit status merely because its new
 parent is PID 1. As on Linux, the new parent must consume that status with a
 `wait*()` call, or explicitly select no-zombie semantics with
 `SIGCHLD = SIG_IGN` or `SA_NOCLDWAIT`.
+
+The invocation-scoped lifecycle registry keeps the Linux wait-format terminal
+status (including signal and core-dump bits) and the exiting process's resource
+usage until the new parent consumes it. A parent already blocked in `wait*()`
+periodically imports newly adopted descendants; adoption of an already exited
+child also sends `SIGCHLD` to wake the adopter. The shared registry and each
+local process table use the same fixed capacity, and fork admission is reserved
+before the host helper starts, so capacity pressure fails the new fork instead
+of silently dropping a waitable child.
 
 An application runtime used directly as guest PID 1 may not perform that
 reaper role. In that case, adopted terminal statuses remain in elfuse's

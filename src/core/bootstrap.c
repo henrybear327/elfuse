@@ -672,6 +672,7 @@ int guest_bootstrap_create_vcpu(guest_t *g,
     HV_CHECK(hv_vcpu_create(&vcpu, &vexit, NULL));
     startup_trace_step("hv_vcpu_create", t0);
     g->vcpu = vcpu;
+    g->vcpu_valid = true;
     g->exit = vexit;
     *out_vcpu = vcpu;
     *out_vexit = vexit;

@@ -315,6 +315,12 @@ void signal_set_shim_globals_guest(guest_t *g);
  */
 int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code);
 
+/* Return and clear the Linux wait-format status recorded when the current
+ * vCPU thread terminated because of a signal. Returns zero after a normal
+ * syscall exit or when no fatal signal was delivered.
+ */
+int signal_take_termination_wait_status(void);
+
 /* Deliver a synchronous fault signal directly to the faulting (current) thread,
  * bypassing the process-wide pending set. The caller must have set the fault
  * info via signal_set_fault_info() immediately before. Same return convention

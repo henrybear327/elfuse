@@ -42,6 +42,7 @@
 
 /* Signal state (module-level, process-wide). */
 static signal_state_t sig_state;
+static _Thread_local int termination_wait_status;
 
 /* Per-thread pending fault info. When a synchronous fault (BRK, segfault, etc.)
  * needs to deliver a signal, the caller sets this before
@@ -1967,6 +1968,20 @@ static int deliver_signal_locked(hv_vcpu_t vcpu,
     return 1;
 }
 
+static void signal_record_termination(int signum)
+{
+    termination_wait_status = signum;
+    if (signal_default_disposition(signum) == SIG_DISP_CORE)
+        termination_wait_status |= 0x80;
+}
+
+int signal_take_termination_wait_status(void)
+{
+    int status = termination_wait_status;
+    termination_wait_status = 0;
+    return status;
+}
+
 int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
 {
     pthread_mutex_lock(&sig_lock);
@@ -2015,7 +2030,10 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
      */
     refresh_pending_hint_locked();
 
-    return deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
+    int result = deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
+    if (result < 0)
+        signal_record_termination(signum);
+    return result;
 }
 
 int signal_deliver_fault(hv_vcpu_t vcpu, guest_t *g, int signum, int *exit_code)
@@ -2051,7 +2069,10 @@ int signal_deliver_fault(hv_vcpu_t vcpu, guest_t *g, int signum, int *exit_code)
     }
 
     signal_rt_info_t rt_info = signal_default_info(signum);
-    return deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
+    int result = deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
+    if (result < 0)
+        signal_record_termination(signum);
+    return result;
 }
 
 /* rt_sigreturn. */

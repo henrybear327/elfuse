@@ -669,11 +669,11 @@ void guest_destroy(guest_t *g)
      * VM. This prevents hv_vm_destroy from racing with active vCPUs that may
      * still be running if thread join timed out during exit_group.
      */
-    thread_destroy_all_vcpus();
-    if (g->vcpu) {
+    bool main_vcpu_destroyed = thread_destroy_all_vcpus(g->vcpu, g->vcpu_valid);
+    if (g->vcpu_valid && !main_vcpu_destroyed)
         hv_vcpu_destroy(g->vcpu);
-        g->vcpu = 0;
-    }
+    g->vcpu_valid = false;
+    g->vcpu = 0;
     /* Unmap each HVF segment. hv_vm_destroy releases all stage-2 state
      * regardless, but unmapping explicitly keeps invariants clean for
      * downstream tools (Instruments, leak detectors).

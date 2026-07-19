@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <errno.h>
 
+#include "utils.h"
+
 #include "debug/gdbstub-rsp.h"
 
 static const char hex_chars[] = "0123456789abcdef";
@@ -29,12 +31,7 @@ static int hex_val(char c)
 
 int gdb_hex_encode(char *dst, const uint8_t *src, size_t len)
 {
-    for (size_t i = 0; i < len; i++) {
-        dst[i * 2] = hex_chars[(src[i] >> 4) & 0xF];
-        dst[i * 2 + 1] = hex_chars[src[i] & 0xF];
-    }
-    dst[len * 2] = '\0';
-    return (int) (len * 2);
+    return (int) bytes_to_hex(dst, src, len);
 }
 
 int gdb_hex_decode(uint8_t *dst, const char *src, size_t len)
@@ -73,18 +70,7 @@ static uint8_t rsp_checksum(const char *data, size_t len)
 
 static int rsp_send_byte(int fd, char value)
 {
-    while (1) {
-        ssize_t n = write(fd, &value, 1);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        if (n == 1)
-            return 0;
-        errno = EIO;
-        return -1;
-    }
+    return write_all(fd, &value, 1);
 }
 
 int gdb_rsp_send(int fd, const char *data, size_t len)

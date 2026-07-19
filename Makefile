@@ -199,9 +199,9 @@ $(BUILD_DIR)/test-pthread: tests/test-pthread.c | $(BUILD_DIR)
 
 # test-process-lifecycle creates a worker to verify that process PIDs and
 # thread TIDs share one namespace-wide allocator across fork children.
-$(BUILD_DIR)/test-process-lifecycle: tests/test-process-lifecycle.c | $(BUILD_DIR)
+$(BUILD_DIR)/test-process-lifecycle: tests/test-process-lifecycle.c src/utils.h | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -Isrc -o $@ $< -lpthread
 
 # test-thread-churn creates >64 threads to force thread-table slot reuse.
 $(BUILD_DIR)/test-thread-churn: tests/test-thread-churn.c | $(BUILD_DIR)

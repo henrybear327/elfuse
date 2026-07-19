@@ -286,28 +286,6 @@ static proc_entry_t *proc_find_reserved_guest_entry(int64_t guest_pid_val)
     return NULL;
 }
 
-static int proc_write_full(int host_fd, const void *buf, size_t len)
-{
-    const uint8_t *p = buf;
-    size_t remaining = len;
-
-    while (remaining > 0) {
-        ssize_t n = write(host_fd, p, remaining);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        if (n == 0) {
-            errno = EIO;
-            return -1;
-        }
-        p += (size_t) n;
-        remaining -= (size_t) n;
-    }
-    return 0;
-}
-
 int rseq_try_abort(guest_t *g,
                    uint64_t rseq_gva,
                    uint32_t rseq_signature,
@@ -611,21 +589,6 @@ static bool lifecycle_registry_path(char *out, size_t out_size)
     return len > 0 && (size_t) len < out_size;
 }
 
-static int lifecycle_read_full(int fd, void *buf, size_t len)
-{
-    uint8_t *p = buf;
-    while (len > 0) {
-        ssize_t n = read(fd, p, len);
-        if (n < 0 && errno == EINTR)
-            continue;
-        if (n <= 0)
-            return -1;
-        p += (size_t) n;
-        len -= (size_t) n;
-    }
-    return 0;
-}
-
 static bool lifecycle_registry_size(uint32_t capacity, size_t *size_out)
 {
     if ((size_t) capacity >
@@ -668,7 +631,7 @@ static lifecycle_registry_t *lifecycle_load_locked(int fd)
         return lifecycle_registry_empty();
     if (st.st_size < (off_t) LIFECYCLE_HEADER_SIZE ||
         lseek(fd, 0, SEEK_SET) != 0 ||
-        lifecycle_read_full(fd, &header, LIFECYCLE_HEADER_SIZE) < 0 ||
+        read_all(fd, &header, LIFECYCLE_HEADER_SIZE, true) < 0 ||
         header.magic != LIFECYCLE_MAGIC || header.version != LIFECYCLE_VERSION)
         return NULL;
 
@@ -687,9 +650,8 @@ static lifecycle_registry_t *lifecycle_load_locked(int fd)
     registry->version = header.version;
     registry->count = header.count;
     if (header.count > 0 &&
-        lifecycle_read_full(fd, registry->entries,
-                            (size_t) header.count * sizeof(lifecycle_entry_t)) <
-            0) {
+        read_all(fd, registry->entries,
+                 (size_t) header.count * sizeof(lifecycle_entry_t), true) < 0) {
         free(registry);
         return NULL;
     }
@@ -705,7 +667,7 @@ static int lifecycle_save_locked(int fd, const lifecycle_registry_t *registry)
         return -1;
     if (ftruncate(fd, 0) != 0 || lseek(fd, 0, SEEK_SET) != 0)
         return -1;
-    return proc_write_full(fd, registry, disk_size);
+    return write_all(fd, registry, disk_size);
 }
 
 static int lifecycle_open_locked(char *path, size_t path_size)
@@ -1296,7 +1258,7 @@ static void proc_registry_publish(pid_t host_pid,
                                (long long) entries[i].guest_pid,
                                (long long) entries[i].pgid);
             if (len > 0 && (size_t) len < sizeof(lineb) &&
-                proc_write_full(fd, lineb, (size_t) len) < 0)
+                write_all(fd, lineb, (size_t) len) < 0)
                 break;
         }
     }
@@ -1416,7 +1378,7 @@ int proc_send_guest_signal(pid_t host_pid, int64_t target_guest_pid, int signum)
         close(fd);
         return -1;
     }
-    int wrc = proc_write_full(fd, line, (size_t) len);
+    int wrc = write_all(fd, line, (size_t) len);
     flock_retry(fd, LOCK_UN);
     if (wrc < 0) {
         close(fd);
@@ -1582,7 +1544,7 @@ static int proc_send_reparent(pid_t host_pid,
         close(fd);
         return -1;
     }
-    int wrc = proc_write_full(fd, line, (size_t) len);
+    int wrc = write_all(fd, line, (size_t) len);
     flock_retry(fd, LOCK_UN);
     close(fd);
     if (wrc < 0)

@@ -36,44 +36,9 @@
 #include <unistd.h>
 
 #include "test-harness.h"
+#include "utils.h"
 
 int passes = 0, fails = 0;
-
-static int write_full(int fd, const void *buf, size_t len)
-{
-    const unsigned char *p = buf;
-    while (len > 0) {
-        ssize_t n = write(fd, p, len);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        if (n == 0)
-            return -1;
-        p += (size_t) n;
-        len -= (size_t) n;
-    }
-    return 0;
-}
-
-static int read_full(int fd, void *buf, size_t len)
-{
-    unsigned char *p = buf;
-    while (len > 0) {
-        ssize_t n = read(fd, p, len);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        if (n == 0)
-            return -1;
-        p += (size_t) n;
-        len -= (size_t) n;
-    }
-    return 0;
-}
 
 static int child_exited_cleanly(pid_t pid, int expected_code)
 {
@@ -126,7 +91,7 @@ static void test_nested_pid_uniqueness(void)
             observed.grandchild = grandchild;
             observed.grandchild_ok = child_exited_cleanly(grandchild, 37);
         }
-        (void) write_full(report[1], &observed, sizeof(observed));
+        (void) write_all(report[1], &observed, sizeof(observed));
         close(report[1]);
         _exit(grandchild < 0 ? 2 : 0);
     }
@@ -134,7 +99,7 @@ static void test_nested_pid_uniqueness(void)
     close(report[1]);
     struct nested_pids observed;
     memset(&observed, 0, sizeof(observed));
-    int read_ok = read_full(report[0], &observed, sizeof(observed)) == 0;
+    int read_ok = read_all(report[0], &observed, sizeof(observed), true) >= 0;
     close(report[0]);
     int child_ok = child_exited_cleanly(child, 0);
 
@@ -167,11 +132,11 @@ static void *tid_probe_worker(void *opaque)
     atomic_store_explicit(&probe->worker_tid, tid, memory_order_release);
 
     char byte = 'R';
-    if (write_full(probe->ready_fd, &byte, 1) < 0)
+    if (write_all(probe->ready_fd, &byte, 1) < 0)
         atomic_store_explicit(&probe->worker_tid, -1, memory_order_release);
     close(probe->ready_fd);
 
-    if (read_full(probe->release_fd, &byte, 1) < 0)
+    if (read_all(probe->release_fd, &byte, 1, true) < 0)
         atomic_store_explicit(&probe->worker_tid, -1, memory_order_release);
     close(probe->release_fd);
     return NULL;
@@ -219,7 +184,7 @@ static void test_pid_tid_namespace_uniqueness(void)
             _exit(3);
 
         char byte;
-        int ready_ok = read_full(ready[0], &byte, 1) == 0;
+        int ready_ok = read_all(ready[0], &byte, 1, true) >= 0;
         close(ready[0]);
         struct pid_tid_report report = {
             .child_pid = getpid(),
@@ -227,10 +192,9 @@ static void test_pid_tid_namespace_uniqueness(void)
             .child_worker_tid = (pid_t) atomic_load_explicit(
                 &probe.worker_tid, memory_order_acquire),
         };
-        int report_ok =
-            write_full(report_pipe[1], &report, sizeof(report)) == 0;
+        int report_ok = write_all(report_pipe[1], &report, sizeof(report)) == 0;
         close(report_pipe[1]);
-        int release_ok = write_full(release[1], "G", 1) == 0;
+        int release_ok = write_all(release[1], "G", 1) == 0;
         close(release[1]);
         int join_ok = pthread_join(worker, NULL) == 0;
         _exit(ready_ok && report_ok && release_ok && join_ok ? 0 : 4);
@@ -239,7 +203,8 @@ static void test_pid_tid_namespace_uniqueness(void)
     close(report_pipe[1]);
     struct pid_tid_report report;
     memset(&report, 0, sizeof(report));
-    int report_ok = read_full(report_pipe[0], &report, sizeof(report)) == 0;
+    int report_ok =
+        read_all(report_pipe[0], &report, sizeof(report), true) >= 0;
     close(report_pipe[0]);
     int child_ok = child_exited_cleanly(child, 0);
     int identity_ok =
@@ -283,10 +248,10 @@ static void test_wnohang_running_child(void)
         close(release[1]);
         close(ready[0]);
         char byte = 'R';
-        if (write_full(ready[1], &byte, 1) < 0)
+        if (write_all(ready[1], &byte, 1) < 0)
             _exit(2);
         close(ready[1]);
-        if (read_full(release[0], &byte, 1) < 0)
+        if (read_all(release[0], &byte, 1, true) < 0)
             _exit(3);
         close(release[0]);
         _exit(41);
@@ -295,7 +260,7 @@ static void test_wnohang_running_child(void)
     close(release[0]);
     close(ready[1]);
     char byte;
-    int synchronized = read_full(ready[0], &byte, 1) == 0;
+    int synchronized = read_all(ready[0], &byte, 1, true) >= 0;
     close(ready[0]);
 
     int status = 0;
@@ -303,7 +268,7 @@ static void test_wnohang_running_child(void)
     pid_t first = synchronized ? waitpid(child, &status, WNOHANG) : -1;
     int first_errno = errno;
     byte = 'X';
-    int released = write_full(release[1], &byte, 1) == 0;
+    int released = write_all(release[1], &byte, 1) == 0;
     close(release[1]);
     int reaped = child_exited_cleanly(child, 41);
 
@@ -464,7 +429,7 @@ static void test_waitid_pgid_matching(void)
     if (group_child == 0) {
         close(release[1]);
         char byte;
-        int ok = read_full(release[0], &byte, 1) == 0;
+        int ok = read_all(release[0], &byte, 1, true) >= 0;
         close(release[0]);
         _exit(ok ? 43 : 2);
     }
@@ -488,7 +453,7 @@ static void test_waitid_pgid_matching(void)
 
     int other_ok = other_child > 0 && child_exited_cleanly(other_child, 44);
     char byte = 'X';
-    int released = write_full(release[1], &byte, 1) == 0;
+    int released = write_all(release[1], &byte, 1) == 0;
     close(release[1]);
 
     siginfo_t exited;
@@ -539,7 +504,7 @@ static void test_waitid_pgid_autoreap(void)
     if (child == 0) {
         close(release[1]);
         char byte;
-        int ok = read_full(release[0], &byte, 1) == 0;
+        int ok = read_all(release[0], &byte, 1, true) >= 0;
         close(release[0]);
         _exit(ok ? 45 : 2);
     }
@@ -555,7 +520,7 @@ static void test_waitid_pgid_autoreap(void)
     int live_ok = live_rc == 0 && live.si_pid == 0 && live.si_signo == 0;
 
     char byte = 'X';
-    int released = child > 0 && write_full(release[1], &byte, 1) == 0;
+    int released = child > 0 && write_all(release[1], &byte, 1) == 0;
     close(release[1]);
     int gone_ok = child > 0 && wait_for_pid_gone(child, 5000) == 0;
 
@@ -607,7 +572,7 @@ static void test_signal_wait_status(void)
     if (killed == 0) {
         close(ready[0]);
         char byte = 'R';
-        if (write_full(ready[1], &byte, 1) < 0)
+        if (write_all(ready[1], &byte, 1) < 0)
             _exit(4);
         close(ready[1]);
         volatile uint64_t work = 1;
@@ -619,7 +584,7 @@ static void test_signal_wait_status(void)
     if (setup_ok)
         close(ready[1]);
     char byte = 0;
-    int ready_ok = killed > 0 && read_full(ready[0], &byte, 1) == 0;
+    int ready_ok = killed > 0 && read_all(ready[0], &byte, 1, true) >= 0;
     if (setup_ok)
         close(ready[0]);
     /* Let the child return from write(2) and enter EL0 compute code. This
@@ -983,18 +948,18 @@ static void test_orphan_reparent_to_init(void)
                 .adopted_ppid = -1,
             };
             char ready = 'R';
-            (void) write_full(leaf_ready[1], &ready, 1);
+            (void) write_all(leaf_ready[1], &ready, 1);
             close(leaf_ready[1]);
             report.adopted_ppid = wait_for_ppid(1, 3000);
-            (void) write_full(result[1], &report, sizeof(report));
+            (void) write_all(result[1], &report, sizeof(report));
             close(result[1]);
             _exit(report.adopted_ppid == 1 ? 0 : 2);
         }
         close(leaf_ready[1]);
         char ready;
-        int ready_ok = read_full(leaf_ready[0], &ready, 1) == 0;
+        int ready_ok = read_all(leaf_ready[0], &ready, 1, true) >= 0;
         close(leaf_ready[0]);
-        (void) write_full(meta[1], &leaf, sizeof(leaf));
+        (void) write_all(meta[1], &leaf, sizeof(leaf));
         close(meta[1]);
         close(result[1]);
         _exit(ready_ok ? 0 : 3);
@@ -1005,12 +970,12 @@ static void test_orphan_reparent_to_init(void)
     close(leaf_ready[0]);
     close(leaf_ready[1]);
     pid_t leaf = -1;
-    int meta_ok = read_full(meta[0], &leaf, sizeof(leaf)) == 0;
+    int meta_ok = read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
     close(meta[0]);
     int middle_ok = child_exited_cleanly(middle, 0);
     struct orphan_report report;
     memset(&report, 0, sizeof(report));
-    int result_ok = read_full(result[0], &report, sizeof(report)) == 0;
+    int result_ok = read_all(result[0], &report, sizeof(report), true) >= 0;
     close(result[0]);
 
     if (!meta_ok || !middle_ok || !result_ok || leaf <= 0 ||
@@ -1052,14 +1017,15 @@ static void test_orphan_reparent_to_subreaper(void)
             pid_t adopted = wait_for_ppid(subreaper, 3000);
             _exit(adopted == subreaper ? 62 : 63);
         }
-        (void) write_full(meta[1], &leaf, sizeof(leaf));
+        (void) write_all(meta[1], &leaf, sizeof(leaf));
         close(meta[1]);
         _exit(61);
     }
 
     close(meta[1]);
     pid_t leaf = -1;
-    int meta_ok = middle > 0 && read_full(meta[0], &leaf, sizeof(leaf)) == 0;
+    int meta_ok =
+        middle > 0 && read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
     close(meta[0]);
     int middle_ok = middle > 0 && child_exited_cleanly(middle, 61);
     int leaf_status = 0;
@@ -1131,7 +1097,7 @@ static void test_subreaper_adopts_zombie(void)
         } while (n < 0 && errno == EINTR);
         close(exited[0]);
         report.exit_barrier_ok = n == 0;
-        (void) write_full(meta[1], &report, sizeof(report));
+        (void) write_all(meta[1], &report, sizeof(report));
         close(meta[1]);
         _exit(71);
     }
@@ -1140,7 +1106,7 @@ static void test_subreaper_adopts_zombie(void)
     struct zombie_report report;
     memset(&report, 0, sizeof(report));
     int meta_ok =
-        middle > 0 && read_full(meta[0], &report, sizeof(report)) == 0;
+        middle > 0 && read_all(meta[0], &report, sizeof(report), true) >= 0;
     close(meta[0]);
     int middle_ok = middle > 0 && child_exited_cleanly(middle, 71);
     int reaped = 0;
@@ -1199,11 +1165,11 @@ static void test_pid1_retains_adopted_exit(void)
                 .adopted_ppid = -1,
             };
             char byte = 'R';
-            if (write_full(ready[1], &byte, 1) < 0)
+            if (write_all(ready[1], &byte, 1) < 0)
                 _exit(85);
             close(ready[1]);
             report.adopted_ppid = wait_for_ppid(1, 3000);
-            (void) write_full(result[1], &report, sizeof(report));
+            (void) write_all(result[1], &report, sizeof(report));
             close(result[1]);
             /* Keep exit_barrier[1] open until process teardown. EOF tells the
              * observer that the leaf has finished, not merely that it sent
@@ -1215,9 +1181,9 @@ static void test_pid1_retains_adopted_exit(void)
         close(ready[1]);
         close(exit_barrier[1]);
         char byte;
-        int ready_ok = leaf > 0 && read_full(ready[0], &byte, 1) == 0;
+        int ready_ok = leaf > 0 && read_all(ready[0], &byte, 1, true) >= 0;
         close(ready[0]);
-        int meta_ok = write_full(meta[1], &leaf, sizeof(leaf)) == 0;
+        int meta_ok = write_all(meta[1], &leaf, sizeof(leaf)) == 0;
         close(meta[1]);
         close(result[1]);
         _exit(ready_ok && meta_ok ? 82 : 86);
@@ -1230,13 +1196,13 @@ static void test_pid1_retains_adopted_exit(void)
     close(exit_barrier[1]);
 
     pid_t leaf = -1;
-    int meta_ok = read_full(meta[0], &leaf, sizeof(leaf)) == 0;
+    int meta_ok = read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
     close(meta[0]);
     int middle_ok = child_exited_cleanly(middle, 82);
 
     struct orphan_report report;
     memset(&report, 0, sizeof(report));
-    int result_ok = read_full(result[0], &report, sizeof(report)) == 0;
+    int result_ok = read_all(result[0], &report, sizeof(report), true) >= 0;
     close(result[0]);
     char byte;
     ssize_t barrier_ret;
@@ -1373,9 +1339,9 @@ static void test_blocked_subreaper_imports_zombie(void)
             } while (n < 0 && errno == EINTR);
             close(life[0]);
             int meta_ok = leaf > 0 && n == 0 &&
-                          write_full(meta[1], &leaf, sizeof(leaf)) == 0;
+                          write_all(meta[1], &leaf, sizeof(leaf)) == 0;
             close(meta[1]);
-            int release_ok = read_full(release_branch[0], &byte, 1) == 0;
+            int release_ok = read_all(release_branch[0], &byte, 1, true) >= 0;
             close(release_branch[0]);
             _exit(meta_ok && release_ok ? 91 : 3);
         }
@@ -1383,7 +1349,7 @@ static void test_blocked_subreaper_imports_zombie(void)
         close(release_branch[0]);
         int branch_ok = branch > 0 && child_exited_cleanly(branch, 91);
         char byte;
-        int release_ok = read_full(release_parent[0], &byte, 1) == 0;
+        int release_ok = read_all(release_parent[0], &byte, 1, true) >= 0;
         close(release_parent[0]);
         _exit(branch_ok && release_ok ? 92 : 4);
     }
@@ -1392,7 +1358,8 @@ static void test_blocked_subreaper_imports_zombie(void)
     close(release_branch[0]);
     close(release_parent[0]);
     pid_t leaf = -1;
-    int meta_ok = parent > 0 && read_full(meta[0], &leaf, sizeof(leaf)) == 0;
+    int meta_ok =
+        parent > 0 && read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
     close(meta[0]);
 
     /* Earlier cases may leave an asynchronously auto-reaped table entry long
@@ -1414,7 +1381,7 @@ static void test_blocked_subreaper_imports_zombie(void)
         usleep(20000);
     char byte = 'X';
     int branch_released =
-        thread_ok && write_full(release_branch[1], &byte, 1) == 0;
+        thread_ok && write_all(release_branch[1], &byte, 1) == 0;
     close(release_branch[1]);
 
     int woke_for_leaf = 0;
@@ -1430,7 +1397,7 @@ static void test_blocked_subreaper_imports_zombie(void)
             WEXITSTATUS(result.status) == 90;
     }
 
-    int parent_released = write_full(release_parent[1], &byte, 1) == 0;
+    int parent_released = write_all(release_parent[1], &byte, 1) == 0;
     close(release_parent[1]);
     if (thread_ok)
         pthread_join(waiter, NULL);
@@ -1504,14 +1471,14 @@ static void test_adopted_signal_status_and_rusage(void)
             close(meta[1]);
             burn_cpu_ms(75);
             char byte = 'R';
-            if (write_full(life[1], &byte, 1) < 0)
+            if (write_all(life[1], &byte, 1) < 0)
                 _exit(3);
             raise(SIGKILL);
             _exit(5);
         }
         close(life[1]);
         char byte;
-        int ready_ok = leaf > 0 && read_full(life[0], &byte, 1) == 0;
+        int ready_ok = leaf > 0 && read_all(life[0], &byte, 1, true) >= 0;
         int kill_ok = ready_ok;
         ssize_t n;
         do {
@@ -1519,14 +1486,15 @@ static void test_adopted_signal_status_and_rusage(void)
         } while (n < 0 && errno == EINTR);
         close(life[0]);
         int dead_ok = n == 0;
-        int meta_ok = write_full(meta[1], &leaf, sizeof(leaf)) == 0;
+        int meta_ok = write_all(meta[1], &leaf, sizeof(leaf)) == 0;
         close(meta[1]);
         _exit(ready_ok && kill_ok && dead_ok && meta_ok ? 93 : 4);
     }
 
     close(meta[1]);
     pid_t leaf = -1;
-    int meta_ok = middle > 0 && read_full(meta[0], &leaf, sizeof(leaf)) == 0;
+    int meta_ok =
+        middle > 0 && read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
     close(meta[0]);
     int middle_ok = middle > 0 && child_exited_cleanly(middle, 93);
 

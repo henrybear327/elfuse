@@ -122,6 +122,7 @@ void thread_register_main(hv_vcpu_t vcpu,
     thread_entry_t *t = &thread_table[0];
     t->guest_tid = tid;
     t->vcpu = vcpu;
+    t->vcpu_valid = true;
     t->vexit = vexit;
     t->host_thread = pthread_self();
     t->host_thread_needs_join = false; /* Never join the process main thread */
@@ -564,13 +565,17 @@ void thread_join_workers(void)
     }
 }
 
-void thread_destroy_all_vcpus(void)
+bool thread_destroy_all_vcpus(hv_vcpu_t main_vcpu, bool main_vcpu_valid)
 {
+    bool main_destroyed = false;
     pthread_mutex_lock(&thread_lock);
     THREAD_FOR_EACH_ACTIVE (t) {
-        if (!t->vcpu)
+        if (!t->vcpu_valid)
             continue;
+        if (main_vcpu_valid && t->vcpu == main_vcpu)
+            main_destroyed = true;
         hv_vcpu_destroy(t->vcpu);
+        t->vcpu_valid = false;
         t->vcpu = 0;
         thread_free_sp_el1_locked(t);
         __atomic_store_n(&t->active, 0, __ATOMIC_RELEASE);
@@ -581,6 +586,7 @@ void thread_destroy_all_vcpus(void)
     }
     atomic_store(&active_thread_count, 0);
     pthread_mutex_unlock(&thread_lock);
+    return main_destroyed;
 }
 
 void thread_interrupt_all(void)
@@ -593,7 +599,7 @@ void thread_interrupt_all(void)
 
     pthread_mutex_lock(&thread_lock);
     THREAD_FOR_EACH_ACTIVE (t)
-        if (t->vcpu) /* skip slots whose vCPU was already torn down */
+        if (t->vcpu_valid) /* skip bring-up/torn-down slots */
             vcpus[count++] = t->vcpu;
     pthread_mutex_unlock(&thread_lock);
 
@@ -643,7 +649,7 @@ void thread_quiesce_siblings(void)
             continue;
         t->fork_counted = true;
         targets++;
-        if (t->vcpu)
+        if (t->vcpu_valid)
             vcpus[count++] = t->vcpu;
     }
 

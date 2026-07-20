@@ -43,6 +43,7 @@
 
 /* Signal state (module-level, process-wide). */
 static signal_state_t sig_state;
+static _Thread_local int termination_wait_status;
 
 /* Per-thread pending fault info. When a synchronous fault (BRK, segfault, etc.)
  * needs to deliver a signal, the caller sets this before
@@ -685,6 +686,31 @@ const signal_state_t *signal_get_state(void)
     return &sig_state;
 }
 
+static bool sigaction_autoreaps_sigchld(const linux_sigaction_t *act)
+{
+    return act->sa_handler == LINUX_SIG_IGN ||
+           (act->sa_flags & LINUX_SA_NOCLDWAIT) != 0;
+}
+
+bool signal_sigchld_autoreap(void)
+{
+    bool result;
+    pthread_mutex_lock(&sig_lock);
+    const linux_sigaction_t *act = &sig_state.actions[LINUX_SIGCHLD - 1];
+    result = sigaction_autoreaps_sigchld(act);
+    pthread_mutex_unlock(&sig_lock);
+    return result;
+}
+
+bool signal_refresh_identity_cache(void)
+{
+    guest_t *g = atomic_load_explicit(&attention_guest, memory_order_acquire);
+    if (!g)
+        return false;
+    shim_globals_publish_pid(g, proc_get_pid(), proc_get_ppid());
+    return true;
+}
+
 void signal_set_state(const signal_state_t *state)
 {
     if (!state)
@@ -1145,6 +1171,7 @@ int64_t signal_rt_sigaction(guest_t *g,
 
     int idx = signum - 1;
 
+    bool reap_exited_sigchld = false;
     pthread_mutex_lock(&sig_lock);
 
     /* Return old action if requested */
@@ -1176,10 +1203,21 @@ int64_t signal_rt_sigaction(guest_t *g,
             (act.sa_flags & LINUX_SA_RESETHAND) ? " SA_RESETHAND" : "",
             (act.sa_flags & LINUX_SA_NODEFER) ? " SA_NODEFER" : "");
 
+        /* If SIGCHLD was in an automatic-reap disposition, consume children
+         * that reached a terminal lifecycle state before replacing it. This
+         * closes the exit-notification race where the guest restores SIG_DFL
+         * after observing child teardown but before the transport doorbell is
+         * drained.
+         */
+        reap_exited_sigchld =
+            signum == LINUX_SIGCHLD &&
+            sigaction_autoreaps_sigchld(&sig_state.actions[idx]);
         sig_state.actions[idx] = act;
     }
 
     pthread_mutex_unlock(&sig_lock);
+    if (reap_exited_sigchld)
+        proc_autoreap_exited_children();
     return 0;
 }
 
@@ -1923,6 +1961,20 @@ static int deliver_signal_locked(hv_vcpu_t vcpu,
     return 1;
 }
 
+static void signal_record_termination(int signum)
+{
+    termination_wait_status = signum;
+    if (signal_default_disposition(signum) == SIG_DISP_CORE)
+        termination_wait_status |= 0x80;
+}
+
+int signal_take_termination_wait_status(void)
+{
+    int status = termination_wait_status;
+    termination_wait_status = 0;
+    return status;
+}
+
 int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
 {
     pthread_mutex_lock(&sig_lock);
@@ -1971,7 +2023,10 @@ int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code)
      */
     refresh_pending_hint_locked();
 
-    return deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
+    int result = deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
+    if (result < 0)
+        signal_record_termination(signum);
+    return result;
 }
 
 int signal_deliver_fault(hv_vcpu_t vcpu, guest_t *g, int signum, int *exit_code)
@@ -2007,7 +2062,10 @@ int signal_deliver_fault(hv_vcpu_t vcpu, guest_t *g, int signum, int *exit_code)
     }
 
     signal_rt_info_t rt_info = signal_default_info(signum);
-    return deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
+    int result = deliver_signal_locked(vcpu, g, signum, rt_info, exit_code);
+    if (result < 0)
+        signal_record_termination(signum);
+    return result;
 }
 
 /* rt_sigreturn. */

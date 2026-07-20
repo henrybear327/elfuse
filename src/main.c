@@ -656,7 +656,7 @@ int main(int argc, char **argv)
 
     /* vcpu_run_loop owns guest execution until exit, fatal signal, or timeout.
      */
-    exit_code = vcpu_run_loop(vcpu, vexit, &g, verbose, timeout_sec);
+    exit_code = vcpu_run_loop(vcpu, vexit, &g, verbose, timeout_sec, NULL);
 
     /* Tear down debugger state before joining workers: a worker parked in
      * gdb_stub_handle_stop() stays active (not deactivated) until this

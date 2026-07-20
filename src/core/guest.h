@@ -450,6 +450,8 @@ typedef struct {
     uint64_t ttbr0; /* TTBR0 value (IPA of L0 page table) */
     uint64_t ttbr1; /* TTBR1 value (IPA of L0 kernel page table; 0 if unused) */
     hv_vcpu_t vcpu; /* vCPU handle */
+    bool vcpu_valid; /* Handle value zero is valid; track ownership separately.
+                      */
     hv_vcpu_exit_t *exit; /* vCPU exit info */
     uint32_t ipa_bits;    /* IPA bits requested from HVF */
 

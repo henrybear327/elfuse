@@ -1,0 +1,1556 @@
+/*
+ * Process lifecycle compatibility tests
+ *
+ * Copyright 2026 elfuse contributors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Portable probes for guest-observable Linux fork/wait behavior. The same
+ * binary is intended to run under elfuse and the qemu-aarch64 reference lane.
+ * Keep host implementation details out of the assertions.
+ *
+ * Initial coverage:
+ *   PID-01..02 process and thread IDs are unique across the fork family
+ *   WAIT-01 WNOHANG does not consume a running child
+ *   WAIT-02 WNOWAIT can be repeated before a consuming wait
+ *   WAIT-03..06 waitid groups/auto-reap, signal status, and admission races
+ *   Z-01..06 zombie retention, no-zombie dispositions, and SIGCHLD timing
+ *   O-01..03 orphan adoption by PID 1 and a child subreaper
+ *   O-04..05 reserved for separate parent-death/job-control follow-ups
+ *   O-06     non-reaping PID 1 retains an adopted exit status
+ *   O-07..08 blocking adoption wakeups, signal status, and adopted rusage
+ */
+
+#include <errno.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "test-harness.h"
+#include "utils.h"
+
+int passes = 0, fails = 0;
+
+static int child_exited_cleanly(pid_t pid, int expected_code)
+{
+    int status = 0;
+    pid_t ret;
+    do {
+        ret = waitpid(pid, &status, 0);
+    } while (ret < 0 && errno == EINTR);
+    return ret == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == expected_code;
+}
+
+struct nested_pids {
+    pid_t child;
+    pid_t grandchild;
+    int grandchild_ok;
+};
+
+static void test_nested_pid_uniqueness(void)
+{
+    TEST("PID-01 nested PIDs are unique");
+
+    int report[2];
+    if (pipe(report) < 0) {
+        FAIL("PID-01 pipe failed");
+        return;
+    }
+
+    pid_t parent = getpid();
+    pid_t child = fork();
+    if (child < 0) {
+        close(report[0]);
+        close(report[1]);
+        FAIL("PID-01 first fork failed");
+        return;
+    }
+
+    if (child == 0) {
+        close(report[0]);
+        struct nested_pids observed = {
+            .child = getpid(),
+            .grandchild = -1,
+            .grandchild_ok = 0,
+        };
+
+        pid_t grandchild = fork();
+        if (grandchild == 0)
+            _exit(37);
+        if (grandchild > 0) {
+            observed.grandchild = grandchild;
+            observed.grandchild_ok = child_exited_cleanly(grandchild, 37);
+        }
+        (void) write_all(report[1], &observed, sizeof(observed));
+        close(report[1]);
+        _exit(grandchild < 0 ? 2 : 0);
+    }
+
+    close(report[1]);
+    struct nested_pids observed;
+    memset(&observed, 0, sizeof(observed));
+    int read_ok = read_all(report[0], &observed, sizeof(observed), true) >= 0;
+    close(report[0]);
+    int child_ok = child_exited_cleanly(child, 0);
+
+    int unique = parent > 0 && child > 0 && observed.child > 0 &&
+                 observed.grandchild > 0 && parent != observed.child &&
+                 parent != observed.grandchild &&
+                 observed.child != observed.grandchild;
+    if (!read_ok || !child_ok || !observed.grandchild_ok || !unique) {
+        printf(
+            "[PID-01 parent=%d fork_child=%d child_self=%d "
+            "grandchild=%d child_ok=%d grandchild_ok=%d] ",
+            (int) parent, (int) child, (int) observed.child,
+            (int) observed.grandchild, child_ok, observed.grandchild_ok);
+        FAIL("nested process IDs were not unique/waitable");
+        return;
+    }
+    PASS();
+}
+
+struct tid_probe {
+    int ready_fd;
+    int release_fd;
+    _Atomic int worker_tid;
+};
+
+static void *tid_probe_worker(void *opaque)
+{
+    struct tid_probe *probe = opaque;
+    int tid = (int) syscall(SYS_gettid);
+    atomic_store_explicit(&probe->worker_tid, tid, memory_order_release);
+
+    char byte = 'R';
+    if (write_all(probe->ready_fd, &byte, 1) < 0)
+        atomic_store_explicit(&probe->worker_tid, -1, memory_order_release);
+    close(probe->ready_fd);
+
+    if (read_all(probe->release_fd, &byte, 1, true) < 0)
+        atomic_store_explicit(&probe->worker_tid, -1, memory_order_release);
+    close(probe->release_fd);
+    return NULL;
+}
+
+struct pid_tid_report {
+    pid_t child_pid;
+    pid_t child_main_tid;
+    pid_t child_worker_tid;
+};
+
+static void test_pid_tid_namespace_uniqueness(void)
+{
+    TEST("PID-02 process PIDs and thread TIDs are unique");
+
+    int report_pipe[2];
+    if (pipe(report_pipe) < 0) {
+        FAIL("PID-02 report pipe failed");
+        return;
+    }
+
+    pid_t parent_pid = getpid();
+    pid_t child = fork();
+    if (child < 0) {
+        close(report_pipe[0]);
+        close(report_pipe[1]);
+        FAIL("PID-02 fork failed");
+        return;
+    }
+
+    if (child == 0) {
+        close(report_pipe[0]);
+        int ready[2];
+        int release[2];
+        if (pipe(ready) < 0 || pipe(release) < 0)
+            _exit(2);
+
+        struct tid_probe probe = {
+            .ready_fd = ready[1],
+            .release_fd = release[0],
+            .worker_tid = -1,
+        };
+        pthread_t worker;
+        if (pthread_create(&worker, NULL, tid_probe_worker, &probe) != 0)
+            _exit(3);
+
+        char byte;
+        int ready_ok = read_all(ready[0], &byte, 1, true) >= 0;
+        close(ready[0]);
+        struct pid_tid_report report = {
+            .child_pid = getpid(),
+            .child_main_tid = (pid_t) syscall(SYS_gettid),
+            .child_worker_tid = (pid_t) atomic_load_explicit(
+                &probe.worker_tid, memory_order_acquire),
+        };
+        int report_ok = write_all(report_pipe[1], &report, sizeof(report)) == 0;
+        close(report_pipe[1]);
+        int release_ok = write_all(release[1], "G", 1) == 0;
+        close(release[1]);
+        int join_ok = pthread_join(worker, NULL) == 0;
+        _exit(ready_ok && report_ok && release_ok && join_ok ? 0 : 4);
+    }
+
+    close(report_pipe[1]);
+    struct pid_tid_report report;
+    memset(&report, 0, sizeof(report));
+    int report_ok =
+        read_all(report_pipe[0], &report, sizeof(report), true) >= 0;
+    close(report_pipe[0]);
+    int child_ok = child_exited_cleanly(child, 0);
+    int identity_ok =
+        report.child_pid == child && report.child_main_tid == report.child_pid;
+    int unique = parent_pid > 0 && report.child_pid > 0 &&
+                 report.child_worker_tid > 0 &&
+                 parent_pid != report.child_pid &&
+                 parent_pid != report.child_worker_tid &&
+                 report.child_pid != report.child_worker_tid;
+
+    if (!report_ok || !child_ok || !identity_ok || !unique) {
+        printf(
+            "[PID-02 parent=%d fork_child=%d child_pid=%d main_tid=%d "
+            "worker_tid=%d report=%d child_ok=%d identity=%d unique=%d] ",
+            (int) parent_pid, (int) child, (int) report.child_pid,
+            (int) report.child_main_tid, (int) report.child_worker_tid,
+            report_ok, child_ok, identity_ok, unique);
+        FAIL("process/thread IDs collided or leader TID differed from PID");
+        return;
+    }
+    PASS();
+}
+
+static void test_wnohang_running_child(void)
+{
+    TEST("WAIT-01 WNOHANG preserves child");
+
+    int release[2];
+    int ready[2];
+    if (pipe(release) < 0 || pipe(ready) < 0) {
+        FAIL("WAIT-01 pipe failed");
+        return;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        FAIL("WAIT-01 fork failed");
+        return;
+    }
+    if (child == 0) {
+        close(release[1]);
+        close(ready[0]);
+        char byte = 'R';
+        if (write_all(ready[1], &byte, 1) < 0)
+            _exit(2);
+        close(ready[1]);
+        if (read_all(release[0], &byte, 1, true) < 0)
+            _exit(3);
+        close(release[0]);
+        _exit(41);
+    }
+
+    close(release[0]);
+    close(ready[1]);
+    char byte;
+    int synchronized = read_all(ready[0], &byte, 1, true) >= 0;
+    close(ready[0]);
+
+    int status = 0;
+    errno = 0;
+    pid_t first = synchronized ? waitpid(child, &status, WNOHANG) : -1;
+    int first_errno = errno;
+    byte = 'X';
+    int released = write_all(release[1], &byte, 1) == 0;
+    close(release[1]);
+    int reaped = child_exited_cleanly(child, 41);
+
+    if (!synchronized || first != 0 || !released || !reaped) {
+        printf(
+            "[WAIT-01 child=%d first=%d errno=%d synchronized=%d "
+            "released=%d reaped=%d] ",
+            (int) child, (int) first, first_errno, synchronized, released,
+            reaped);
+        FAIL("WNOHANG changed or lost a running child");
+        return;
+    }
+    PASS();
+}
+
+static int64_t monotonic_milliseconds(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+        return -1;
+    return (int64_t) now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+/* Fork a child that holds @done's write end until process exit. A zero-byte
+ * read in the parent is an exit-side barrier: every writer has been closed by
+ * the kernel. It does not consume the child's wait status.
+ */
+static pid_t fork_exit_with_eof(int exit_code)
+{
+    int done[2];
+    if (pipe(done) < 0)
+        return -1;
+    pid_t child = fork();
+    if (child < 0) {
+        close(done[0]);
+        close(done[1]);
+        return -1;
+    }
+    if (child == 0) {
+        close(done[0]);
+        _exit(exit_code);
+    }
+    close(done[1]);
+    char byte;
+    ssize_t n;
+    do {
+        n = read(done[0], &byte, 1);
+    } while (n < 0 && errno == EINTR);
+    close(done[0]);
+    if (n != 0) {
+        int saved = errno;
+        kill(child, SIGKILL);
+        (void) child_exited_cleanly(child, 0);
+        errno = saved ? saved : EIO;
+        return -1;
+    }
+    return child;
+}
+
+static int wait_for_pid_gone(pid_t pid, int timeout_ms)
+{
+    int64_t deadline = monotonic_milliseconds() + timeout_ms;
+    do {
+        errno = 0;
+        if (kill(pid, 0) < 0 && errno == ESRCH)
+            return 0;
+        usleep(10000);
+    } while (monotonic_milliseconds() < deadline);
+    errno = ETIMEDOUT;
+    return -1;
+}
+
+static int waitid_wnowait_until_ready(pid_t child, siginfo_t *info)
+{
+    int64_t deadline = monotonic_milliseconds() + 5000;
+    do {
+        memset(info, 0, sizeof(*info));
+        if (waitid(P_PID, (id_t) child, info, WEXITED | WNOWAIT | WNOHANG) < 0)
+            return -1;
+        if (info->si_pid == child)
+            return 0;
+        usleep(10000);
+    } while (monotonic_milliseconds() < deadline);
+    errno = ETIMEDOUT;
+    return -1;
+}
+
+static void test_waitid_wnowait_repeat(void)
+{
+    TEST("WAIT-02 repeated WNOWAIT then reap");
+
+    pid_t child = fork();
+    if (child < 0) {
+        FAIL("WAIT-02 fork failed");
+        return;
+    }
+    if (child == 0)
+        _exit(42);
+
+    siginfo_t first;
+    errno = 0;
+    int first_rc = waitid_wnowait_until_ready(child, &first);
+    int first_errno = errno;
+
+    siginfo_t second;
+    memset(&second, 0, sizeof(second));
+    errno = 0;
+    int second_rc =
+        waitid(P_PID, (id_t) child, &second, WEXITED | WNOWAIT | WNOHANG);
+    int second_errno = errno;
+
+    int status = 0;
+    errno = 0;
+    pid_t consumed = waitpid(child, &status, 0);
+    int consume_errno = errno;
+    int consumed_status = status;
+
+    errno = 0;
+    pid_t after = waitpid(child, &status, WNOHANG);
+    int after_errno = errno;
+
+    int first_ok = first_rc == 0 && first.si_pid == child &&
+                   first.si_code == CLD_EXITED && first.si_status == 42;
+    int second_ok = second_rc == 0 && second.si_pid == child &&
+                    second.si_code == CLD_EXITED && second.si_status == 42;
+    int consume_ok = consumed == child && WIFEXITED(consumed_status) &&
+                     WEXITSTATUS(consumed_status) == 42;
+    int after_ok = after == -1 && after_errno == ECHILD;
+
+    if (!first_ok || !second_ok || !consume_ok || !after_ok) {
+        printf(
+            "[WAIT-02 child=%d first=(rc=%d errno=%d pid=%d code=%d "
+            "status=%d) second=(rc=%d errno=%d pid=%d code=%d status=%d) "
+            "consume=(ret=%d errno=%d status=0x%x) "
+            "after=(ret=%d errno=%d)] ",
+            (int) child, first_rc, first_errno, (int) first.si_pid,
+            first.si_code, first.si_status, second_rc, second_errno,
+            (int) second.si_pid, second.si_code, second.si_status,
+            (int) consumed, consume_errno, consumed_status, (int) after,
+            after_errno);
+        FAIL("WNOWAIT did not preserve a repeatable wait status");
+        return;
+    }
+    PASS();
+}
+
+static void test_waitid_pgid_matching(void)
+{
+    TEST("WAIT-03 waitid P_PGID matches group");
+
+    int release[2];
+    if (pipe(release) < 0) {
+        FAIL("WAIT-03 pipe failed");
+        return;
+    }
+
+    pid_t group_child = fork();
+    if (group_child == 0) {
+        close(release[1]);
+        char byte;
+        int ok = read_all(release[0], &byte, 1, true) >= 0;
+        close(release[0]);
+        _exit(ok ? 43 : 2);
+    }
+    close(release[0]);
+    if (group_child < 0) {
+        close(release[1]);
+        FAIL("WAIT-03 group child fork failed");
+        return;
+    }
+
+    int setpgid_ok = setpgid(group_child, group_child) == 0;
+    pid_t other_child = fork_exit_with_eof(44);
+
+    siginfo_t empty;
+    memset(&empty, 0, sizeof(empty));
+    errno = 0;
+    int empty_rc =
+        waitid(P_PGID, (id_t) group_child, &empty, WEXITED | WNOHANG);
+    int empty_errno = errno;
+    int empty_ok = empty_rc == 0 && empty.si_pid == 0;
+
+    int other_ok = other_child > 0 && child_exited_cleanly(other_child, 44);
+    char byte = 'X';
+    int released = write_all(release[1], &byte, 1) == 0;
+    close(release[1]);
+
+    siginfo_t exited;
+    memset(&exited, 0, sizeof(exited));
+    errno = 0;
+    int exited_rc = waitid(P_PGID, (id_t) group_child, &exited, WEXITED);
+    int exited_errno = errno;
+    int exited_ok = exited_rc == 0 && exited.si_pid == group_child &&
+                    exited.si_code == CLD_EXITED && exited.si_status == 43;
+
+    if (!setpgid_ok || other_child < 0 || !empty_ok || !other_ok || !released ||
+        !exited_ok) {
+        printf(
+            "[WAIT-03 group=%d other=%d setpgid=%d "
+            "empty=(rc=%d errno=%d pid=%d) other_ok=%d released=%d "
+            "exited=(rc=%d errno=%d pid=%d code=%d status=%d)] ",
+            (int) group_child, (int) other_child, setpgid_ok, empty_rc,
+            empty_errno, (int) empty.si_pid, other_ok, released, exited_rc,
+            exited_errno, (int) exited.si_pid, exited.si_code,
+            exited.si_status);
+        FAIL("waitid(P_PGID) selected a child outside the requested group");
+        return;
+    }
+    PASS();
+}
+
+static void test_waitid_pgid_autoreap(void)
+{
+    TEST("WAIT-04 P_PGID sees live auto-reap child");
+
+    struct sigaction old_action;
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_IGN;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGCHLD, &action, &old_action) < 0) {
+        FAIL("WAIT-04 installing SIGCHLD disposition failed");
+        return;
+    }
+
+    int release[2];
+    if (pipe(release) < 0) {
+        (void) sigaction(SIGCHLD, &old_action, NULL);
+        FAIL("WAIT-04 pipe failed");
+        return;
+    }
+    pid_t child = fork();
+    if (child == 0) {
+        close(release[1]);
+        char byte;
+        int ok = read_all(release[0], &byte, 1, true) >= 0;
+        close(release[0]);
+        _exit(ok ? 45 : 2);
+    }
+    close(release[0]);
+
+    int setpgid_ok = child > 0 && setpgid(child, child) == 0;
+    siginfo_t live;
+    memset(&live, 0xa5, sizeof(live));
+    errno = 0;
+    int live_rc =
+        child > 0 ? waitid(P_PGID, (id_t) child, &live, WEXITED | WNOHANG) : -1;
+    int live_errno = errno;
+    int live_ok = live_rc == 0 && live.si_pid == 0 && live.si_signo == 0;
+
+    char byte = 'X';
+    int released = child > 0 && write_all(release[1], &byte, 1) == 0;
+    close(release[1]);
+    int gone_ok = child > 0 && wait_for_pid_gone(child, 5000) == 0;
+
+    siginfo_t gone;
+    memset(&gone, 0, sizeof(gone));
+    errno = 0;
+    int gone_rc =
+        child > 0 ? waitid(P_PGID, (id_t) child, &gone, WEXITED | WNOHANG) : -2;
+    int gone_errno = errno;
+    int gone_wait_ok = gone_rc == -1 && gone_errno == ECHILD;
+    int restore_ok = sigaction(SIGCHLD, &old_action, NULL) == 0;
+
+    if (child < 0 || !setpgid_ok || !live_ok || !released || !gone_ok ||
+        !gone_wait_ok || !restore_ok) {
+        printf(
+            "[WAIT-04 child=%d setpgid=%d "
+            "live=(rc=%d errno=%d signo=%d pid=%d) "
+            "released=%d gone=%d final=(rc=%d errno=%d pid=%d) "
+            "restore=%d] ",
+            (int) child, setpgid_ok, live_rc, live_errno, live.si_signo,
+            (int) live.si_pid, released, gone_ok, gone_rc, gone_errno,
+            (int) gone.si_pid, restore_ok);
+        FAIL("auto-reap waitid(P_PGID) did not track the requested group");
+        return;
+    }
+    PASS();
+}
+
+static void test_signal_wait_status(void)
+{
+    TEST("WAIT-05 parent SIGKILL preserves signal status");
+
+    pid_t normal = fork();
+    if (normal == 0)
+        _exit(137);
+    int normal_status = 0;
+    pid_t normal_ret = normal > 0 ? waitpid(normal, &normal_status, 0) : -1;
+    int normal_ok = normal_ret == normal && WIFEXITED(normal_status) &&
+                    WEXITSTATUS(normal_status) == 137;
+
+    _Atomic int *stop = mmap(NULL, sizeof(*stop), PROT_READ | PROT_WRITE,
+                             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    int ready[2];
+    int setup_ok = stop != MAP_FAILED && pipe(ready) == 0;
+    if (stop != MAP_FAILED)
+        atomic_store_explicit(stop, 0, memory_order_relaxed);
+
+    pid_t killed = setup_ok ? fork() : -1;
+    if (killed == 0) {
+        close(ready[0]);
+        char byte = 'R';
+        if (write_all(ready[1], &byte, 1) < 0)
+            _exit(4);
+        close(ready[1]);
+        volatile uint64_t work = 1;
+        while (!atomic_load_explicit(stop, memory_order_acquire))
+            work = work * 33u + 1u;
+        (void) work;
+        _exit(5);
+    }
+    if (setup_ok)
+        close(ready[1]);
+    char byte = 0;
+    int ready_ok = killed > 0 && read_all(ready[0], &byte, 1, true) >= 0;
+    if (setup_ok)
+        close(ready[0]);
+    /* Let the child return from write(2) and enter EL0 compute code. This
+     * specifically checks that the cross-process signal doorbell interrupts a
+     * running vCPU whose valid Hypervisor.framework handle may be zero.
+     */
+    if (ready_ok)
+        usleep(20000);
+    errno = 0;
+    int kill_rc = ready_ok ? kill(killed, SIGKILL) : -1;
+    int kill_errno = errno;
+    int kill_ok = kill_rc == 0;
+    siginfo_t info;
+    memset(&info, 0, sizeof(info));
+    int peek_rc = -1;
+    for (int i = 0; kill_ok && i < 2000; i++) {
+        memset(&info, 0, sizeof(info));
+        peek_rc =
+            waitid(P_PID, (id_t) killed, &info, WEXITED | WNOWAIT | WNOHANG);
+        if (peek_rc < 0 || info.si_pid != 0)
+            break;
+        usleep(1000);
+    }
+    int peek_ok = peek_rc == 0 && info.si_pid == killed &&
+                  info.si_code == CLD_KILLED && info.si_status == SIGKILL;
+    if (!peek_ok && killed > 0)
+        atomic_store_explicit(stop, 1, memory_order_release);
+    int killed_status = 0;
+    pid_t killed_ret = killed > 0 ? waitpid(killed, &killed_status, 0) : -1;
+    int killed_ok = killed_ret == killed && WIFSIGNALED(killed_status) &&
+                    WTERMSIG(killed_status) == SIGKILL;
+    if (stop != MAP_FAILED)
+        munmap(stop, sizeof(*stop));
+
+    if (normal < 0 || !normal_ok || !setup_ok || killed < 0 || !ready_ok ||
+        !kill_ok || !peek_ok || !killed_ok) {
+        printf(
+            "[WAIT-05 normal=%d ret=%d status=0x%x ok=%d killed=%d "
+            "setup=%d ready=%d kill=(rc=%d errno=%d) "
+            "peek=(rc=%d pid=%d code=%d status=%d) "
+            "reap=(ret=%d status=0x%x ok=%d)] ",
+            (int) normal, (int) normal_ret, normal_status, normal_ok,
+            (int) killed, setup_ok, ready_ok, kill_rc, kill_errno, peek_rc,
+            (int) info.si_pid, info.si_code, info.si_status, (int) killed_ret,
+            killed_status, killed_ok);
+        FAIL("guest wait status lost the signal termination cause");
+        return;
+    }
+    PASS();
+}
+
+struct concurrent_wait_result {
+    _Atomic int stop;
+    _Atomic int reaped;
+    pid_t first_pid;
+    int first_status;
+    int error;
+};
+
+static void *concurrent_waiter(void *opaque)
+{
+    struct concurrent_wait_result *result = opaque;
+    while (!atomic_load_explicit(&result->stop, memory_order_acquire)) {
+        int status = 0;
+        errno = 0;
+        pid_t pid = waitpid(-1, &status, WNOHANG);
+        if (pid > 0) {
+            int count = atomic_fetch_add_explicit(&result->reaped, 1,
+                                                  memory_order_acq_rel) +
+                        1;
+            if (count == 1) {
+                result->first_pid = pid;
+                result->first_status = status;
+            }
+            continue;
+        }
+        if (pid < 0 && errno != ECHILD && errno != EINTR) {
+            result->error = errno;
+            break;
+        }
+        usleep(100);
+    }
+    return NULL;
+}
+
+static void test_concurrent_wait_during_fork_admission(void)
+{
+    TEST("WAIT-06 concurrent wait sees admitted child once");
+
+    struct concurrent_wait_result result;
+    memset(&result, 0, sizeof(result));
+    pthread_t waiter;
+    int thread_ok =
+        pthread_create(&waiter, NULL, concurrent_waiter, &result) == 0;
+    if (thread_ok)
+        usleep(10000);
+
+    pid_t child = thread_ok ? fork() : -1;
+    if (child == 0)
+        _exit(97);
+
+    if (child > 0) {
+        for (int i = 0; i < 3000; i++) {
+            if (atomic_load_explicit(&result.reaped, memory_order_acquire) > 0)
+                break;
+            usleep(1000);
+        }
+        /* Keep the waiter active briefly after the first report: a phantom
+         * admission record would otherwise leave a second entry for this same
+         * guest PID, producing a duplicate consuming wait.
+         */
+        usleep(50000);
+    }
+
+    atomic_store_explicit(&result.stop, 1, memory_order_release);
+    if (thread_ok)
+        pthread_join(waiter, NULL);
+
+    int count = atomic_load_explicit(&result.reaped, memory_order_acquire);
+    int status_ok = count == 1 && result.first_pid == child &&
+                    WIFEXITED(result.first_status) &&
+                    WEXITSTATUS(result.first_status) == 97;
+    errno = 0;
+    int cleanup_status = 0;
+    pid_t cleanup = child > 0 ? waitpid(child, &cleanup_status, WNOHANG) : -1;
+    int cleanup_errno = errno;
+    int cleanup_ok = cleanup < 0 && cleanup_errno == ECHILD;
+
+    if (!thread_ok || child < 0 || result.error != 0 || !status_ok ||
+        !cleanup_ok) {
+        printf(
+            "[WAIT-06 child=%d thread=%d reaped=%d first=(pid=%d "
+            "status=0x%x) error=%d cleanup=%d errno=%d] ",
+            (int) child, thread_ok, count, (int) result.first_pid,
+            result.first_status, result.error, (int) cleanup, cleanup_errno);
+        if (child > 0 && cleanup == 0) {
+            kill(child, SIGKILL);
+            (void) waitpid(child, NULL, 0);
+        }
+        FAIL("fork admission created a missing or duplicate wait record");
+        return;
+    }
+    PASS();
+}
+
+static void test_delayed_zombie_reap(void)
+{
+    TEST("Z-01 delayed zombie retains status");
+
+    pid_t child = fork_exit_with_eof(51);
+    if (child < 0) {
+        FAIL("Z-01 fork/exit barrier failed");
+        return;
+    }
+    usleep(50000);
+    if (!child_exited_cleanly(child, 51)) {
+        FAIL("delayed wait lost child exit status");
+        return;
+    }
+    PASS();
+}
+
+static void test_reverse_zombie_reap(void)
+{
+    TEST("Z-02 reverse-order zombie reap");
+
+    enum { CHILDREN = 8 };
+    pid_t children[CHILDREN];
+    int created = 0;
+    for (int i = 0; i < CHILDREN; i++) {
+        children[i] = fork_exit_with_eof(20 + i);
+        if (children[i] < 0)
+            break;
+        created++;
+    }
+
+    int ok = created == CHILDREN;
+    for (int i = created - 1; i >= 0; i--)
+        if (!child_exited_cleanly(children[i], 20 + i))
+            ok = 0;
+
+    if (!ok) {
+        printf("[Z-02 created=%d/%d] ", created, CHILDREN);
+        FAIL("reverse wait lost or changed a child status");
+        return;
+    }
+    PASS();
+}
+
+static void test_zombie_table_pressure(void)
+{
+    TEST("Z-03 retain 65 zombie statuses");
+
+    enum { CHILDREN = 65 };
+    pid_t children[CHILDREN];
+    int created = 0;
+    for (int i = 0; i < CHILDREN; i++) {
+        children[i] = fork_exit_with_eof(i);
+        if (children[i] < 0)
+            break;
+        created++;
+    }
+
+    int reaped = 0;
+    int first_failure = -1;
+    int first_errno = 0;
+    for (int i = 0; i < created; i++) {
+        errno = 0;
+        if (child_exited_cleanly(children[i], i)) {
+            reaped++;
+        } else if (first_failure < 0) {
+            first_failure = i;
+            first_errno = errno;
+        }
+    }
+
+    if (created != CHILDREN || reaped != CHILDREN) {
+        printf("[Z-03 created=%d/%d reaped=%d first_failure=%d errno=%d] ",
+               created, CHILDREN, reaped, first_failure, first_errno);
+        FAIL("internal child-table pressure lost wait statuses");
+        return;
+    }
+    PASS();
+}
+
+static void test_no_zombie_disposition(int use_no_cldwait)
+{
+    TEST(use_no_cldwait ? "Z-05 SA_NOCLDWAIT auto-reaps"
+                        : "Z-04 SIGCHLD=SIG_IGN auto-reaps");
+
+    struct sigaction old_action;
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    sigemptyset(&action.sa_mask);
+    if (use_no_cldwait) {
+        action.sa_handler = SIG_DFL;
+        action.sa_flags = SA_NOCLDWAIT;
+    } else {
+        action.sa_handler = SIG_IGN;
+    }
+    if (sigaction(SIGCHLD, &action, &old_action) < 0) {
+        FAIL("installing SIGCHLD disposition failed");
+        return;
+    }
+
+    pid_t child = fork_exit_with_eof(53 + use_no_cldwait);
+    int gone_ok = child > 0 && wait_for_pid_gone(child, 5000) == 0;
+
+    int status = 0;
+    int restore_ok = sigaction(SIGCHLD, &old_action, NULL) == 0;
+    errno = 0;
+    pid_t waited = child < 0 ? -2 : waitpid(child, &status, 0);
+    int wait_errno = errno;
+
+    if (child < 0 || !gone_ok || waited != -1 || wait_errno != ECHILD ||
+        !restore_ok) {
+        printf(
+            "[Z-%02d child=%d gone=%d wait=%d errno=%d status=0x%x "
+            "restore=%d] ",
+            use_no_cldwait ? 5 : 4, (int) child, gone_ok, (int) waited,
+            wait_errno, status, restore_ok);
+        FAIL("no-zombie SIGCHLD disposition retained a waitable child");
+        return;
+    }
+    PASS();
+}
+
+static volatile sig_atomic_t sigchld_count;
+
+static void sigchld_handler(int signum)
+{
+    (void) signum;
+    sigchld_count++;
+}
+
+static void test_sigchld_before_wait(void)
+{
+    TEST("Z-06 SIGCHLD arrives before wait");
+
+    struct sigaction old_action;
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = sigchld_handler;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGCHLD, &action, &old_action) < 0) {
+        FAIL("installing SIGCHLD handler failed");
+        return;
+    }
+
+    sigchld_count = 0;
+    pid_t child = fork();
+    if (child == 0)
+        _exit(56);
+
+    int64_t deadline = monotonic_milliseconds() + 3000;
+    while (child > 0 && sigchld_count == 0 &&
+           monotonic_milliseconds() < deadline)
+        usleep(10000);
+    int before_wait = sigchld_count;
+    int reaped = child > 0 && child_exited_cleanly(child, 56);
+    int after_wait = sigchld_count;
+    int restore_ok = sigaction(SIGCHLD, &old_action, NULL) == 0;
+
+    if (child < 0 || before_wait == 0 || !reaped || !restore_ok) {
+        printf(
+            "[Z-06 child=%d before_wait=%d after_wait=%d reaped=%d "
+            "restore=%d] ",
+            (int) child, before_wait, after_wait, reaped, restore_ok);
+        FAIL("SIGCHLD was not delivered when child became waitable");
+        return;
+    }
+    PASS();
+}
+
+struct orphan_report {
+    pid_t child_pid;
+    pid_t original_ppid;
+    pid_t adopted_ppid;
+};
+
+static pid_t wait_for_ppid(pid_t expected, int timeout_ms)
+{
+    int64_t deadline = monotonic_milliseconds() + timeout_ms;
+    pid_t observed;
+    do {
+        observed = getppid();
+        if (observed == expected)
+            return observed;
+        usleep(10000);
+    } while (monotonic_milliseconds() < deadline);
+    return observed;
+}
+
+static void test_orphan_reparent_to_init(void)
+{
+    TEST("O-01 orphan reparents to PID 1");
+
+    int meta[2];
+    int result[2];
+    int leaf_ready[2];
+    if (pipe(meta) < 0 || pipe(result) < 0 || pipe(leaf_ready) < 0) {
+        FAIL("O-01 pipe failed");
+        return;
+    }
+
+    pid_t middle = fork();
+    if (middle < 0) {
+        FAIL("O-01 middle fork failed");
+        return;
+    }
+    if (middle == 0) {
+        close(meta[0]);
+        close(result[0]);
+        pid_t leaf = fork();
+        if (leaf == 0) {
+            close(meta[1]);
+            close(leaf_ready[0]);
+            struct orphan_report report = {
+                .child_pid = getpid(),
+                .original_ppid = getppid(),
+                .adopted_ppid = -1,
+            };
+            char ready = 'R';
+            (void) write_all(leaf_ready[1], &ready, 1);
+            close(leaf_ready[1]);
+            report.adopted_ppid = wait_for_ppid(1, 3000);
+            (void) write_all(result[1], &report, sizeof(report));
+            close(result[1]);
+            _exit(report.adopted_ppid == 1 ? 0 : 2);
+        }
+        close(leaf_ready[1]);
+        char ready;
+        int ready_ok = read_all(leaf_ready[0], &ready, 1, true) >= 0;
+        close(leaf_ready[0]);
+        (void) write_all(meta[1], &leaf, sizeof(leaf));
+        close(meta[1]);
+        close(result[1]);
+        _exit(ready_ok ? 0 : 3);
+    }
+
+    close(meta[1]);
+    close(result[1]);
+    close(leaf_ready[0]);
+    close(leaf_ready[1]);
+    pid_t leaf = -1;
+    int meta_ok = read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
+    close(meta[0]);
+    int middle_ok = child_exited_cleanly(middle, 0);
+    struct orphan_report report;
+    memset(&report, 0, sizeof(report));
+    int result_ok = read_all(result[0], &report, sizeof(report), true) >= 0;
+    close(result[0]);
+
+    if (!meta_ok || !middle_ok || !result_ok || leaf <= 0 ||
+        report.child_pid != leaf || report.original_ppid != middle ||
+        report.adopted_ppid != 1) {
+        printf(
+            "[O-01 middle=%d leaf=%d report=(pid=%d old=%d new=%d) "
+            "meta=%d middle_ok=%d result=%d] ",
+            (int) middle, (int) leaf, (int) report.child_pid,
+            (int) report.original_ppid, (int) report.adopted_ppid, meta_ok,
+            middle_ok, result_ok);
+        FAIL("orphan PPID did not change to 1");
+        return;
+    }
+    PASS();
+}
+
+static void test_orphan_reparent_to_subreaper(void)
+{
+    TEST("O-02 subreaper adopts live orphan");
+
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) < 0) {
+        FAIL("O-02 setting subreaper failed");
+        return;
+    }
+
+    int meta[2];
+    if (pipe(meta) < 0) {
+        FAIL("O-02 pipe failed");
+        return;
+    }
+    pid_t subreaper = getpid();
+    pid_t middle = fork();
+    if (middle == 0) {
+        close(meta[0]);
+        pid_t leaf = fork();
+        if (leaf == 0) {
+            close(meta[1]);
+            pid_t adopted = wait_for_ppid(subreaper, 3000);
+            _exit(adopted == subreaper ? 62 : 63);
+        }
+        (void) write_all(meta[1], &leaf, sizeof(leaf));
+        close(meta[1]);
+        _exit(61);
+    }
+
+    close(meta[1]);
+    pid_t leaf = -1;
+    int meta_ok =
+        middle > 0 && read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
+    close(meta[0]);
+    int middle_ok = middle > 0 && child_exited_cleanly(middle, 61);
+    int leaf_status = 0;
+    errno = 0;
+    pid_t leaf_reaped = leaf > 0 ? waitpid(leaf, &leaf_status, 0) : -1;
+    int leaf_errno = errno;
+    int leaf_ok = leaf_reaped == leaf && WIFEXITED(leaf_status) &&
+                  WEXITSTATUS(leaf_status) == 62;
+    int clear_ok = prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) == 0;
+
+    if (!meta_ok || !middle_ok || !leaf_ok || !clear_ok) {
+        printf(
+            "[O-02 self=%d middle=%d leaf=%d meta=%d middle_ok=%d "
+            "leaf_reaped=%d leaf_status=0x%x leaf_errno=%d leaf_ok=%d "
+            "clear=%d] ",
+            (int) subreaper, (int) middle, (int) leaf, meta_ok, middle_ok,
+            (int) leaf_reaped, leaf_status, leaf_errno, leaf_ok, clear_ok);
+        FAIL("subreaper did not adopt and reap live orphan");
+        return;
+    }
+    PASS();
+}
+
+static void test_subreaper_adopts_zombie(void)
+{
+    TEST("O-03 subreaper adopts exited children");
+
+    enum { ZOMBIE_CHILDREN = 16 };
+    struct zombie_report {
+        pid_t leaves[ZOMBIE_CHILDREN];
+        int created;
+        int exit_barrier_ok;
+    };
+
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) < 0) {
+        FAIL("O-03 setting subreaper failed");
+        return;
+    }
+
+    int meta[2];
+    if (pipe(meta) < 0) {
+        FAIL("O-03 pipe failed");
+        return;
+    }
+    pid_t middle = fork();
+    if (middle == 0) {
+        close(meta[0]);
+        int exited[2];
+        if (pipe(exited) < 0)
+            _exit(2);
+
+        struct zombie_report report;
+        memset(&report, 0, sizeof(report));
+        for (int i = 0; i < ZOMBIE_CHILDREN; i++) {
+            pid_t leaf = fork();
+            if (leaf == 0) {
+                close(exited[0]);
+                _exit(72 + i);
+            }
+            if (leaf < 0)
+                break;
+            report.leaves[report.created++] = leaf;
+        }
+        close(exited[1]);
+        char byte;
+        ssize_t n;
+        do {
+            n = read(exited[0], &byte, 1);
+        } while (n < 0 && errno == EINTR);
+        close(exited[0]);
+        report.exit_barrier_ok = n == 0;
+        (void) write_all(meta[1], &report, sizeof(report));
+        close(meta[1]);
+        _exit(71);
+    }
+
+    close(meta[1]);
+    struct zombie_report report;
+    memset(&report, 0, sizeof(report));
+    int meta_ok =
+        middle > 0 && read_all(meta[0], &report, sizeof(report), true) >= 0;
+    close(meta[0]);
+    int middle_ok = middle > 0 && child_exited_cleanly(middle, 71);
+    int reaped = 0;
+    for (int i = 0; i < report.created; i++)
+        if (report.leaves[i] > 0 &&
+            child_exited_cleanly(report.leaves[i], 72 + i))
+            reaped++;
+    int clear_ok = prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) == 0;
+
+    if (!meta_ok || report.created != ZOMBIE_CHILDREN ||
+        !report.exit_barrier_ok || !middle_ok || reaped != ZOMBIE_CHILDREN ||
+        !clear_ok) {
+        printf(
+            "[O-03 middle=%d created=%d/%d reaped=%d meta=%d barrier=%d "
+            "middle_ok=%d clear=%d errno=%d] ",
+            (int) middle, report.created, ZOMBIE_CHILDREN, reaped, meta_ok,
+            report.exit_barrier_ok, middle_ok, clear_ok, errno);
+        FAIL("subreaper did not inherit and reap exited child statuses");
+        return;
+    }
+    PASS();
+}
+
+static void test_pid1_retains_adopted_exit(void)
+{
+    TEST("O-06 non-reaping PID 1 retains adopted exit status");
+
+    int meta[2];
+    int result[2];
+    int ready[2];
+    int exit_barrier[2];
+    if (pipe(meta) < 0 || pipe(result) < 0 || pipe(ready) < 0 ||
+        pipe(exit_barrier) < 0) {
+        FAIL("O-06 pipe failed");
+        return;
+    }
+
+    pid_t observer = getpid();
+    pid_t middle = fork();
+    if (middle < 0) {
+        FAIL("O-06 middle fork failed");
+        return;
+    }
+    if (middle == 0) {
+        close(meta[0]);
+        close(result[0]);
+        close(exit_barrier[0]);
+
+        pid_t leaf = fork();
+        if (leaf == 0) {
+            close(meta[1]);
+            close(ready[0]);
+            struct orphan_report report = {
+                .child_pid = getpid(),
+                .original_ppid = getppid(),
+                .adopted_ppid = -1,
+            };
+            char byte = 'R';
+            if (write_all(ready[1], &byte, 1) < 0)
+                _exit(85);
+            close(ready[1]);
+            report.adopted_ppid = wait_for_ppid(1, 3000);
+            (void) write_all(result[1], &report, sizeof(report));
+            close(result[1]);
+            /* Keep exit_barrier[1] open until process teardown. EOF tells the
+             * observer that the leaf has finished, not merely that it sent
+             * the report above.
+             */
+            _exit(report.adopted_ppid == 1 ? 83 : 84);
+        }
+
+        close(ready[1]);
+        close(exit_barrier[1]);
+        char byte;
+        int ready_ok = leaf > 0 && read_all(ready[0], &byte, 1, true) >= 0;
+        close(ready[0]);
+        int meta_ok = write_all(meta[1], &leaf, sizeof(leaf)) == 0;
+        close(meta[1]);
+        close(result[1]);
+        _exit(ready_ok && meta_ok ? 82 : 86);
+    }
+
+    close(meta[1]);
+    close(result[1]);
+    close(ready[0]);
+    close(ready[1]);
+    close(exit_barrier[1]);
+
+    pid_t leaf = -1;
+    int meta_ok = read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
+    close(meta[0]);
+    int middle_ok = child_exited_cleanly(middle, 82);
+
+    struct orphan_report report;
+    memset(&report, 0, sizeof(report));
+    int result_ok = read_all(result[0], &report, sizeof(report), true) >= 0;
+    close(result[0]);
+    char byte;
+    ssize_t barrier_ret;
+    do {
+        barrier_ret = read(exit_barrier[0], &byte, 1);
+    } while (barrier_ret < 0 && errno == EINTR);
+    close(exit_barrier[0]);
+    int barrier_ok = barrier_ret == 0;
+    int adoption_ok = leaf > 0 && report.child_pid == leaf &&
+                      report.original_ppid == middle &&
+                      report.adopted_ppid == 1;
+
+    int retained_ok = 0;
+    int cleanup_ok = 0;
+    int first_pid = -1, second_pid = -1;
+    int first_status = -1, second_status = -1;
+    int wait_errno = 0;
+    if (observer == 1 && leaf > 0) {
+        /* Deliberately leave the adopted terminal child unconsumed for a
+         * bounded interval. PID 1 is not magic in Linux: without wait(),
+         * SIG_IGN, or SA_NOCLDWAIT, the status must remain waitable.
+         */
+        usleep(50000);
+        siginfo_t first;
+        siginfo_t second;
+        memset(&first, 0, sizeof(first));
+        memset(&second, 0, sizeof(second));
+        int first_rc =
+            waitid(P_PID, (id_t) leaf, &first, WEXITED | WNOHANG | WNOWAIT);
+        int second_rc =
+            waitid(P_PID, (id_t) leaf, &second, WEXITED | WNOHANG | WNOWAIT);
+        first_pid = first.si_pid;
+        second_pid = second.si_pid;
+        first_status = first.si_status;
+        second_status = second.si_status;
+        retained_ok = first_rc == 0 && second_rc == 0 && first.si_pid == leaf &&
+                      second.si_pid == leaf && first.si_code == CLD_EXITED &&
+                      second.si_code == CLD_EXITED && first.si_status == 83 &&
+                      second.si_status == 83;
+
+        int status = 0;
+        errno = 0;
+        pid_t consumed = waitpid(leaf, &status, 0);
+        wait_errno = errno;
+        cleanup_ok =
+            consumed == leaf && WIFEXITED(status) && WEXITSTATUS(status) == 83;
+    } else if (leaf > 0) {
+        /* In the QEMU/Linux reference lane this test process is normally not
+         * PID 1; the system init owns the orphan, so this process must see
+         * ECHILD. Adoption and terminal exit are still verified above.
+         */
+        errno = 0;
+        pid_t foreign = waitpid(leaf, NULL, WNOHANG);
+        wait_errno = errno;
+        retained_ok = foreign == -1 && wait_errno == ECHILD;
+        cleanup_ok = retained_ok;
+    }
+
+    if (!meta_ok || !middle_ok || !result_ok || !barrier_ok || !adoption_ok ||
+        !retained_ok || !cleanup_ok) {
+        printf(
+            "[O-06 observer=%d middle=%d leaf=%d report=(pid=%d old=%d "
+            "new=%d) meta=%d middle_ok=%d result=%d barrier=%d "
+            "first=(pid=%d status=%d) second=(pid=%d status=%d) "
+            "retained=%d cleanup=%d errno=%d] ",
+            (int) observer, (int) middle, (int) leaf, (int) report.child_pid,
+            (int) report.original_ppid, (int) report.adopted_ppid, meta_ok,
+            middle_ok, result_ok, barrier_ok, first_pid, first_status,
+            second_pid, second_status, retained_ok, cleanup_ok, wait_errno);
+        FAIL("PID 1 did not retain the adopted terminal status");
+        return;
+    }
+    PASS();
+}
+
+struct blocking_wait_result {
+    _Atomic int done;
+    pid_t pid;
+    int status;
+    int error;
+};
+
+static void *blocking_wait_any(void *opaque)
+{
+    struct blocking_wait_result *result = opaque;
+    errno = 0;
+    do {
+        result->pid = waitpid(-1, &result->status, 0);
+    } while (result->pid < 0 && errno == EINTR);
+    result->error = errno;
+    atomic_store_explicit(&result->done, 1, memory_order_release);
+    return NULL;
+}
+
+static void test_blocked_subreaper_imports_zombie(void)
+{
+    TEST("O-07 blocked subreaper wakes for adopted zombie");
+
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) < 0) {
+        FAIL("O-07 setting subreaper failed");
+        return;
+    }
+
+    int meta[2], release_branch[2], release_parent[2];
+    if (pipe(meta) < 0 || pipe(release_branch) < 0 ||
+        pipe(release_parent) < 0) {
+        FAIL("O-07 pipe failed");
+        return;
+    }
+
+    pid_t parent = fork();
+    if (parent == 0) {
+        close(meta[0]);
+        close(release_branch[1]);
+        close(release_parent[1]);
+        pid_t branch = fork();
+        if (branch == 0) {
+            close(release_parent[0]);
+            int life[2];
+            if (pipe(life) < 0)
+                _exit(2);
+            pid_t leaf = fork();
+            if (leaf == 0) {
+                close(life[0]);
+                close(meta[1]);
+                close(release_branch[0]);
+                _exit(90);
+            }
+            close(life[1]);
+            char byte;
+            ssize_t n;
+            do {
+                n = read(life[0], &byte, 1);
+            } while (n < 0 && errno == EINTR);
+            close(life[0]);
+            int meta_ok = leaf > 0 && n == 0 &&
+                          write_all(meta[1], &leaf, sizeof(leaf)) == 0;
+            close(meta[1]);
+            int release_ok = read_all(release_branch[0], &byte, 1, true) >= 0;
+            close(release_branch[0]);
+            _exit(meta_ok && release_ok ? 91 : 3);
+        }
+        close(meta[1]);
+        close(release_branch[0]);
+        int branch_ok = branch > 0 && child_exited_cleanly(branch, 91);
+        char byte;
+        int release_ok = read_all(release_parent[0], &byte, 1, true) >= 0;
+        close(release_parent[0]);
+        _exit(branch_ok && release_ok ? 92 : 4);
+    }
+
+    close(meta[1]);
+    close(release_branch[0]);
+    close(release_parent[0]);
+    pid_t leaf = -1;
+    int meta_ok =
+        parent > 0 && read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
+    close(meta[0]);
+
+    /* Earlier cases may leave an asynchronously auto-reaped table entry long
+     * enough for one final nonblocking observation. Drain only statuses that
+     * are already ready; the live direct parent remains and makes the blocking
+     * wait below valid before the deeper zombie is adopted.
+     */
+    int stale_status;
+    while (waitpid(-1, &stale_status, WNOHANG) > 0)
+        ;
+
+    struct blocking_wait_result result;
+    memset(&result, 0, sizeof(result));
+    result.pid = -1;
+    pthread_t waiter;
+    int thread_ok = meta_ok && pthread_create(&waiter, NULL, blocking_wait_any,
+                                              &result) == 0;
+    if (thread_ok)
+        usleep(20000);
+    char byte = 'X';
+    int branch_released =
+        thread_ok && write_all(release_branch[1], &byte, 1) == 0;
+    close(release_branch[1]);
+
+    int woke_for_leaf = 0;
+    if (thread_ok) {
+        for (int i = 0; i < 3000; i++) {
+            if (atomic_load_explicit(&result.done, memory_order_acquire))
+                break;
+            usleep(1000);
+        }
+        woke_for_leaf =
+            atomic_load_explicit(&result.done, memory_order_acquire) &&
+            result.pid == leaf && WIFEXITED(result.status) &&
+            WEXITSTATUS(result.status) == 90;
+    }
+
+    int parent_released = write_all(release_parent[1], &byte, 1) == 0;
+    close(release_parent[1]);
+    if (thread_ok)
+        pthread_join(waiter, NULL);
+
+    int parent_ok;
+    if (result.pid == parent)
+        parent_ok =
+            WIFEXITED(result.status) && WEXITSTATUS(result.status) == 92;
+    else
+        parent_ok = parent > 0 && child_exited_cleanly(parent, 92);
+    if (result.pid != leaf && leaf > 0)
+        (void) waitpid(leaf, NULL, 0);
+    int clear_ok = prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) == 0;
+
+    if (!meta_ok || !thread_ok || !branch_released || !woke_for_leaf ||
+        !parent_released || !parent_ok || !clear_ok) {
+        printf(
+            "[O-07 parent=%d leaf=%d meta=%d thread=%d branch_release=%d "
+            "wait=(pid=%d status=0x%x errno=%d done=%d) woke_leaf=%d "
+            "parent_release=%d parent_ok=%d clear=%d] ",
+            (int) parent, (int) leaf, meta_ok, thread_ok, branch_released,
+            (int) result.pid, result.status, result.error,
+            atomic_load_explicit(&result.done, memory_order_acquire),
+            woke_for_leaf, parent_released, parent_ok, clear_ok);
+        FAIL("blocking wait missed the newly adopted zombie");
+        return;
+    }
+    PASS();
+}
+
+static void burn_cpu_ms(long duration_ms)
+{
+    struct timespec start, now;
+    if (clock_gettime(CLOCK_MONOTONIC, &start) < 0)
+        return;
+    volatile uint64_t work = 0;
+    do {
+        for (int i = 0; i < 10000; i++)
+            work = work * 33u + (uint64_t) i;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+            return;
+    } while ((now.tv_sec - start.tv_sec) * 1000L +
+                 (now.tv_nsec - start.tv_nsec) / 1000000L <
+             duration_ms);
+    (void) work;
+}
+
+static void test_adopted_signal_status_and_rusage(void)
+{
+    TEST("O-08 adopted signal status and rusage survive");
+
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) < 0) {
+        FAIL("O-08 setting subreaper failed");
+        return;
+    }
+    int meta[2];
+    if (pipe(meta) < 0) {
+        FAIL("O-08 pipe failed");
+        return;
+    }
+
+    pid_t middle = fork();
+    if (middle == 0) {
+        close(meta[0]);
+        int life[2];
+        if (pipe(life) < 0)
+            _exit(2);
+        pid_t leaf = fork();
+        if (leaf == 0) {
+            close(life[0]);
+            close(meta[1]);
+            burn_cpu_ms(75);
+            char byte = 'R';
+            if (write_all(life[1], &byte, 1) < 0)
+                _exit(3);
+            raise(SIGKILL);
+            _exit(5);
+        }
+        close(life[1]);
+        char byte;
+        int ready_ok = leaf > 0 && read_all(life[0], &byte, 1, true) >= 0;
+        int kill_ok = ready_ok;
+        ssize_t n;
+        do {
+            n = read(life[0], &byte, 1);
+        } while (n < 0 && errno == EINTR);
+        close(life[0]);
+        int dead_ok = n == 0;
+        int meta_ok = write_all(meta[1], &leaf, sizeof(leaf)) == 0;
+        close(meta[1]);
+        _exit(ready_ok && kill_ok && dead_ok && meta_ok ? 93 : 4);
+    }
+
+    close(meta[1]);
+    pid_t leaf = -1;
+    int meta_ok =
+        middle > 0 && read_all(meta[0], &leaf, sizeof(leaf), true) >= 0;
+    close(meta[0]);
+    int middle_ok = middle > 0 && child_exited_cleanly(middle, 93);
+
+    int status = 0;
+    struct rusage usage;
+    memset(&usage, 0, sizeof(usage));
+    errno = 0;
+    pid_t reaped = leaf > 0 ? wait4(leaf, &status, 0, &usage) : -1;
+    int wait_errno = errno;
+    int signal_ok =
+        reaped == leaf && WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL;
+    long long cpu_us =
+        (long long) usage.ru_utime.tv_sec * 1000000LL + usage.ru_utime.tv_usec +
+        (long long) usage.ru_stime.tv_sec * 1000000LL + usage.ru_stime.tv_usec;
+    int usage_ok = cpu_us > 0;
+    int clear_ok = prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) == 0;
+
+    if (!meta_ok || !middle_ok || !signal_ok || !usage_ok || !clear_ok) {
+        printf(
+            "[O-08 middle=%d leaf=%d meta=%d middle_ok=%d "
+            "wait=(ret=%d status=0x%x errno=%d) signal=%d cpu_us=%lld "
+            "usage=%d clear=%d] ",
+            (int) middle, (int) leaf, meta_ok, middle_ok, (int) reaped, status,
+            wait_errno, signal_ok, cpu_us, usage_ok, clear_ok);
+        FAIL("adopted wait lost signal status or resource usage");
+        return;
+    }
+    PASS();
+}
+
+int main(void)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("test-process-lifecycle: Linux process lifecycle semantics\n");
+
+    test_nested_pid_uniqueness();
+    test_pid_tid_namespace_uniqueness();
+    test_wnohang_running_child();
+    test_waitid_wnowait_repeat();
+    test_waitid_pgid_matching();
+    test_waitid_pgid_autoreap();
+    test_signal_wait_status();
+    test_concurrent_wait_during_fork_admission();
+    test_delayed_zombie_reap();
+    test_reverse_zombie_reap();
+    test_zombie_table_pressure();
+    test_no_zombie_disposition(0);
+    test_no_zombie_disposition(1);
+    test_sigchld_before_wait();
+    test_orphan_reparent_to_init();
+    test_orphan_reparent_to_subreaper();
+    test_subreaper_adopts_zombie();
+    test_pid1_retains_adopted_exit();
+    test_blocked_subreaper_imports_zombie();
+    test_adopted_signal_status_and_rusage();
+
+    SUMMARY("test-process-lifecycle");
+    return fails == 0 ? 0 : 1;
+}

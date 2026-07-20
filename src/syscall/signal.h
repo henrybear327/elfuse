@@ -56,6 +56,7 @@
 
 /* Linux sigaction flags. */
 #define LINUX_SA_SIGINFO 0x00000004
+#define LINUX_SA_NOCLDWAIT 0x00000002
 #define LINUX_SA_ONSTACK 0x08000000
 #define LINUX_SA_RESTART 0x10000000
 #define LINUX_SA_NODEFER 0x40000000
@@ -314,6 +315,12 @@ void signal_set_shim_globals_guest(guest_t *g);
  */
 int signal_deliver(hv_vcpu_t vcpu, guest_t *g, int *exit_code);
 
+/* Return and clear the Linux wait-format status recorded when the current
+ * vCPU thread terminated because of a signal. Returns zero after a normal
+ * syscall exit or when no fatal signal was delivered.
+ */
+int signal_take_termination_wait_status(void);
+
 /* Deliver a synchronous fault signal directly to the faulting (current) thread,
  * bypassing the process-wide pending set. The caller must have set the fault
  * info via signal_set_fault_info() immediately before. Same return convention
@@ -382,6 +389,17 @@ int64_t signal_sigaltstack(guest_t *g, uint64_t ss_gva, uint64_t old_ss_gva);
 
 /* Get/set signal state (for fork IPC serialization). */
 const signal_state_t *signal_get_state(void);
+
+/* True only for the explicit Linux no-zombie dispositions. SIGCHLD's default
+ * disposition is ignore but does not imply automatic reaping.
+ */
+bool signal_sigchld_autoreap(void);
+
+/* Refresh the shim identity cache after an asynchronous reparent message.
+ * Returns false while a fork child is still bootstrapping and has not
+ * registered its guest cache yet.
+ */
+bool signal_refresh_identity_cache(void);
 void signal_set_state(const signal_state_t *state);
 
 /* Snapshot or consume pending signals for signalfd. signal_peek_signalfd()

@@ -306,6 +306,20 @@ int fork_child_main(int ipc_fd,
         return 1;
     }
 
+    /* Do not enter guest code until the parent has committed both the local
+     * process-table slot and the shared lifecycle entry. EOF here means fork
+     * admission failed, so this helper exits without exposing a child whose
+     * PID the parent cannot later wait for.
+     */
+    uint8_t admission_ready = 0;
+    if (fork_ipc_read_all(ipc_fd, &admission_ready, sizeof(admission_ready)) <
+            0 ||
+        admission_ready != 1) {
+        log_error("fork-child: parent did not commit child admission");
+        guest_destroy(&g);
+        return 1;
+    }
+
     /* POSIX: "Signals pending to the parent shall not be pending to the child."
      * Clear the entire shared pending set before applying state. The child's
      * single thread starts with an empty private set (thread_register_main
@@ -325,6 +339,7 @@ int fork_child_main(int ipc_fd,
     hv_vcpu_exit_t *vexit;
     HV_CHECK(hv_vcpu_create(&vcpu, &vexit, NULL));
     g.vcpu = vcpu;
+    g.vcpu_valid = true;
     g.exit = vexit;
 
     /* Restore system registers. For fork children, the child enables the MMU
@@ -443,6 +458,12 @@ int fork_child_main(int ipc_fd,
      * know which guest to update.
      */
     signal_set_shim_globals_guest(&g);
+    /* The parent may exit after publishing this child but before bootstrap
+     * reaches the guest loop. Pull any reparent transaction that arrived in
+     * that window after the shim cache is live, so the fork header's original
+     * PPID cannot overwrite the adopter selected by the lifecycle registry.
+     */
+    proc_lifecycle_sync_self(&g);
     /* Same for the fd-table hooks. Must precede any fd_alloc the child performs
      * (the fd-table-restore step has already run above, but those slots are
      * populated via direct memcpy of the parent's entries; subsequent
@@ -465,8 +486,11 @@ int fork_child_main(int ipc_fd,
     log_debug("fork-child: entering vCPU loop");
 
     /* The child resumes from the captured fork frame and returns 0 to EL0. */
-    int exit_code = vcpu_run_loop(vcpu, vexit, &g, verbose, timeout_sec);
+    int wait_status = 0;
+    int exit_code =
+        vcpu_run_loop(vcpu, vexit, &g, verbose, timeout_sec, &wait_status);
 
+    proc_process_exit(wait_status);
     guest_destroy(&g);
     return exit_code;
 }
@@ -649,6 +673,8 @@ static int64_t sys_clone_thread(hv_vcpu_t parent_vcpu,
 
     /* Allocate guest TID */
     int64_t child_tid = proc_alloc_pid();
+    if (child_tid < 0)
+        return child_tid;
 
     /* Allocate thread table slot */
     if (stack_map_start >= stack_map_end)
@@ -823,13 +849,15 @@ static void *thread_create_and_run(void *arg)
      * thread_quiesce_siblings, and thread_destroy_all_vcpus can scan it
      * concurrently; they read t->vcpu under thread_lock, so an unlocked store
      * here is a data race (flagged by ThreadSanitizer). Until this store the
-     * scanners observe the zeroed handle and skip the slot; the startup_failed
-     * path below deactivates before destroying, so a scan that does observe the
-     * handle only ever hands HVF a live vCPU.
+     * scanners observe vcpu_valid=false and skip the slot; the startup_failed
+     * path below deactivates before destroying, so a scan that does observe a
+     * valid handle only ever hands HVF a live vCPU. The separate flag is
+     * required because handle value zero is valid for the first vCPU.
      */
     pthread_mutex_t *tlock = thread_get_lock();
     pthread_mutex_lock(tlock);
     t->vcpu = vcpu;
+    t->vcpu_valid = true;
     t->vexit = vexit;
     /* A PTRACE_INTERRUPT that raced this bring-up (arrived before the handle
      * was published) recorded a pending request it could not deliver via
@@ -967,7 +995,7 @@ startup_ok:;
 
     log_debug("thread tid=%lld starting on vCPU", (long long) t->guest_tid);
 
-    vcpu_run_loop(vcpu, vexit, g, verbose, 0);
+    vcpu_run_loop(vcpu, vexit, g, verbose, 0, NULL);
 
     /* Robust futex cleanup: walk the robust list and set FUTEX_OWNER_DIED on
      * each held lock, then wake one waiter. Must happen before CLEARTID so
@@ -1004,6 +1032,10 @@ startup_ok:;
 
     log_debug("thread tid=%lld exiting", (long long) t->guest_tid);
 
+    pthread_mutex_lock(tlock);
+    t->vcpu_valid = false;
+    t->vcpu = 0;
+    pthread_mutex_unlock(tlock);
     hv_vcpu_destroy(vcpu);
     thread_deactivate(t);
 
@@ -1044,6 +1076,8 @@ static int64_t sys_clone_vm(hv_vcpu_t parent_vcpu,
 {
     /* Allocate guest TID */
     int64_t child_tid = proc_alloc_pid();
+    if (child_tid < 0)
+        return child_tid;
 
     /* Allocate thread table slot */
     if (stack_map_start >= stack_map_end)
@@ -1142,8 +1176,8 @@ static int64_t sys_clone_vm(hv_vcpu_t parent_vcpu,
  * parent's wait4 can reap it. sys_clone_vm already returned the child tid, so
  * dropping the slot with thread_deactivate (which clears active) would make
  * wait4 skip it and leave the parent unable to collect a status. Publish the
- * exit status and clear t->vcpu under the thread lock, so thread_interrupt_all
- * and thread_destroy_all_vcpus (both skip a null handle) cannot hand the
+ * exit status and invalidate t->vcpu under the thread lock, so
+ * thread_interrupt_all and thread_destroy_all_vcpus cannot hand the
  * torn-down vCPU to HVF, then destroy the handle outside the lock. Keep the
  * slot active for wait4. Reports SIGKILL because the child never ran a guest
  * instruction. Does not trigger exit_group: only the child failed.
@@ -1153,6 +1187,8 @@ static void vm_clone_report_bringup_failure(thread_entry_t *t)
     pthread_mutex_t *lock = thread_get_lock();
     pthread_mutex_lock(lock);
     hv_vcpu_t dying = t->vcpu;
+    bool dying_valid = t->vcpu_valid;
+    t->vcpu_valid = false;
     t->vcpu = 0;
     t->vm_exited = true;
     t->vm_exit_status = LINUX_SIGKILL; /* WIFSIGNALED, WTERMSIG == SIGKILL */
@@ -1164,7 +1200,7 @@ static void vm_clone_report_bringup_failure(thread_entry_t *t)
     thread_fork_release_counted_locked(t);
     pthread_cond_broadcast(&t->ptrace_cond);
     pthread_mutex_unlock(lock);
-    if (dying)
+    if (dying_valid)
         hv_vcpu_destroy(dying);
 }
 
@@ -1196,6 +1232,7 @@ static void *vm_clone_thread_run(void *arg)
     pthread_mutex_t *tlock = thread_get_lock();
     pthread_mutex_lock(tlock);
     t->vcpu = vcpu;
+    t->vcpu_valid = true;
     t->vexit = vexit;
     /* Deliver a PTRACE_INTERRUPT that raced bring-up; see
      * thread_create_and_run. vm-clone children are the usual ptrace targets.
@@ -1251,7 +1288,8 @@ static void *vm_clone_thread_run(void *arg)
 
     log_debug("vm_clone tid=%lld starting on vCPU", (long long) t->guest_tid);
 
-    int exit_code = vcpu_run_loop(vcpu, vexit, g, verbose, 0);
+    int wait_status = 0;
+    int exit_code = vcpu_run_loop(vcpu, vexit, g, verbose, 0, &wait_status);
 
     /* CLONE_CHILD_CLEARTID cleanup. Same ordering as thread_entry: drain
      * deferred stack munmaps before waking the joiner so the parent does not
@@ -1281,7 +1319,7 @@ static void *vm_clone_thread_run(void *arg)
     pthread_mutex_t *lock = thread_get_lock();
     pthread_mutex_lock(lock);
     t->vm_exited = true;
-    t->vm_exit_status = (exit_code & 0xFF) << 8;
+    t->vm_exit_status = wait_status;
     pthread_cond_broadcast(&t->ptrace_cond);
     pthread_mutex_unlock(lock);
 
@@ -1313,6 +1351,10 @@ static void *vm_clone_thread_run(void *arg)
         thread_wake_exit_waiters();
     }
 
+    pthread_mutex_lock(lock);
+    t->vcpu_valid = false;
+    t->vcpu = 0;
+    pthread_mutex_unlock(lock);
     hv_vcpu_destroy(vcpu);
     /* Keep the slot active until the parent collects status with wait4. The
      * slot is freed when thread_ptrace_wait reads vm_exited.
@@ -1505,6 +1547,36 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         posix_spawn_file_actions_addinherit_np(&file_actions,
                                                vfork_notify_fds[1]);
 
+    /* Allocate and reserve all guest-visible bookkeeping before creating the
+     * host helper. Linux fork failure must not leave a child running, and a
+     * successful fork must always return a PID that wait4/waitid can track.
+     */
+    proc_registry_sync_self_pgid(g);
+    int64_t child_pgid = proc_get_pgid();
+    int64_t child_guest_pid = proc_alloc_pid();
+    if (child_guest_pid < 0) {
+        posix_spawn_file_actions_destroy(&file_actions);
+        posix_spawnattr_destroy(&spawn_attr);
+        close(sock_fds[0]);
+        close(sock_fds[1]);
+        if (vfork_notify_fds[0] >= 0)
+            close(vfork_notify_fds[0]);
+        if (vfork_notify_fds[1] >= 0)
+            close(vfork_notify_fds[1]);
+        return child_guest_pid;
+    }
+    int reserve_rc = proc_reserve_child(child_guest_pid, child_pgid);
+    if (reserve_rc < 0) {
+        posix_spawn_file_actions_destroy(&file_actions);
+        posix_spawnattr_destroy(&spawn_attr);
+        close(sock_fds[0]);
+        close(sock_fds[1]);
+        if (vfork_notify_fds[0] >= 0)
+            close(vfork_notify_fds[0]);
+        if (vfork_notify_fds[1] >= 0)
+            close(vfork_notify_fds[1]);
+        return reserve_rc;
+    }
     extern char **environ;
     pid_t child_host_pid;
     int spawn_ret = posix_spawn(&child_host_pid, self_path, &file_actions,
@@ -1514,6 +1586,7 @@ int64_t sys_clone(hv_vcpu_t vcpu,
 
     if (spawn_ret != 0) {
         log_error("clone: posix_spawn failed: %s", strerror(spawn_ret));
+        proc_cancel_child(child_guest_pid);
         close(sock_fds[0]);
         close(sock_fds[1]);
         if (vfork_notify_fds[0] >= 0)
@@ -1535,11 +1608,6 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         vfork_notify_fds[1] = -1;
     }
     int ipc_sock = sock_fds[0];
-
-    /* Allocate guest PID before serialization so the child header carries its
-     * final Linux-visible identity.
-     */
-    int64_t child_guest_pid = proc_alloc_pid();
 
     /* Quiesce sibling vCPUs for snapshot consistency. In multithreaded guests,
      * sibling vCPUs may be actively mutating guest memory during the fork
@@ -1652,14 +1720,6 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         }
     }
 
-    /* Refresh our own process group from the registry before capturing it: a
-     * parent-side setpgid(this, ...) updates the registry but not the local
-     * cached pgid, so both the child's inherited group (hdr.pgid below) and the
-     * publish that follows would otherwise carry -- and re-stamp the registry
-     * with -- the stale group, misrouting later kill(0)/kill(-pgid).
-     */
-    proc_registry_sync_self_pgid(g);
-
     /* Snapshot of the semantic region array, populated after the memory dump
      * but before sibling vCPUs resume. Declared up front so all goto paths to
      * fail_snapshot can free it unconditionally. Header
@@ -1695,7 +1755,7 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         .nice = proc_get_nice(),
         .absock_namespace_id = absock_get_namespace_id(),
         .sid = proc_get_sid(),
-        .pgid = proc_get_pgid(),
+        .pgid = child_pgid,
         .is_rosetta = g->is_rosetta,
         .rosetta_guest_base = g->rosetta_guest_base,
         .rosetta_va_base = g->rosetta_va_base,
@@ -1808,6 +1868,16 @@ int64_t sys_clone(hv_vcpu_t vcpu,
         goto fail_snapshot;
     }
 
+    if (proc_register_child(child_host_pid, child_guest_pid, child_pgid) < 0) {
+        log_error("clone: failed to commit child bookkeeping");
+        goto fail_snapshot;
+    }
+    uint8_t admission_ready = 1;
+    if (fork_ipc_write_all(ipc_sock, &admission_ready,
+                           sizeof(admission_ready)) < 0) {
+        log_error("clone: failed to release admitted child");
+        goto fail_snapshot;
+    }
     /* The process-state payload includes the SCM_RIGHTS handoff for region
      * backing fds. Keep siblings quiesced until that send completes so a
      * concurrent munmap/remap cannot close or recycle the captured fd numbers.
@@ -1821,12 +1891,6 @@ int64_t sys_clone(hv_vcpu_t vcpu,
      * shm fd is kept open so subsequent forks can also use CoW. The child has
      * its own MAP_PRIVATE view of the same file.
      */
-
-    /* Register after successful IPC so wait4/waitid can observe the child. Seed
-     * the child's group from the same value sent in the fork header so the
-     * parent's table matches the group the child actually inherited.
-     */
-    proc_register_child(child_host_pid, child_guest_pid, hdr.pgid);
 
     /* CLONE_VFORK suspends the parent until the child exits or execs. The
      * emulator cannot observe guest exec completion across the helper process,
@@ -1866,6 +1930,7 @@ int64_t sys_clone(hv_vcpu_t vcpu,
     return child_guest_pid;
 
 fail_snapshot:
+    proc_cancel_child(child_guest_pid);
     free(regions_snapshot);
     if (snapshot_shm_fd >= 0)
         close(snapshot_shm_fd);

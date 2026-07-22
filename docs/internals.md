@@ -96,7 +96,7 @@ Key files:
 | `src/syscall/mem.c` | `brk`, `mmap`, `mprotect`, `mremap`, `madvise`, `msync` |
 | `src/syscall/fs.c`, `fs-stat.c`, `fs-xattr.c` | filesystem syscalls |
 | `src/syscall/io.c`, `poll.c`, `fd.c`, `fdtable.c` | I/O, polling, FD lifecycle and table |
-| `src/syscall/path.c` | centralized guest-to-host path resolution |
+| `src/syscall/path.c` | centralized guest-to-host path resolution (see also [sysroot.md](sysroot.md)) |
 | `src/syscall/sidecar.c` | case-fold sidecar tokens for case-insensitive macOS volumes |
 | `src/syscall/fuse.c` | guest-internal FUSE transport and minimal VFS |
 | `src/syscall/inotify.c` | inotify via kqueue `EVFILT_VNODE` |
@@ -406,6 +406,8 @@ Socket syscalls are translated in `src/syscall/net.c` and friends:
   type argument; both bits must be extracted before calling `socket()`.
 - `SOL_SOCKET` option numbers (`SO_TYPE`, `SO_SNDBUF`, `SO_RCVBUF`, …)
   differ between platforms and are remapped per option.
+- AF_UNIX pathname and abstract socket addresses are translated through the
+  sysroot; see [sysroot.md](sysroot.md#af_unix-socket-addresses).
 
 ### Stack Alignment
 
@@ -806,10 +808,13 @@ Only a non-empty flat leaf is redirected. Bare `/dev/shm` and `/dev/shm/` stay
 on the sysroot path so the synthetic-directory intercepts keep answering for
 them, and `statfs` on a shm leaf or on `/dev/shm` reports `TMPFS_MAGIC`
 synthetically rather than the host filesystem's type. Because the backing path
-is absolute, two inline helpers in `src/syscall/path.h` adapt the `*at()` calls:
-`path_translation_dirfd()` returns `AT_FDCWD` (POSIX ignores `dirfd` for an
-absolute path), and `path_translation_at_flags()` forces the nofollow flag
-described next.
+is absolute, three inline helpers in `src/syscall/path.h` adapt the calls that
+receive it: `path_translation_dirfd()` returns `AT_FDCWD` (POSIX ignores
+`dirfd` for an absolute path), `path_translation_at_flags()` forces the
+nofollow flag described next onto an `*at()` call, and
+`path_translation_oflags()` forces the equivalent open flags onto an `open()`.
+Keeping each requirement in one helper is what stops a new call site from
+picking up the backing path without also picking up the rules that go with it.
 
 ### The Never-Follow Invariant
 
@@ -825,12 +830,20 @@ is spread across the syscall families, one mechanism each:
 | Operation family | Never-follow mechanism |
 |------------------|------------------------|
 | `*at()` metadata (chmod, chown, stat, utimensat, access) | `path_translation_at_flags()` adds `AT_SYMLINK_NOFOLLOW` |
-| open for truncate/chdir | `shm_open_leaf()` opens `O_NOFOLLOW` |
+| open for truncate/chdir, and `execveat` | `path_translation_oflags()` adds `O_NOFOLLOW` |
 | proc open | `O_NOFOLLOW` |
 | xattr get/set/list/remove | `XATTR_NOFOLLOW` |
 | stat | `lstat`, not `stat` |
 | linkat | clears `AT_SYMLINK_FOLLOW` |
 | statfs | nofollow `lstat` existence probe, then a synthetic reply |
+
+The open flavors carry a second requirement for the same reason. A shm leaf that
+is a FIFO would block the opening thread until a peer arrives, and that thread is
+a vCPU thread, so the whole guest would stall inside one syscall. Every open of a
+shm leaf therefore adds `O_NONBLOCK` alongside `O_NOFOLLOW`, which turns the
+stall into an immediate return: `truncate` reports `EINVAL`, matching Linux
+`truncate(2)` on a FIFO. `path_translation_oflags()` carries both flags together
+so a caller cannot take one without the other.
 
 The name gate lives with the resolver. A POSIX shm name is always a single flat
 component: glibc's `__shm_get_name` (`posix/shm-directory.c`) strips the leading
@@ -841,9 +854,10 @@ rejected name (`ENAMETOOLONG` if the backing path overflows).
 
 Related implementation: `src/runtime/procemu.c` (`dev_shm_resolve_path`),
 `src/syscall/path.c` and `path.h` (`path_translate_at`, `is_dev_shm`,
-`path_translation_dirfd`, `path_translation_at_flags`), and the metadata
-handlers in `src/syscall/fs.c`, `fs-stat.c`, and `fs-xattr.c`. Validation:
-`tests/test-dev-shm-paths.c`.
+`path_translation_dirfd`, `path_translation_at_flags`,
+`path_translation_oflags`), and the metadata handlers in `src/syscall/fs.c`,
+`fs-stat.c`, and `fs-xattr.c`. Validation: `tests/test-dev-shm-paths.c` and
+`tests/test-execveat-shm.c`.
 
 ## Dynamic Linking
 

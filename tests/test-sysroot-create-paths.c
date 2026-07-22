@@ -21,16 +21,6 @@
 
 int passes = 0, fails = 0;
 
-static int write_file(const char *path, const char *contents)
-{
-    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
-    if (fd < 0)
-        return -1;
-    int rc = write_fd_all(fd, contents, strlen(contents));
-    close(fd);
-    return rc;
-}
-
 static int xattr_probe(const char *path)
 {
     errno = 0;

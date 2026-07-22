@@ -35,7 +35,6 @@ ALIASES: dict[str, set[str]] = {
 INDIRECT_COVERAGE: dict[str, str] = {
     "lgetxattr": "Symlink xattr semantics are filesystem-sensitive; audit via fs-xattr code and negative-path tests.",
     "lsetxattr": "Symlink xattr semantics are filesystem-sensitive; audit via fs-xattr code and negative-path tests.",
-    "listxattr": "Covered indirectly through xattr plumbing; success-path coverage is filesystem-dependent.",
     "llistxattr": "Symlink xattr list semantics are filesystem-sensitive; retained as indirect coverage.",
     "flistxattr": "Covered indirectly through xattr plumbing and fd-based xattr checks.",
     "fgetxattr": "Covered indirectly through xattr plumbing and fd-based xattr checks.",

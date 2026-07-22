@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "raw-syscall.h"
@@ -84,6 +85,47 @@ static inline int write_fd_all(int fd, const void *buf, size_t len)
     }
 
     return 0;
+}
+
+/* Create (or truncate) path and write contents, retrying short writes. */
+static inline int write_file(const char *path, const char *contents)
+{
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+    if (fd < 0)
+        return -1;
+    int rc = write_fd_all(fd, contents, strlen(contents));
+    close(fd);
+    return rc;
+}
+
+/* Copy src to dst as an executable (mode 0755), retrying short writes. Used by
+ * the exec tests, which stage a copy of the running binary somewhere the
+ * translation layer has to resolve.
+ */
+static inline int copy_file_exec(const char *src, const char *dst)
+{
+    int in = open(src, O_RDONLY);
+    if (in < 0)
+        return -1;
+    int out = open(dst, O_CREAT | O_WRONLY | O_TRUNC, 0755);
+    if (out < 0) {
+        close(in);
+        return -1;
+    }
+
+    int rc = 0;
+    char buf[65536];
+    ssize_t n;
+    while ((n = read(in, buf, sizeof(buf))) > 0)
+        if (write_fd_all(out, buf, (size_t) n) < 0) {
+            rc = -1;
+            break;
+        }
+    if (n < 0)
+        rc = -1;
+    close(in);
+    close(out);
+    return rc;
 }
 
 static inline void test_unreachable(void)

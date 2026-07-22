@@ -284,6 +284,25 @@ QEMU_SKIP="
     test-scm-creds
     test-proc-fidelity
 "
+# Tests that only run under qemu: the elfuse lane runs without a sysroot, so
+# a test that creates fixtures at / cannot run there (the macOS root is not
+# writable); its elfuse coverage lives in the make-check sysroot lanes.
+ELFUSE_SKIP="
+    test-path-matrix
+"
+
+# Whitespace-separated membership test, shared by the per-runner skip lists so a
+# third runner does not need a third copy.
+list_has()
+{
+    local needle="$1"
+    local item
+    for item in $2; do
+        [ "$item" = "$needle" ] && return 0
+    done
+    return 1
+}
+
 # test-session: getpgid/getsid/setsid assume the test is its own session and
 #   process-group leader, true when elfuse launches it directly but not when
 #   sshd execs it non-interactively -- a launcher artifact, not an elfuse
@@ -353,15 +372,6 @@ QEMU_SKIP="
 #   write -- a genuine behavioral difference worth reviewing on its own,
 #   not just an environment artifact.
 
-is_qemu_skipped()
-{
-    local label="$1"
-    local skipped
-    for skipped in $QEMU_SKIP; do
-        [ "$skipped" = "$label" ] && return 0
-    done
-    return 1
-}
 
 # Honor QEMU_SKIP across all test_* wrappers.
 #
@@ -370,8 +380,13 @@ is_qemu_skipped()
 maybe_qemu_skip()
 {
     local runner="$1" label="$2"
-    if [ "$runner" = "run_qemu" ] && is_qemu_skipped "$label"; then
+    if [ "$runner" = "run_qemu" ] && list_has "$label" "$QEMU_SKIP"; then
         test_report skip "$label" " (qemu)"
+        skip=$((skip + 1))
+        return 0
+    fi
+    if [ "$runner" = "run_elfuse" ] && list_has "$label" "$ELFUSE_SKIP"; then
+        test_report skip "$label" " (elfuse: needs a sysroot lane)"
         skip=$((skip + 1))
         return 0
     fi
@@ -597,6 +612,7 @@ run_unit_tests()
     test_check "$runner" "test-ls" "hello" "$bindir/test-ls" tests/
     test_check "$runner" "test-roundtrip" "OK" "$bindir/test-roundtrip"
     test_check "$runner" "test-comprehensive" "0 failures" "$bindir/test-comprehensive"
+    test_check "$runner" "test-path-matrix" "PASS" "$bindir/test-path-matrix" native
 
     printf "\nProcess tests\n"
     test_check "$runner" "test-fork" "PASS" "$bindir/test-fork"
@@ -1226,7 +1242,7 @@ run_suite()
 # detector does not recognize yet.
 EXPECTED_BASELINES=(
     "elfuse-aarch64|238|0"
-    "qemu-aarch64|218|0"
+    "qemu-aarch64|219|0"
     "elfuse-x86_64:apple-m1-m2|71|0"
     "elfuse-x86_64:apple-m3-plus|71|0"
     "elfuse-x86_64:apple-unknown|71|0"

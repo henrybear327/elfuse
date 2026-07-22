@@ -372,7 +372,6 @@ int64_t sys_bind(guest_t *g, int fd, uint64_t addr_gva, uint32_t addrlen)
     /* Abstract Unix socket: rewrite to filesystem path */
     int absock_idx = -1;
     if (absock_is_abstract_unix(linux_sa, addrlen)) {
-        absock_init_cleanup();
         int bind_len;
         absock_idx =
             absock_bind_prepare(linux_sa, addrlen, &mac_sa, fd, &bind_len);
@@ -386,10 +385,10 @@ int64_t sys_bind(guest_t *g, int fd, uint64_t addr_gva, uint32_t addrlen)
         }
         mac_len = bind_len;
     } else {
-        mac_len = linux_to_mac_sockaddr(linux_sa, addrlen, &mac_sa);
+        mac_len = net_sockaddr_to_mac(linux_sa, addrlen, true, &mac_sa);
         if (mac_len < 0) {
             host_fd_ref_close(&host_ref);
-            return -LINUX_EINVAL;
+            return mac_len;
         }
     }
 
@@ -520,7 +519,7 @@ static int64_t do_accept(guest_t *g,
         }
         uint8_t linux_sa[128];
         int out_len =
-            mac_to_linux_sockaddr((struct sockaddr *) &mac_sa, mac_len,
+            net_sockaddr_from_mac((struct sockaddr *) &mac_sa, mac_len,
                                   linux_sa, (uint32_t) sizeof(linux_sa));
         if (out_len > 0) {
             uint32_t actual_len = (uint32_t) out_len;
@@ -584,10 +583,10 @@ int64_t sys_connect(guest_t *g, int fd, uint64_t addr_gva, uint32_t addrlen)
             return -LINUX_ECONNREFUSED;
         }
     } else {
-        mac_len = linux_to_mac_sockaddr(linux_sa, addrlen, &mac_sa);
+        mac_len = net_sockaddr_to_mac(linux_sa, addrlen, false, &mac_sa);
         if (mac_len < 0) {
             host_fd_ref_close(&host_ref);
-            return -LINUX_EINVAL;
+            return mac_len;
         }
     }
 
@@ -693,7 +692,7 @@ static int64_t sockaddr_writeback(guest_t *g,
 {
     uint8_t linux_sa[128];
     int out_len =
-        mac_to_linux_sockaddr((const struct sockaddr *) mac_sa, mac_len,
+        net_sockaddr_from_mac((const struct sockaddr *) mac_sa, mac_len,
                               linux_sa, (uint32_t) sizeof(linux_sa));
     if (out_len < 0) {
         host_fd_ref_close(host_ref);
@@ -850,10 +849,10 @@ int64_t sys_sendto(guest_t *g,
             host_fd_ref_close(&host_ref);
             return -LINUX_EFAULT;
         }
-        int mac_len = linux_to_mac_sockaddr(linux_sa, addrlen, &mac_sa);
+        int mac_len = net_sockaddr_to_mac(linux_sa, addrlen, false, &mac_sa);
         if (mac_len < 0) {
             host_fd_ref_close(&host_ref);
-            return -LINUX_EINVAL;
+            return mac_len;
         }
         dest = (struct sockaddr *) &mac_sa;
         dest_len = (socklen_t) mac_len;
@@ -952,7 +951,7 @@ int64_t sys_recvfrom(guest_t *g,
         }
         uint8_t linux_sa[128];
         int out_len =
-            mac_to_linux_sockaddr((struct sockaddr *) &mac_sa, mac_len,
+            net_sockaddr_from_mac((struct sockaddr *) &mac_sa, mac_len,
                                   linux_sa, (uint32_t) sizeof(linux_sa));
         if (out_len > 0) {
             uint32_t actual_len = (uint32_t) out_len;

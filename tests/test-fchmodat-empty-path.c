@@ -157,6 +157,28 @@ static void test_empty_path_at_fdcwd_targets_cwd(void)
     EXPECT_TRUE(ok, "mode mismatch");
 }
 
+/* A synthetic /proc identity has no host inode to chmod, so the AT_EMPTY_PATH
+ * path must refuse it rather than chmod whatever descriptor happens to back the
+ * emulation. Only an O_PATH descriptor carries the synthetic identity this far;
+ * a plain O_RDONLY /proc fd has no host directory to resolve and stops at EBADF
+ * before this rule applies. fchownat shares the rejection, so both tests pin
+ * it.
+ */
+static void test_empty_path_proc_fd_refused(void)
+{
+    TEST("fchmodat(/proc O_PATH fd, \"\", AT_EMPTY_PATH) refused");
+    int fd = open("/proc/self/status", O_PATH);
+    if (fd < 0) {
+        printf("SKIP (cannot O_PATH-open /proc/self/status: errno=%d)\n",
+               errno);
+        return;
+    }
+    int rc = fchmodat2(fd, "", 0600, AT_EMPTY_PATH);
+    int err = errno;
+    close(fd);
+    EXPECT_TRUE(rc != 0 && err == EPERM, "synthetic proc identity must EPERM");
+}
+
 int main(void)
 {
     printf("test-fchmodat-empty-path: AT_EMPTY_PATH chmod-by-fd semantics\n");
@@ -178,6 +200,7 @@ int main(void)
     test_plain_fchmod_still_rejects_opath();
     test_empty_path_via_regular_fd();
     test_empty_path_at_fdcwd_targets_cwd();
+    test_empty_path_proc_fd_refused();
 
     teardown_fixtures();
 

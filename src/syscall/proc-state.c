@@ -25,6 +25,7 @@
 #include "syscall/proc.h"
 #include "syscall/proc-state.h"
 #include "syscall/path.h"
+#include "syscall/sidecar.h"
 
 /* Shim blob reference (set by startup/bootstrap) */
 static const unsigned char *shim_blob_ptr = NULL;
@@ -84,20 +85,18 @@ void proc_state_init(void)
 int proc_cwd_refresh(void)
 {
     char cwd[LINUX_PATH_MAX];
+    char mapped[LINUX_PATH_MAX];
     const char *guest_cwd = cwd;
     if (!getcwd(cwd, sizeof(cwd)))
         return -1;
 
-    char sr[LINUX_PATH_MAX];
-    if (proc_sysroot_snapshot(sr, sizeof(sr))) {
-        size_t sr_len = strlen(sr);
-        if (!strncmp(cwd, sr, sr_len) &&
-            (cwd[sr_len] == '\0' || cwd[sr_len] == '/')) {
-            guest_cwd = cwd + sr_len;
-            if (*guest_cwd == '\0')
-                guest_cwd = "/";
-        }
-    }
+    /* Host getcwd reports the sysroot prefix and sidecar ".ef_" token names
+     * for guest-created directories; the sanctioned converter strips the
+     * prefix and reverse-maps the tokens so neither spelling leaks into
+     * getcwd or /proc/self/cwd.
+     */
+    if (path_host_to_guest(cwd, mapped, sizeof(mapped)) == 0)
+        guest_cwd = mapped;
 
     size_t len = strlen(guest_cwd);
     pthread_mutex_lock(&cwd_lock);
@@ -515,10 +514,54 @@ static bool sysroot_path_exists(const char *resolved_path, bool follow_final)
     return lstat(resolved_path, &st) == 0;
 }
 
+/* Guest-private prefixes. Creates under these are forced into the sysroot to
+ * dodge host case collisions, so lookups must resolve there too: with only
+ * the create side redirected, the same name was half shared and half private
+ * depending on the verb (a guest could stat a host /tmp file it could never
+ * have written, and its own reply landed where the host tool never looks).
+ * The bare directories match as well, or opendir("/tmp") would list the host
+ * /tmp while every child lookup resolves into the sysroot: a directory full
+ * of phantom entries.
+ *
+ * The caller passes an already-normalized spelling so that non-canonical
+ * spellings naming the same path ("//tmp/x", "/./tmp/x", "/a/../tmp/x" all name
+ * /tmp/x) are classified identically, and so this classifier and
+ * is_guest_system_path() always judge the same string. Matching is component by
+ * component, so "/var/tmpfoo" and "/.ccachefoo" cannot false-positive. Leading
+ * slashes are irrelevant here because path_next_component() skips them.
+ */
+static bool sysroot_private_prefix(const char *norm)
+{
+    const char *comp;
+    size_t len;
+
+    /* A ".ccache" anywhere in the path is private: build tools scatter
+     * case-colliding objects through the tree, and the bare cache directory
+     * must resolve into the sysroot so its own listing is not phantom.
+     */
+    const char *scan = norm;
+    while (path_next_component(&scan, &comp, &len))
+        if (path_component_eq(comp, len, ".ccache"))
+            return true;
+
+    /* A leading "tmp" or "var/tmp" component, bare or with descendants. */
+    const char *walk = norm;
+    if (!path_next_component(&walk, &comp, &len))
+        return false;
+    if (path_component_eq(comp, len, "tmp"))
+        return true;
+    if (path_component_eq(comp, len, "var") &&
+        path_next_component(&walk, &comp, &len) &&
+        path_component_eq(comp, len, "tmp"))
+        return true;
+    return false;
+}
+
 /* Resolve an absolute guest path against --sysroot. This keeps absolute guest
  * filesystem syscalls inside the sysroot when the target exists there, and
  * otherwise falls back to the literal host path so apps can still reach host
- * resources such as /tmp or /etc/resolv.conf. Containment via realpath() is
+ * resources such as /etc/resolv.conf or files under the user's home. The
+ * guest-private prefixes never fall back. Containment via realpath() is
  * enforced only when the path actually resolves under sysroot, to prevent
  * symlink escape from a tree the caller intended to stay inside.
  */
@@ -641,14 +684,18 @@ static const char *proc_resolve_sysroot_path_flags(const char *path,
         errno = ENAMETOOLONG;
         return NULL;
     }
-
-    /* Prevent escaping guest system paths to macOS host paths, which leads
-     * to host contamination and permission failures (e.g. SIP/EPERM).
+    /* Normalize once and hand the same spelling to both classifiers: a path
+     * they disagree about would be private by one rule and host-bound by the
+     * other. The second guard prevents escaping guest system paths to macOS
+     * host paths, which leads to host contamination and permission failures
+     * (e.g. SIP/EPERM).
      */
     char norm_path[LINUX_PATH_MAX];
-    bool has_norm =
-        lexical_normalize_absolute_path(norm_path, path, sizeof(norm_path));
-    if (is_guest_system_path(has_norm ? norm_path : path))
+    const char *norm =
+        lexical_normalize_absolute_path(norm_path, path, sizeof(norm_path))
+            ? norm_path
+            : path;
+    if (sysroot_private_prefix(norm) || is_guest_system_path(norm))
         return buf;
 
     return path;
@@ -729,20 +776,17 @@ const char *proc_resolve_sysroot_create_path(const char *path,
     if (errno != ENOENT && errno != ENOTDIR)
         return NULL;
 
-    /* Parent doesn't exist in sysroot. Only /tmp, /var/tmp, and ccache get
-     * forcefully redirected to the sysroot to avoid host case-collisions;
+    /* Parent doesn't exist in sysroot. Only the guest-private prefixes and the
+     * guest system directories get forcefully redirected to the sysroot;
      * everything else falls back to the host literal.
-     * Guest system directories must also be forced to resolve to the sysroot.
      */
     char norm_path[LINUX_PATH_MAX];
-    bool has_norm =
-        lexical_normalize_absolute_path(norm_path, path, sizeof(norm_path));
-    const char *path_to_check = has_norm ? norm_path : path;
+    const char *norm =
+        lexical_normalize_absolute_path(norm_path, path, sizeof(norm_path))
+            ? norm_path
+            : path;
 
-    if (strncmp(path_to_check, "/tmp/", 5) &&
-        strncmp(path_to_check, "/var/tmp/", 9) &&
-        !strstr(path_to_check, "/.ccache/") &&
-        !is_guest_system_path(path_to_check))
+    if (!sysroot_private_prefix(norm) && !is_guest_system_path(norm))
         return path;
 
     if (!create_parents) {

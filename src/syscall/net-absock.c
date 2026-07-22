@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <dirent.h>
+#include <fcntl.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -21,11 +23,18 @@
 
 #include "utils.h"
 
+#include "syscall/abi.h"
+#include "syscall/internal.h"
 #include "syscall/net.h"
+#include "syscall/net-abi.h"
 #include "syscall/net-absock.h"
+#include "syscall/path.h"
+#include "syscall/sidecar.h"
 
 #define ABSOCK_MAX_ENTRIES 64
 #define ABSOCK_MAX_NAME 107
+/* Linux struct sockaddr_un carries at most 108 sun_path bytes. */
+#define LINUX_UNIX_PATH_MAX 108
 
 typedef struct {
     int guest_fd;
@@ -41,6 +50,8 @@ static char absock_dir[128];
 static bool absock_dir_created;
 static _Atomic uint64_t absock_namespace_id;
 static _Atomic uint32_t absock_autobind_counter;
+
+static void absock_cleanup(void);
 
 static int absock_ensure_dir_locked(void)
 {
@@ -60,6 +71,16 @@ static int absock_ensure_dir_locked(void)
      */
     if (create_private_dir(absock_dir) < 0)
         return -1;
+
+    /* Arm the exit sweep here, the one point where on-disk namespace state
+     * first appears. Every producer of that state (abstract bind, autobind,
+     * connect rewrite, and the pathname-socket shortening links) reaches the
+     * dir through this function, so a single registration covers them all.
+     * Reaching this line already means absock_dir_created was false and the
+     * directory was just created, and it is set below and never cleared, so
+     * this runs exactly once and needs no separate guard.
+     */
+    atexit(absock_cleanup);
 
     absock_dir_created = true;
     return 0;
@@ -196,6 +217,216 @@ static int absock_build_sun(const char *fs_path,
     return (int) (offsetof(struct sockaddr_un, sun_path) + path_len + 1);
 }
 
+/* Point a short symlink in the private absock dir at an over-long translated
+ * socket path so it fits sun_path. bind(2) through a dangling symlink creates
+ * the socket at the target and connect(2) follows it (probed on macOS 15).
+ * Forked guests share the namespace dir, so a losing EEXIST race is accepted
+ * when the existing link already names the same target.
+ */
+static int absock_shorten_path(const char *host_path, char *out, size_t out_sz)
+{
+    pthread_mutex_lock(&absock_lock);
+    if (absock_ensure_dir_locked() < 0) {
+        pthread_mutex_unlock(&absock_lock);
+        return -1;
+    }
+    absock_encode_name((const uint8_t *) host_path,
+                       (uint32_t) strlen(host_path), out, out_sz);
+    /* Create-first, never unlink a matching link: absock_lock is
+     * per-process, so an unconditional unlink could yank a forked sibling's
+     * just-created link between its shorten and its bind(2). The encoded
+     * name is derived from the target, so an existing link with the same
+     * name almost always already points at the right place.
+     */
+    if (symlink(host_path, out) < 0) {
+        char existing[LINUX_PATH_MAX];
+        ssize_t n = -1;
+        if (errno == EEXIST)
+            n = readlink(out, existing, sizeof(existing) - 1);
+        if (n < 0 || (size_t) n != strlen(host_path) ||
+            /* cppcheck-suppress legacyUninitvar
+             * Short-circuit || guarantees memcmp only runs when n ==
+             * strlen(host_path) and readlink filled exactly
+             * existing[0..n-1] on success.
+             */
+            memcmp(existing, host_path, (size_t) n)) {
+            /* Stale or foreign entry under our name: replace it. */
+            (void) unlink(out);
+            if (symlink(host_path, out) < 0) {
+                pthread_mutex_unlock(&absock_lock);
+                return -1;
+            }
+        }
+    }
+    pthread_mutex_unlock(&absock_lock);
+    return 0;
+}
+
+/* Reverse-map one returned pathname AF_UNIX address to its guest spelling.
+ * Returns the Linux sockaddr length when the address was rewritten, or -1
+ * when it is not a translated pathname and the generic converter should run.
+ */
+static int absock_sockaddr_un_from_mac(const struct sockaddr_un *sun,
+                                       uint32_t mac_len,
+                                       uint8_t *linux_sa,
+                                       uint32_t linux_sa_size)
+{
+    /* Bound every read by mac_len: macOS may fill all 104 sun_path bytes
+     * with no terminator, and only mac_len bytes of the caller's
+     * sockaddr_storage are initialized.
+     */
+    size_t sp_max = mac_len - offsetof(struct sockaddr_un, sun_path);
+    if (sp_max > sizeof(sun->sun_path))
+        sp_max = sizeof(sun->sun_path);
+    size_t sp_len = strnlen(sun->sun_path, sp_max);
+    if (sp_len == 0)
+        return -1;
+    char mac_path[sizeof(sun->sun_path) + 1];
+    memcpy(mac_path, sun->sun_path, sp_len);
+    mac_path[sp_len] = '\0';
+
+    /* Undo the over-length shortening symlink, then map the host path back
+     * to the guest namespace so the guest reads back the spelling it bound
+     * or connected with, not the sysroot-prefixed (and possibly
+     * token-bearing) host path.
+     */
+    char host_path[LINUX_PATH_MAX];
+    str_copy_trunc(host_path, mac_path, sizeof(host_path));
+    pthread_mutex_lock(&absock_lock);
+    bool in_absock_dir = absock_dir_created &&
+                         !strncmp(host_path, absock_dir, strlen(absock_dir));
+    pthread_mutex_unlock(&absock_lock);
+    if (in_absock_dir) {
+        char target[LINUX_PATH_MAX];
+        ssize_t n = readlink(host_path, target, sizeof(target) - 1);
+        if (n > 0) {
+            target[n] = '\0';
+            str_copy_trunc(host_path, target, sizeof(host_path));
+        }
+    }
+
+    char guest_path[LINUX_PATH_MAX];
+    if (path_host_to_guest(host_path, guest_path, sizeof(guest_path)) != 0 ||
+        !strcmp(guest_path, mac_path))
+        return -1;
+
+    /* Write the Linux sockaddr directly: the guest may have bound a
+     * Linux-legal name longer than the 103 usable bytes of a macOS
+     * sun_path, and rebuilding a mac sockaddr first would fail for exactly
+     * the paths the shortening symlink serves.
+     */
+    size_t glen = strlen(guest_path);
+    if (glen > LINUX_UNIX_PATH_MAX || linux_sa_size < 2)
+        return -1;
+    uint16_t fam16 = LINUX_AF_UNIX;
+    memcpy(linux_sa, &fam16, 2);
+    uint32_t avail = linux_sa_size - 2;
+    uint32_t copy = (uint32_t) glen;
+    if (glen < LINUX_UNIX_PATH_MAX)
+        copy++; /* include the terminator, kernel-style */
+    if (copy > avail)
+        copy = avail;
+    memcpy(linux_sa + 2, guest_path, copy);
+    return (int) (2 + copy);
+}
+
+int net_sockaddr_from_mac(const struct sockaddr *mac_sa,
+                          uint32_t mac_len,
+                          uint8_t *linux_sa,
+                          uint32_t linux_sa_size)
+{
+    if (mac_sa && mac_len > offsetof(struct sockaddr_un, sun_path) &&
+        mac_sa->sa_family == AF_UNIX) {
+        int rc =
+            absock_sockaddr_un_from_mac((const struct sockaddr_un *) mac_sa,
+                                        mac_len, linux_sa, linux_sa_size);
+        if (rc >= 0)
+            return rc;
+    }
+    return mac_to_linux_sockaddr(mac_sa, (socklen_t) mac_len, linux_sa,
+                                 linux_sa_size);
+}
+
+int net_sockaddr_to_mac(const uint8_t *linux_sa,
+                        uint32_t addrlen,
+                        bool create,
+                        struct sockaddr_storage *mac_sa)
+{
+    uint16_t fam = 0;
+    if (addrlen >= 2)
+        memcpy(&fam, linux_sa, 2);
+
+    if (fam == LINUX_AF_UNIX && addrlen > 2 && linux_sa[2] != '\0') {
+        /* Pathname socket: the name is a filesystem path and must go through
+         * sysroot translation like every other path-taking syscall; the raw
+         * bytes would name the unrelated host-literal file. Linux permits an
+         * unterminated sun_path, so bound the copy by addrlen.
+         */
+        char guest_path[LINUX_UNIX_PATH_MAX + 1];
+        uint32_t plen = addrlen - 2;
+        if (plen > LINUX_UNIX_PATH_MAX)
+            return -LINUX_EINVAL;
+        memcpy(guest_path, linux_sa + 2, plen);
+        guest_path[plen] = '\0';
+
+        /* Creates resolve the parent through the lookup walk and reattach
+         * the leaf: PATH_TR_CREATE skips the sidecar, so a bind inside a
+         * guest-created (tokenized) directory would miss the on-disk parent.
+         * The socket itself keeps its real name; socket names are not
+         * tokenized. "/name" and bare relative names have no tokenizable
+         * parent and translate whole.
+         */
+        char *leaf = create ? strrchr(guest_path, '/') : NULL;
+        if (leaf == guest_path)
+            leaf = NULL;
+        if (leaf)
+            *leaf = '\0';
+        /* The reserved-name guard lives under PATH_TR_CREATE, which only the
+         * leafless spelling below reaches; a reattached leaf bypasses it.
+         * Unguarded, the index spelling collides with the real bookkeeping
+         * file and reports EADDRINUSE for a name stat() and open(O_CREAT)
+         * both call ENOENT. Report ENOENT here so all three agree.
+         */
+        if (leaf && sidecar_active() && sidecar_name_reserved(leaf + 1))
+            return -LINUX_ENOENT;
+        path_translation_t tx;
+        if (path_translate_at(LINUX_AT_FDCWD, guest_path,
+                              (create && !leaf) ? PATH_TR_CREATE : PATH_TR_NONE,
+                              &tx) < 0)
+            return linux_errno();
+        if (tx.fuse_path || tx.proc_resolved != 0)
+            return -LINUX_ENOSYS;
+        char joined[LINUX_PATH_MAX];
+        const char *host_path = tx.host_path;
+        if (leaf) {
+            int jn = snprintf(joined, sizeof(joined), "%s/%s", tx.host_path,
+                              leaf + 1);
+            if (jn < 0 || (size_t) jn >= sizeof(joined))
+                return -LINUX_ENAMETOOLONG;
+            host_path = joined;
+        }
+
+        char short_path[sizeof(((struct sockaddr_un *) 0)->sun_path)];
+        if (strlen(host_path) >= sizeof(((struct sockaddr_un *) 0)->sun_path)) {
+            /* Surface the real failure (EACCES, EIO, ENOSPC, ...): the guest
+             * name is Linux-legal, so reporting ENAMETOOLONG would misattribute
+             * a symlink-layer error to the pathname length.
+             */
+            if (absock_shorten_path(host_path, short_path, sizeof(short_path)) <
+                0)
+                return linux_errno();
+            host_path = short_path;
+        }
+        int mac_len = absock_build_sun(host_path, mac_sa);
+        if (mac_len < 0)
+            return -LINUX_ENAMETOOLONG;
+        return mac_len;
+    }
+
+    int mac_len = linux_to_mac_sockaddr(linux_sa, addrlen, mac_sa);
+    return mac_len < 0 ? -LINUX_EINVAL : mac_len;
+}
+
 int absock_rewrite_connect(const uint8_t *linux_sa,
                            uint32_t addrlen,
                            struct sockaddr_storage *mac_sa)
@@ -283,19 +514,53 @@ void absock_bind_rollback(int idx)
 
 static void absock_cleanup(void)
 {
+    /* Every process unlinks its own table-tracked sockets. A forked child
+     * starts from an empty table because fork hands over only the namespace
+     * id, so an entry here is never a sibling's.
+     */
     for (int i = 0; i < ABSOCK_MAX_ENTRIES; i++) {
         if (absock_table[i].active)
             unlink(absock_table[i].fs_path);
     }
-    if (absock_dir_created)
-        rmdir(absock_dir);
-}
 
-void absock_init_cleanup(void)
-{
-    static int registered;
-    if (!registered) {
-        atexit(absock_cleanup);
-        registered = 1;
+    if (!absock_dir_created)
+        return;
+
+    /* The shortening links are untracked, so no table owns them and the
+     * process that minted the namespace retires them on its way out. Sweep
+     * only symlinks: the abstract-socket backing files sharing this directory
+     * belong to whichever process bound them, including children that outlive
+     * the owner, and each unlinks its own above. Unlinking those too would
+     * destroy a socket a live child still has bound. A live child that loses
+     * a shortening link only degrades to the raw host link path, never to a
+     * missing socket. See docs/sysroot.md for the full lifecycle.
+     */
+    if ((uint64_t) getpid() == absock_get_namespace_id()) {
+        DIR *d = opendir(absock_dir);
+        if (d) {
+            struct dirent *de;
+            while ((de = readdir(d)) != NULL) {
+                /* A filesystem may decline to classify an entry inline and
+                 * report DT_UNKNOWN, so fall back to a nofollow stat there.
+                 */
+                bool is_link = de->d_type == DT_LNK;
+                if (de->d_type == DT_UNKNOWN) {
+                    struct stat st;
+                    is_link = fstatat(dirfd(d), de->d_name, &st,
+                                      AT_SYMLINK_NOFOLLOW) == 0 &&
+                              S_ISLNK(st.st_mode);
+                }
+                if (!is_link)
+                    continue;
+                unlinkat(dirfd(d), de->d_name, 0);
+            }
+            closedir(d);
+        }
     }
+
+    /* Any participant may retire the directory, not just the owner: rmdir
+     * succeeds only once it is empty, so the last one out removes it and a
+     * namespace whose directory was created by a forked child cannot leak.
+     */
+    rmdir(absock_dir);
 }

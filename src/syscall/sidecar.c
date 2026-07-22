@@ -813,6 +813,97 @@ int sidecar_translate_lookup_at(guest_fd_t dirfd,
     return 1;
 }
 
+struct sidecar_dir_map {
+    sidecar_index_t index;
+};
+
+int sidecar_dir_map_open(host_fd_t dir_host_fd, sidecar_dir_map_t **map)
+{
+    *map = NULL;
+    if (!sidecar_active())
+        return 0;
+
+    sidecar_dir_map_t *m = calloc(1, sizeof(*m));
+    if (!m) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if (sidecar_load_index(dir_host_fd, &m->index) < 0) {
+        free(m);
+        return -1;
+    }
+
+    /* A directory with no index loads as an empty mapping, which is reported as
+     * success with no handle: every name then keeps its on-disk spelling.
+     */
+    if (m->index.count == 0) {
+        sidecar_index_free(&m->index);
+        free(m);
+        return 0;
+    }
+
+    *map = m;
+    return 0;
+}
+
+void sidecar_dir_map_close(sidecar_dir_map_t *map)
+{
+    if (!map)
+        return;
+    sidecar_index_free(&map->index);
+    free(map);
+}
+
+int sidecar_dir_map_name(const sidecar_dir_map_t *map,
+                         const char *host_name,
+                         char *guest_name,
+                         size_t guest_name_sz)
+{
+    if (guest_name_sz > 0)
+        guest_name[0] = '\0';
+    if (!sidecar_active())
+        return 0;
+    if (sidecar_name_reserved(host_name))
+        return 1;
+    if (!map)
+        return 0;
+
+    const char *guest = sidecar_lookup_token(&map->index, host_name);
+    if (!guest)
+        return 0;
+
+    size_t len = strlen(guest);
+    if (len + 1 > guest_name_sz) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(guest_name, guest, len + 1);
+    return 0;
+}
+
+int sidecar_translate_dirent_name_hostfd(host_fd_t dir_host_fd,
+                                         const char *host_name,
+                                         char *guest_name,
+                                         size_t guest_name_sz)
+{
+    if (!sidecar_active())
+        return 0;
+    if (sidecar_name_reserved(host_name))
+        return 1;
+
+    /* One entry, so the index is opened and dropped again here. Callers walking
+     * a whole directory should hold a sidecar_dir_map_t instead.
+     */
+    sidecar_index_t index;
+    if (sidecar_load_index(dir_host_fd, &index) < 0)
+        return -1;
+
+    sidecar_dir_map_t map = {.index = index};
+    int rc = sidecar_dir_map_name(&map, host_name, guest_name, guest_name_sz);
+    sidecar_index_free(&index);
+    return rc;
+}
+
 int sidecar_translate_dirent_name(guest_fd_t dirfd,
                                   const char *host_name,
                                   char *guest_name,
@@ -820,37 +911,111 @@ int sidecar_translate_dirent_name(guest_fd_t dirfd,
 {
     if (!sidecar_active())
         return 0;
-    if (sidecar_name_reserved(host_name))
-        return 1;
 
     host_fd_ref_t ref;
     if (host_fd_ref_open(dirfd, &ref) < 0) {
         errno = EBADF;
         return -1;
     }
-
-    sidecar_index_t index;
-    int rc = sidecar_load_index(ref.fd, &index);
+    int rc = sidecar_translate_dirent_name_hostfd(ref.fd, host_name, guest_name,
+                                                  guest_name_sz);
     host_fd_ref_close(&ref);
-    if (rc < 0)
-        return -1;
+    return rc;
+}
 
-    const char *guest = sidecar_lookup_token(&index, host_name);
-    if (!guest) {
-        sidecar_index_free(&index);
-        return 0;
+/* True when name has the exact on-disk token shape: ".ef_" followed by 16
+ * lowercase hex digits (the format sidecar_generate_token emits).
+ */
+bool sidecar_name_is_token(const char *name, size_t len)
+{
+    if (len != SIDECAR_TOKEN_NAME_LEN)
+        return false;
+    if (memcmp(name, SIDECAR_TOKEN_PREFIX, sizeof(SIDECAR_TOKEN_PREFIX) - 1))
+        return false;
+    for (size_t i = sizeof(SIDECAR_TOKEN_PREFIX) - 1; i < len; i++) {
+        char c = name[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            return false;
+    }
+    return true;
+}
+
+/* Map a host path relative to the sysroot back to guest-visible names,
+ * reverse-translating any ".ef_<hex>" token component through its parent
+ * directory's sidecar index. Host getcwd() reports token names for
+ * guest-created directories, so reconstructing the guest cwd from it needs
+ * this walk. A token with no index entry passes through unchanged; degraded
+ * output beats failing the caller's refresh. host_rel must start with '/';
+ * out receives an absolute guest path. Returns 0 on success, -1 on error.
+ */
+int sidecar_reverse_map_host_path(const char *sysroot,
+                                  const char *host_rel,
+                                  char *out,
+                                  size_t outsz)
+{
+    if (!sidecar_active() || !sysroot || !host_rel || host_rel[0] != '/') {
+        errno = EINVAL;
+        return -1;
     }
 
-    size_t len = strlen(guest);
-    if (len + 1 > guest_name_sz) {
-        sidecar_index_free(&index);
+    char host_dir[PATH_MAX];
+    size_t dir_len = strlen(sysroot);
+    if (dir_len >= sizeof(host_dir)) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    memcpy(guest_name, guest, len + 1);
-    sidecar_index_free(&index);
+    memcpy(host_dir, sysroot, dir_len + 1);
+
+    size_t out_len = 0;
+    const char *scan = host_rel;
+    const char *comp;
+    size_t comp_len;
+    while (path_next_component(&scan, &comp, &comp_len)) {
+        char name[NAME_MAX + 1];
+        if (path_component_copy(name, sizeof(name), comp, comp_len) < 0)
+            return -1;
+
+        char guest[NAME_MAX + 1];
+        const char *mapped = name;
+        if (sidecar_name_is_token(name, comp_len)) {
+            int dfd = open(host_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            if (dfd >= 0) {
+                sidecar_index_t index;
+                if (sidecar_load_index(dfd, &index) == 0) {
+                    const char *g = sidecar_lookup_token(&index, name);
+                    if (g && strlen(g) <= NAME_MAX) {
+                        memcpy(guest, g, strlen(g) + 1);
+                        mapped = guest;
+                    }
+                    sidecar_index_free(&index);
+                }
+                close(dfd);
+            }
+        }
+
+        if (sidecar_append_component(out, outsz, &out_len, mapped, true) < 0)
+            return -1;
+
+        /* Descend by the raw host component: index lookups for the next
+         * component need the parent's real on-disk path.
+         */
+        if (sidecar_append_component(host_dir, sizeof(host_dir), &dir_len, name,
+                                     true) < 0)
+            return -1;
+    }
+
+    /* An empty walk means the input named the sysroot itself. */
+    if (out_len == 0) {
+        if (outsz < 2) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        out[out_len++] = '/';
+        out[out_len] = '\0';
+    }
     return 0;
 }
+
 static int sidecar_encode_name(const char *name, char **out)
 {
     static const char hex[] = "0123456789abcdef";
@@ -879,6 +1044,12 @@ static int sidecar_exact_name_exists(int dirfd, const char *name)
         close(dup_fd);
         return -1;
     }
+    /* fdopendir inherits the fd's directory offset, and dirfd is often the
+     * long-lived cached sysroot base whose offset a previous scan already
+     * consumed; without a rewind the scan starts at EOF and reports every
+     * real-named entry as absent.
+     */
+    rewinddir(dir);
 
     int found = 0;
     struct dirent *de;

@@ -16,7 +16,10 @@
         test-proctitle-host test-proctitle-low-stack \
         test-sysroot-procfs-exec test-timeout-disable test-fuse-alpine \
         test-sysroot-nofollow test-sysroot-chdir test-sysroot-symlink-escape \
-        test-linkat-symlink-fallback perf
+        test-sysroot-exec-cwd test-linkat-symlink-fallback \
+        test-path-matrix-fold test-path-matrix-sensitive \
+        test-execveat-shm test-absock-cleanup \
+        test-sysroot-interp-fallback test-sysroot-interp-tokenized perf
 
 ## Build and run the assembly hello world test
 test-hello: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
@@ -108,6 +111,8 @@ check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
 	@$(MAKE) --no-print-directory test-busybox
 	@printf "\n$(BLUE)━━━ sysroot procfs exec validation ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-sysroot-procfs-exec
+	@printf "\n$(BLUE)━━━ sysroot fork/exec cwd validation ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-sysroot-exec-cwd
 	@printf "\n$(BLUE)━━━ getdents64 overlong-UTF-8 dirent skip ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-getdents64-overlong
 	@printf "\n$(BLUE)━━━ sysroot host-fallback validation ━━━$(RESET)\n"
@@ -116,6 +121,18 @@ check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
 	@$(MAKE) --no-print-directory test-sysroot-case-exact
 	@printf "\n$(BLUE)━━━ sysroot relative-dirfd symlink escape validation ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-sysroot-symlink-escape
+	@printf "\n$(BLUE)━━━ sysroot path-translation matrix ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-path-matrix-fold
+	@printf "\n$(BLUE)━━━ sysroot path-translation matrix (case-sensitive) ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-path-matrix-sensitive
+	@printf "\n$(BLUE)━━━ sysroot PT_INTERP /lib fallback ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-sysroot-interp-fallback
+	@printf "\n$(BLUE)━━━ sysroot PT_INTERP tokenized-parent fallback ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-sysroot-interp-tokenized
+	@printf "\n$(BLUE)━━━ execveat /dev/shm nofollow ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-execveat-shm
+	@printf "\n$(BLUE)━━━ absock namespace lifecycle ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-absock-cleanup
 	@printf "\n$(BLUE)━━━ Alpine sysroot FUSE validation ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-fuse-alpine
 	@printf "\n$(BLUE)━━━ timeout=0 validation ━━━$(RESET)\n"
@@ -193,6 +210,137 @@ test-sysroot-symlink-escape: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-symlink-esc
 	while [ "$$i" -lt "$$depth" ]; do relback="../$$relback"; i=$$((i + 1)); done; \
 	ln -sf "$${relback}$${secret_dir#/}/secret.txt" "$$tmpdir/d1/rel-link"; \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" $(BUILD_DIR)/test-sysroot-symlink-escape
+
+## Path-translation matrix: one table-driven guest binary covering the
+## path-taking syscalls against guest-created mixed-case fixtures, run on
+## the default (case-insensitive) volume so the casefold sidecar is active.
+## A host fixture staged outside the sysroot exercises the host-literal
+## fallback, and tests/check-sidecar-state.sh verifies the on-disk
+## index/token contract after the guest exits.
+test-path-matrix-fold: $(ELFUSE_BIN) $(BUILD_DIR)/test-path-matrix
+	@set -e; \
+	tmpdir=$$(mktemp -d); \
+	hostdir=$$(mktemp -d); \
+	shadow="elfuse-pathmx-$$$$-shadow"; \
+	trap 'rm -rf "$$tmpdir" "$$hostdir"; rm -f "/tmp/$$shadow"' EXIT; \
+	sysroot="$$tmpdir/sysroot"; \
+	mkdir -p "$$sysroot/bin" "$$sysroot/tmp" "$$sysroot/data"; \
+	cp $(BUILD_DIR)/test-path-matrix "$$sysroot/bin/"; \
+	printf 'host-visible\n' > "$$hostdir/hello.txt"; \
+	: > "$$sysroot/data/probe"; \
+	mode=cs; \
+	if [ -e "$$sysroot/data/PROBE" ]; then mode=ci; fi; \
+	rm -f "$$sysroot/data/probe"; \
+	if [ "$$mode" = ci ]; then \
+		printf 'HOST-TMP-SHADOW\n' > "/tmp/$$shadow"; \
+		mkdir -p "$$hostdir/.ccache"; \
+		printf 'HOST-CCACHE\n' > "$$hostdir/.ccache/host-leaf"; \
+	fi; \
+	$(ELFUSE_BIN) --sysroot "$$sysroot" "$$sysroot/bin/test-path-matrix" \
+	    "$$mode" "$$hostdir/hello.txt" "$$shadow"; \
+	bash tests/check-sidecar-state.sh "$$sysroot" "$$mode" "$$hostdir"
+
+## The same matrix binary on a case-sensitive scratch volume: the sidecar is
+## inert there, so every Linux-semantics expectation must hold identically
+## with plain names, and the sysroot must stay free of sidecar artifacts.
+## Skips when hdiutil cannot provide the volume (same idiom as
+## test-linkat-symlink-fallback).
+test-path-matrix-sensitive: $(ELFUSE_BIN) $(BUILD_DIR)/test-path-matrix
+	@set -e; dmg=$$(mktemp -u).dmg; mnt=""; hostdir=$$(mktemp -d); \
+	trap '{ [ -z "$$mnt" ] || hdiutil detach "$$mnt" -quiet; } >/dev/null 2>&1 || true; rm -f "$$dmg"; rm -rf "$$hostdir"' EXIT; \
+	if ! hdiutil create -size 64m -fs "Case-sensitive APFS" \
+	        -volname elfusepathmx -quiet "$$dmg" >/dev/null 2>&1; then \
+		printf "$(YELLOW)SKIP$(RESET) test-path-matrix-sensitive (hdiutil create failed)\n"; \
+		exit 0; \
+	fi; \
+	mnt=$$(hdiutil attach "$$dmg" -nobrowse | awk '/\/Volumes\//{print $$NF}'); \
+	if [ -z "$$mnt" ]; then \
+		printf "$(YELLOW)SKIP$(RESET) test-path-matrix-sensitive (hdiutil attach failed)\n"; \
+		exit 0; \
+	fi; \
+	sysroot="$$mnt/sysroot"; \
+	mkdir -p "$$sysroot/bin" "$$sysroot/tmp"; \
+	cp $(BUILD_DIR)/test-path-matrix "$$sysroot/bin/"; \
+	printf 'host-visible\n' > "$$hostdir/hello.txt"; \
+	$(ELFUSE_BIN) --sysroot "$$sysroot" "$$sysroot/bin/test-path-matrix" \
+	    cs "$$hostdir/hello.txt"; \
+	bash tests/check-sidecar-state.sh "$$sysroot" cs "$$hostdir"
+
+## PT_INTERP /lib fallback: a store-style interpreter path absent from the
+## sysroot must fall back to /lib/<basename>. Patches a copy of the dynamic
+## echo fixture to interp /nix/ld-musl-aarch64.so.1 (same byte length as the
+## original /lib spelling, so no ELF surgery) and expects it to run via the
+## sysroot's /lib loader. Skips when the musl fixtures are absent.
+test-sysroot-interp-fallback: $(ELFUSE_BIN)
+	@if [ -z "$(SYSROOT_DIR)" ] || \
+	    [ ! -f "$(SYSROOT_DIR)/lib/ld-musl-aarch64.so.1" ] || \
+	    [ ! -f "$(DYNAMIC_COREUTILS_BIN)/echo" ]; then \
+		printf "$(YELLOW)SKIP$(RESET) test-sysroot-interp-fallback (musl fixtures missing)\n"; \
+		exit 0; \
+	fi; \
+	set -e; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	cp "$(DYNAMIC_COREUTILS_BIN)/echo" "$$tmpdir/echo"; \
+	off=$$(grep -abo '/lib/ld-musl-aarch64.so.1' "$$tmpdir/echo" | head -1 | cut -d: -f1); \
+	[ -n "$$off" ]; \
+	printf '/nix' | dd of="$$tmpdir/echo" bs=1 seek="$$off" conv=notrunc 2>/dev/null; \
+	out=$$($(ELFUSE_BIN) --sysroot $(SYSROOT_DIR) "$$tmpdir/echo" interp-fallback-ok); \
+	[ "$$out" = "interp-fallback-ok" ]
+
+## PT_INTERP under a tokenized parent: when translation resolves the interp
+## prefix through the sidecar but its loader suffix is absent, the host path
+## differs from the guest spelling yet does not exist, so resolution must fall
+## back to /lib/<basename> instead of accepting the missing path. Guest-creates
+## (and thus tokenizes) /NiX on a casefold sysroot, patches echo's interp to
+## /NiX/ld-musl-aarch64.so.1 (same 4 bytes as /lib, mixed case), and expects
+## the /lib loader to run it. Skips when the musl fixtures are absent.
+test-sysroot-interp-tokenized: $(ELFUSE_BIN) $(BUILD_DIR)/mkdir-arg
+	@if [ -z "$(SYSROOT_DIR)" ] || \
+	    [ ! -f "$(SYSROOT_DIR)/lib/ld-musl-aarch64.so.1" ] || \
+	    [ ! -f "$(DYNAMIC_COREUTILS_BIN)/echo" ]; then \
+		printf "$(YELLOW)SKIP$(RESET) test-sysroot-interp-tokenized (musl fixtures missing)\n"; \
+		exit 0; \
+	fi; \
+	set -e; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	sysroot="$$tmpdir/sysroot"; \
+	cp -R "$(SYSROOT_DIR)" "$$sysroot"; \
+	mkdir -p "$$sysroot/bin"; \
+	cp $(BUILD_DIR)/mkdir-arg "$$sysroot/bin/mkdir-arg"; \
+	$(ELFUSE_BIN) --sysroot "$$sysroot" "$$sysroot/bin/mkdir-arg" /NiX; \
+	cp "$(DYNAMIC_COREUTILS_BIN)/echo" "$$tmpdir/echo"; \
+	off=$$(grep -abo '/lib/ld-musl-aarch64.so.1' "$$tmpdir/echo" | head -1 | cut -d: -f1); \
+	[ -n "$$off" ]; \
+	printf '/NiX' | dd of="$$tmpdir/echo" bs=1 seek="$$off" conv=notrunc 2>/dev/null; \
+	out=$$($(ELFUSE_BIN) --sysroot "$$sysroot" "$$tmpdir/echo" interp-tokenized-ok); \
+	[ "$$out" = "interp-tokenized-ok" ]
+
+## execveat must open a /dev/shm leaf with O_NOFOLLOW like sys_execve: a
+## regular binary copied into /dev/shm still execs, but a /dev/shm symlink to a
+## binary outside the synthetic namespace fails with ELOOP instead of being
+## followed out of it.
+test-execveat-shm: $(ELFUSE_BIN) $(BUILD_DIR)/test-execveat-shm
+	@$(ELFUSE_BIN) $(BUILD_DIR)/test-execveat-shm
+
+## absock namespace lifecycle: a forked child that binds its own over-long
+## pathname socket must not sweep the shared shortening links its parent still
+## uses (checked in-guest via getsockname), and the /tmp/elfuse-absock-<nsid>
+## namespace dir must not leak once the guest exits (checked here). Needs a
+## casefold sysroot so the tokenized chain overflows sun_path and the shortening
+## link is created.
+test-absock-cleanup: $(ELFUSE_BIN) $(BUILD_DIR)/test-absock-cleanup
+	@set -e; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	before=$$(ls -d /tmp/elfuse-absock-* 2>/dev/null | wc -l | tr -d ' '); \
+	$(ELFUSE_BIN) --sysroot "$$tmpdir" $(BUILD_DIR)/test-absock-cleanup; \
+	after=$$(ls -d /tmp/elfuse-absock-* 2>/dev/null | wc -l | tr -d ' '); \
+	if [ "$$after" -gt "$$before" ]; then \
+		printf "$(RED)FAIL$(RESET) absock namespace dir leaked ($$before -> $$after)\n"; \
+		exit 1; \
+	fi
 
 ## sys_linkat() falls back to symlinkat() when the host linkat() rejects a
 ## hard link to a symlink source. APFS accepts that call directly and would
@@ -338,6 +486,17 @@ test-sysroot-procfs-exec: $(ELFUSE_BIN) $(BUILD_DIR)/test-procfs-exec
 	mkdir -p "$$tmpdir/bin"; \
 	cp $(BUILD_DIR)/test-procfs-exec "$$tmpdir/bin/test-procfs-exec"; \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" "$$tmpdir/bin/test-procfs-exec"
+
+## Guest cwd must not leak sidecar .ef_ token names after chdir into a
+## guest-created directory, in the caller and in a forked child after execve;
+## needs a plain-dir sysroot on a case-insensitive volume so the casefold
+## sidecar is active.
+test-sysroot-exec-cwd: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-exec-cwd
+	@tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	mkdir -p "$$tmpdir/bin"; \
+	cp $(BUILD_DIR)/test-sysroot-exec-cwd "$$tmpdir/bin/test-sysroot-exec-cwd"; \
+	$(ELFUSE_BIN) --sysroot "$$tmpdir" "$$tmpdir/bin/test-sysroot-exec-cwd"
 
 test-timeout-disable: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
 	@$(ELFUSE_BIN) --timeout 0 $(TEST_DIR)/test-hello > /dev/null

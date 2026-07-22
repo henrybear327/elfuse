@@ -75,6 +75,7 @@ test-ioctl-cloexec
 test-pty
 test-ioctl-fioasync
 test-getdents-refcount
+test-dev-shm-paths
 
 [section] Threading tests
 test-thread                    # diff=skip

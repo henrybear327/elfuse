@@ -1706,6 +1706,16 @@ out:
     return ret;
 }
 
+/* Reach a shm leaf via an fd for truncate/chdir, which have no nofollow path
+ * variant. O_NOFOLLOW keeps a symlink leaf contained, O_NONBLOCK stops a FIFO
+ * leaf from blocking the vCPU thread, O_CLOEXEC covers the short-lived fd. See
+ * dev_shm_resolve_path().
+ */
+static int shm_open_leaf(const path_translation_t *tx, int oflags)
+{
+    return open(tx->host_path, oflags | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+}
+
 int64_t sys_chdir(guest_t *g, uint64_t path_gva)
 {
     char path[LINUX_PATH_MAX];
@@ -1746,6 +1756,22 @@ int64_t sys_chdir(guest_t *g, uint64_t path_gva)
         if (chdir(tx.host_path) < 0)
             return linux_errno();
         proc_cwd_set_virtual(tx.intercept_path);
+        return 0;
+    }
+
+    /* fchdir on a nofollow fd instead of chdir(), which would follow a symlink
+     * leaf. Set the virtual cwd to the guest path so getcwd never leaks the
+     * backing location, like the proc and fuse branches above.
+     */
+    if (tx.is_dev_shm) {
+        int fd = shm_open_leaf(&tx, O_RDONLY | O_DIRECTORY);
+        if (fd < 0)
+            return linux_errno();
+        int chdir_rc = fchdir(fd);
+        close_keep_errno(fd);
+        if (chdir_rc < 0)
+            return linux_errno();
+        proc_cwd_set_virtual(tx.guest_path);
         return 0;
     }
 
@@ -1909,7 +1935,8 @@ int64_t sys_readlinkat(guest_t *g,
         return -LINUX_EBADF;
 
     /* Apply sysroot redirect for absolute paths */
-    ssize_t len = readlinkat(dir_ref.fd, tx.host_path, link, sizeof(link) - 1);
+    ssize_t len = readlinkat(path_translation_dirfd(&tx, &dir_ref),
+                             tx.host_path, link, sizeof(link) - 1);
     host_fd_ref_close(&dir_ref);
     if (len < 0)
         return linux_errno();
@@ -1947,31 +1974,20 @@ int64_t sys_unlinkat(guest_t *g, int dirfd, uint64_t path_gva, int flags)
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
-    /* Rewrite /dev/shm/<name> to the host temp directory so shm_unlink works */
-    const char *unlink_path;
-    char shm_host[LINUX_PATH_MAX];
-    if (!strncmp(tx.guest_path, "/dev/shm/", 9)) {
-        if (proc_dev_shm_resolve(tx.guest_path + 9, shm_host,
-                                 sizeof(shm_host)) < 0) {
-            host_fd_ref_close(&dir_ref);
-            return linux_errno();
-        }
-        unlink_path = shm_host;
-        host_fd_ref_close(&dir_ref);
-        dir_ref.fd = AT_FDCWD;
-        dir_ref.owned = 0;
-    } else {
-        unlink_path = tx.host_path;
-    }
+    /* path_translate_at rewrites /dev/shm/<name> to the absolute backing
+     * path, so shm_unlink works; path_translation_dirfd drops the guest dirfd
+     * there.
+     */
+    host_fd_t unlink_dirfd = path_translation_dirfd(&tx, &dir_ref);
 
     struct stat removed_st;
     bool clear_removed_overlay =
-        fstatat(dir_ref.fd, unlink_path, &removed_st, AT_SYMLINK_NOFOLLOW) ==
+        fstatat(unlink_dirfd, tx.host_path, &removed_st, AT_SYMLINK_NOFOLLOW) ==
             0 &&
         (removed_st.st_nlink <= 1 || (flags & LINUX_AT_REMOVEDIR));
 
     int host_flags = translate_at_flags(flags);
-    if (unlinkat(dir_ref.fd, unlink_path, host_flags) < 0) {
+    if (unlinkat(unlink_dirfd, tx.host_path, host_flags) < 0) {
         host_fd_ref_close(&dir_ref);
         return linux_errno();
     }
@@ -2006,7 +2022,8 @@ int64_t sys_mkdirat(guest_t *g, int dirfd, uint64_t path_gva, int mode)
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
-    if (mkdirat(dir_ref.fd, tx.host_path, (mode_t) mode) < 0) {
+    if (mkdirat(path_translation_dirfd(&tx, &dir_ref), tx.host_path,
+                (mode_t) mode) < 0) {
         host_fd_ref_close(&dir_ref);
         return linux_errno();
     }
@@ -2065,6 +2082,8 @@ int64_t sys_renameat2(guest_t *g,
         host_fd_ref_close(&olddir_ref);
         return -LINUX_EBADF;
     }
+    host_fd_t old_host_dirfd = path_translation_dirfd(&old_tx, &olddir_ref);
+    host_fd_t new_host_dirfd = path_translation_dirfd(&new_tx, &newdir_ref);
 
     /* Apply sysroot resolution for absolute paths RENAME_NOREPLACE: fail if
      * destination exists. macOS renamex_np supports RENAME_EXCL for the same
@@ -2085,14 +2104,14 @@ int64_t sys_renameat2(guest_t *g,
          * requirement. This path still cannot handle directories because
          * hardlinking directories is not allowed.
          */
-        if (linkat(olddir_ref.fd, old_tx.host_path, newdir_ref.fd,
+        if (linkat(old_host_dirfd, old_tx.host_path, new_host_dirfd,
                    new_tx.host_path, 0) < 0) {
             return close_dir_refs_result(&olddir_ref, &newdir_ref,
                                          linux_errno());
         }
-        if (unlinkat(olddir_ref.fd, old_tx.host_path, 0) < 0) {
+        if (unlinkat(old_host_dirfd, old_tx.host_path, 0) < 0) {
             int err = errno;
-            (void) unlinkat(newdir_ref.fd, new_tx.host_path, 0);
+            (void) unlinkat(new_host_dirfd, new_tx.host_path, 0);
             errno = err;
             return close_dir_refs_result(&olddir_ref, &newdir_ref,
                                          linux_errno());
@@ -2117,11 +2136,11 @@ int64_t sys_renameat2(guest_t *g,
     }
 
     struct stat old_st;
-    bool have_old_st = fstatat(olddir_ref.fd, old_tx.host_path, &old_st,
+    bool have_old_st = fstatat(old_host_dirfd, old_tx.host_path, &old_st,
                                AT_SYMLINK_NOFOLLOW) == 0;
     struct stat overwritten_st;
     bool clear_overwritten_overlay =
-        fstatat(newdir_ref.fd, new_tx.host_path, &overwritten_st,
+        fstatat(new_host_dirfd, new_tx.host_path, &overwritten_st,
                 AT_SYMLINK_NOFOLLOW) == 0 &&
         stat_identity_will_disappear(&overwritten_st) &&
         (!have_old_st || !same_stat_identity(&old_st, &overwritten_st));
@@ -2136,7 +2155,7 @@ int64_t sys_renameat2(guest_t *g,
         return close_dir_refs_result(&olddir_ref, &newdir_ref, 0);
     }
 
-    if (renameat(olddir_ref.fd, old_tx.host_path, newdir_ref.fd,
+    if (renameat(old_host_dirfd, old_tx.host_path, new_host_dirfd,
                  new_tx.host_path) < 0) {
         return close_dir_refs_result(&olddir_ref, &newdir_ref, linux_errno());
     }
@@ -2166,7 +2185,8 @@ int64_t sys_mknodat(guest_t *g, int dirfd, uint64_t path_gva, int mode, int dev)
      * nodes need root
      */
     if (S_ISFIFO(mode)) {
-        if (mkfifoat(dir_ref.fd, tx.host_path, mode & 0777) < 0) {
+        if (mkfifoat(path_translation_dirfd(&tx, &dir_ref), tx.host_path,
+                     mode & 0777) < 0) {
             host_fd_ref_close(&dir_ref);
             return linux_errno();
         }
@@ -2176,8 +2196,8 @@ int64_t sys_mknodat(guest_t *g, int dirfd, uint64_t path_gva, int mode, int dev)
 
     /* Regular files: create an empty file */
     if (S_ISREG(mode) || (mode & S_IFMT) == 0) {
-        int fd = openat(dir_ref.fd, tx.host_path, O_CREAT | O_WRONLY | O_EXCL,
-                        mode & 0777);
+        int fd = openat(path_translation_dirfd(&tx, &dir_ref), tx.host_path,
+                        O_CREAT | O_WRONLY | O_EXCL, mode & 0777);
         host_fd_ref_close(&dir_ref);
         if (fd < 0)
             return linux_errno();
@@ -2212,7 +2232,8 @@ int64_t sys_symlinkat(guest_t *g,
         return -LINUX_EBADF;
 
     /* Resolve linkpath (the new symlink location) through sysroot */
-    if (symlinkat(target, dir_ref.fd, tx.host_path) < 0) {
+    if (symlinkat(target, path_translation_dirfd(&tx, &dir_ref), tx.host_path) <
+        0) {
         host_fd_ref_close(&dir_ref);
         return linux_errno();
     }
@@ -2258,11 +2279,18 @@ int64_t sys_linkat(guest_t *g,
         host_fd_ref_close(&olddir_ref);
         return -LINUX_EBADF;
     }
+    host_fd_t old_host_dirfd = path_translation_dirfd(&old_tx, &olddir_ref);
+    host_fd_t new_host_dirfd = path_translation_dirfd(&new_tx, &newdir_ref);
 
     /* Resolve both paths through sysroot */
     int mac_flags = translate_at_flags(flags);
-    if (linkat(olddir_ref.fd, old_tx.host_path, newdir_ref.fd, new_tx.host_path,
-               mac_flags) < 0) {
+    /* Clear AT_SYMLINK_FOLLOW so a shm symlink is hard-linked as the leaf
+     * itself, never dereferenced to its host target (see dev_shm_resolve_path).
+     */
+    if (old_tx.is_dev_shm)
+        mac_flags &= ~AT_SYMLINK_FOLLOW;
+    if (linkat(old_host_dirfd, old_tx.host_path, new_host_dirfd,
+               new_tx.host_path, mac_flags) < 0) {
         /* Darwin's linkat(2) man page: without AT_SYMLINK_FOLLOW, hard-linking
          * a symlink itself (rather than its target) "may result in some file
          * systems returning an error" -- reproduced here as ENOTSUP on
@@ -2283,10 +2311,10 @@ int64_t sys_linkat(guest_t *g,
         struct stat old_st;
         char target[LINUX_PATH_MAX];
         ssize_t target_len;
-        if (fstatat(olddir_ref.fd, old_tx.host_path, &old_st,
+        if (fstatat(old_host_dirfd, old_tx.host_path, &old_st,
                     AT_SYMLINK_NOFOLLOW) < 0 ||
             !S_ISLNK(old_st.st_mode) ||
-            (target_len = readlinkat(olddir_ref.fd, old_tx.host_path, target,
+            (target_len = readlinkat(old_host_dirfd, old_tx.host_path, target,
                                      sizeof(target) - 1)) < 0) {
             host_fd_ref_close(&olddir_ref);
             host_fd_ref_close(&newdir_ref);
@@ -2294,7 +2322,7 @@ int64_t sys_linkat(guest_t *g,
         }
         target[target_len] = '\0';
 
-        if (symlinkat(target, newdir_ref.fd, new_tx.host_path) < 0) {
+        if (symlinkat(target, new_host_dirfd, new_tx.host_path) < 0) {
             host_fd_ref_close(&olddir_ref);
             host_fd_ref_close(&newdir_ref);
             return linux_errno();
@@ -2373,8 +2401,10 @@ int64_t sys_faccessat(guest_t *g,
         return 0;
     }
 
-    int mac_flags = translate_faccessat_flags(flags);
-    if (faccessat(dir_ref.fd, tx.host_path, mode, mac_flags) < 0) {
+    int mac_flags =
+        path_translation_at_flags(&tx, translate_faccessat_flags(flags));
+    if (faccessat(path_translation_dirfd(&tx, &dir_ref), tx.host_path, mode,
+                  mac_flags) < 0) {
         host_fd_ref_close(&dir_ref);
         return linux_errno();
     }
@@ -2436,6 +2466,27 @@ int64_t sys_truncate(guest_t *g, uint64_t path_gva, int64_t length)
     rc = reject_unsupported_fuse_path_op(&tx);
     if (rc != INT64_MIN)
         return rc;
+
+    /* truncate(2) has no nofollow variant; reach the leaf via shm_open_leaf +
+     * ftruncate.
+     */
+    if (tx.is_dev_shm) {
+        int fd = shm_open_leaf(&tx, O_WRONLY);
+        if (fd < 0) {
+            /* A FIFO leaf yields ENXIO (O_NONBLOCK write-open, no reader);
+             * Linux truncate(2) on a FIFO returns EINVAL, so match it.
+             */
+            if (errno == ENXIO)
+                return -LINUX_EINVAL;
+            return linux_errno();
+        }
+        if (ftruncate(fd, length) < 0) {
+            close_keep_errno(fd);
+            return linux_errno();
+        }
+        close(fd);
+        return 0;
+    }
 
     if (truncate(tx.host_path, length) < 0)
         return linux_errno();
@@ -2528,8 +2579,9 @@ int64_t sys_fchmodat(guest_t *g,
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
-    int mac_flags = translate_at_flags(flags);
-    if (fchmodat(dir_ref.fd, tx.host_path, mode, mac_flags) < 0) {
+    int mac_flags = path_translation_at_flags(&tx, translate_at_flags(flags));
+    if (fchmodat(path_translation_dirfd(&tx, &dir_ref), tx.host_path, mode,
+                 mac_flags) < 0) {
         host_fd_ref_close(&dir_ref);
         return linux_errno();
     }
@@ -2678,12 +2730,13 @@ int64_t sys_fchownat(guest_t *g,
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
-    int mac_flags = translate_at_flags(flags);
+    int mac_flags = path_translation_at_flags(&tx, translate_at_flags(flags));
+    host_fd_t host_dirfd = path_translation_dirfd(&tx, &dir_ref);
     struct stat before_st;
     bool before_ok =
-        fstatat(dir_ref.fd, tx.host_path, &before_st, mac_flags) == 0;
+        fstatat(host_dirfd, tx.host_path, &before_st, mac_flags) == 0;
 
-    int host_rc = fchownat(dir_ref.fd, tx.host_path, owner, group, mac_flags);
+    int host_rc = fchownat(host_dirfd, tx.host_path, owner, group, mac_flags);
     int saved_errno = errno;
 
     struct stat after_st;
@@ -2818,8 +2871,9 @@ int64_t sys_utimensat(guest_t *g,
             return linux_errno();
         }
     } else {
-        if (utimensat(dir_ref.fd, path_arg, times_gva ? ts : NULL, mac_flags) <
-            0) {
+        mac_flags = path_translation_at_flags(&tx, mac_flags);
+        if (utimensat(path_translation_dirfd(&tx, &dir_ref), path_arg,
+                      times_gva ? ts : NULL, mac_flags) < 0) {
             host_fd_ref_close(&dir_ref);
             return linux_errno();
         }

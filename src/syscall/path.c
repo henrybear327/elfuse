@@ -17,6 +17,7 @@
 
 #include "utils.h"
 
+#include "runtime/procemu.h"
 #include "syscall/abi.h"
 #include "syscall/fuse.h"
 #include "syscall/path.h"
@@ -177,6 +178,7 @@ int path_translate_at(guest_fd_t dirfd,
     tx->host_path = path;
     tx->proc_resolved = 0;
     tx->fuse_path = false;
+    tx->is_dev_shm = false;
 
     if (!path)
         return 0;
@@ -198,6 +200,26 @@ int path_translate_at(guest_fd_t dirfd,
             tx->intercept_path = tx->guest_buf;
             tx->fuse_path = true;
         }
+    }
+
+    /* /dev/shm/<leaf> maps into the per-UID host backing dir, through the
+     * same validated resolver as the open and stat intercepts. Only a
+     * non-empty flat leaf is redirected; bare "/dev/shm" and "/dev/shm/"
+     * stay on the sysroot path so the synthetic-directory intercepts keep
+     * answering for them. The resolver rejects "..", embedded '/', and
+     * empty names with EACCES. The early return skips sysroot resolution,
+     * the relative-containment recheck, and the sidecar lookup: the backing
+     * path is absolute, self-contained, and must never be sidecar-mapped.
+     * is_dev_shm signals the redirect to callers, which must force nofollow
+     * on the host call; see dev_shm_resolve_path() for that invariant.
+     */
+    if (!strncmp(tx->guest_path, "/dev/shm/", 9) && tx->guest_path[9] != '\0') {
+        if (proc_dev_shm_resolve(tx->guest_path + 9, tx->host_buf,
+                                 sizeof(tx->host_buf)) < 0)
+            return -1;
+        tx->host_path = tx->host_buf;
+        tx->is_dev_shm = true;
+        return 0;
     }
 
     errno = 0;

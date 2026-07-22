@@ -209,31 +209,67 @@ static int exec_resolve_guest_host_path(const char *guest_path,
     return 0;
 }
 
-static int exec_resolve_interp_host_path(const char *sysroot,
-                                         const char *interp_guest_path,
+/* A translated interpreter path is usable when it is a FUSE temp copy, or when
+ * translation rewrote the spelling AND the rewritten file actually exists.
+ * The existence probe is what separates a real sysroot hit from a
+ * sidecar-mapped prefix whose loader suffix is absent: without it a
+ * differs-but-missing path would be accepted and the /lib/<basename> fallback
+ * skipped, so a store-style interpreter (e.g. a /nix/.../ld-musl.so.1 that
+ * ships the loader under /lib) would fail to launch.
+ */
+static bool exec_translated_usable(const char *host,
+                                   const char *guest,
+                                   bool temp)
+{
+    return temp || (strcmp(host, guest) && access(host, F_OK) == 0);
+}
+
+/* Resolve PT_INTERP through the same translation as every other guest path,
+ * so a sysroot interpreter is found with sidecar spelling, containment, and
+ * FUSE materialization applied. The bootstrap loader keeps elf_resolve_interp
+ * because the core layer cannot call into the syscall translator.
+ */
+static int exec_resolve_interp_host_path(const char *interp_guest_path,
                                          char *interp_host_path,
                                          size_t interp_host_path_sz,
                                          bool *interp_host_temp,
                                          bool *shm_nofollow)
 {
-    char interp_candidate[LINUX_PATH_MAX];
-    elf_resolve_interp(sysroot, interp_guest_path, interp_candidate,
-                       sizeof(interp_candidate));
     *shm_nofollow = false;
-    if (strcmp(interp_candidate, interp_guest_path) != 0) {
-        size_t len = str_copy_trunc(interp_host_path, interp_candidate,
-                                    interp_host_path_sz);
-        if (len >= interp_host_path_sz) {
-            errno = ENAMETOOLONG;
-            return -1;
-        }
-        *interp_host_temp = false;
+    if (exec_resolve_guest_host_path(interp_guest_path, interp_host_path,
+                                     interp_host_path_sz, interp_host_temp,
+                                     shm_nofollow) < 0)
+        return -1;
+    if (exec_translated_usable(interp_host_path, interp_guest_path,
+                               *interp_host_temp))
         return 0;
-    }
 
-    return exec_resolve_guest_host_path(interp_guest_path, interp_host_path,
-                                        interp_host_path_sz, interp_host_temp,
-                                        shm_nofollow);
+    /* Literal fallback: before accepting it, try the image's /lib for the
+     * loader's basename. Store-style interpreter paths such as
+     * /nix/.../lib/ld-musl-aarch64.so.1 ship the loader under /lib.
+     */
+    const char *base = strrchr(interp_guest_path, '/');
+    base = base ? base + 1 : interp_guest_path;
+    char lib_guest[LINUX_PATH_MAX];
+    int n = snprintf(lib_guest, sizeof(lib_guest), "/lib/%s", base);
+    if (n > 0 && (size_t) n < sizeof(lib_guest)) {
+        char lib_host[LINUX_PATH_MAX];
+        bool lib_temp = false;
+        bool lib_shm = false;
+        if (exec_resolve_guest_host_path(lib_guest, lib_host, sizeof(lib_host),
+                                         &lib_temp, &lib_shm) == 0 &&
+            exec_translated_usable(lib_host, lib_guest, lib_temp)) {
+            size_t len =
+                str_copy_trunc(interp_host_path, lib_host, interp_host_path_sz);
+            if (len >= interp_host_path_sz) {
+                errno = ENAMETOOLONG;
+                return -1;
+            }
+            *interp_host_temp = lib_temp;
+            *shm_nofollow = lib_shm;
+        }
+    }
+    return 0;
 }
 
 /* Read a NULL-terminated pointer array from guest memory. Each pointer in the
@@ -386,17 +422,16 @@ int64_t sys_execve(hv_vcpu_t vcpu,
                    bool verbose,
                    const char *host_path)
 {
-    /* Copy guest execve inputs before any state-reset point of no return. If
-     * host_path is provided (from execveat resolution), use it directly instead
-     * of reading from guest memory. This avoids writing host-resolved paths
-     * into guest address space.
+    /* Copy guest execve inputs before any state-reset point of no return. A
+     * provided host_path (from execveat resolution) is used directly for the
+     * exec open, but the guest-visible identity in path must carry the guest
+     * spelling: strip the sysroot and reverse-map sidecar tokens so
+     * /proc/self/exe never reports the private host namespace.
      */
     char path[LINUX_PATH_MAX];
     if (host_path) {
-        size_t len = strlen(host_path);
-        if (len >= LINUX_PATH_MAX)
+        if (path_host_to_guest(host_path, path, sizeof(path)) < 0)
             return -LINUX_ENAMETOOLONG;
-        memcpy(path, host_path, len + 1);
     } else if (guest_read_str(g, path_gva, path, sizeof(path)) < 0) {
         return -LINUX_EFAULT;
     }
@@ -404,7 +439,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     log_debug("execve(\"%s\")", path);
 
     char path_host_buf[LINUX_PATH_MAX];
-    const char *path_host = path;
+    const char *path_host = host_path ? host_path : path;
     bool path_host_temp = false;
     /* Whether path_host is a shm redirect leaf (drives O_NOFOLLOW on the exec
      * open). Re-evaluated whenever path_host is repointed to an interpreter.
@@ -762,11 +797,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
      */
     bool interp_shm = false;
     if (!target_is_rosetta && elf_info.interp_path[0] != '\0') {
-        char sysroot_snap[LINUX_PATH_MAX];
-        bool have_sr =
-            proc_sysroot_snapshot(sysroot_snap, sizeof(sysroot_snap));
-        if (exec_resolve_interp_host_path(have_sr ? sysroot_snap : NULL,
-                                          elf_info.interp_path, interp_resolved,
+        if (exec_resolve_interp_host_path(elf_info.interp_path, interp_resolved,
                                           sizeof(interp_resolved),
                                           &interp_host_temp, &interp_shm) < 0) {
             log_error("execve: failed to resolve interpreter: %s",

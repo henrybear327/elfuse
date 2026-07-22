@@ -22,6 +22,7 @@
 
 bool sidecar_active(void);
 bool sidecar_name_reserved(const char *name);
+bool sidecar_name_is_token(const char *name, size_t len);
 bool sidecar_path_targets_reserved_name(const char *path);
 int sidecar_translate_lookup_at(guest_fd_t dirfd,
                                 const char *path,
@@ -31,6 +32,17 @@ int sidecar_translate_dirent_name(guest_fd_t dirfd,
                                   const char *host_name,
                                   char *guest_name,
                                   size_t guest_name_sz);
+/* Same mapping for callers that already hold the directory's host fd (e.g.
+ * inotify snapshots), skipping the guest fd-table resolution.
+ */
+int sidecar_translate_dirent_name_hostfd(host_fd_t dir_host_fd,
+                                         const char *host_name,
+                                         char *guest_name,
+                                         size_t guest_name_sz);
+int sidecar_reverse_map_host_path(const char *sysroot,
+                                  const char *host_rel,
+                                  char *out,
+                                  size_t outsz);
 int sidecar_openat(guest_fd_t dirfd,
                    const char *path,
                    int linux_flags,

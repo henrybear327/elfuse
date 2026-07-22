@@ -40,7 +40,9 @@
 #include "syscall/abi.h"
 #include "syscall/inotify.h"
 #include "syscall/internal.h"
+#include "syscall/path.h"
 #include "syscall/proc.h" /* proc_exit_group_requested */
+#include "syscall/sidecar.h"
 
 static void inotify_close(int guest_fd);
 
@@ -333,6 +335,17 @@ static bool dir_snapshot_fd(int dirfd, char ***out, int *n_out)
     int fd = openat(dirfd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0)
         return false;
+
+    /* Snapshots feed named IN_CREATE/IN_DELETE events, so they must carry
+     * guest-visible names: inside a casefold sysroot, reverse-map sidecar
+     * token children through this directory's index and hide the sidecar's
+     * bookkeeping files, which would otherwise diff as phantom children.
+     * Only the leaf name matters, so the per-entry lookup runs against the
+     * directory fd already in hand; a directory without an index (outside
+     * the sysroot) simply maps nothing.
+     */
+    bool map_names = sidecar_active();
+
     DIR *d = fdopendir(fd);
     if (!d) {
         close(fd);
@@ -356,6 +369,29 @@ static bool dir_snapshot_fd(int dirfd, char ***out, int *n_out)
         }
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
             continue;
+        if (map_names && sidecar_name_reserved(de->d_name))
+            continue;
+        const char *store = de->d_name;
+        char mapped[LINUX_PATH_MAX];
+        if (map_names &&
+            sidecar_name_is_token(de->d_name, strlen(de->d_name))) {
+            mapped[0] = '\0';
+            int map_rc = sidecar_translate_dirent_name_hostfd(
+                fd, de->d_name, mapped, sizeof(mapped));
+            if (map_rc < 0) {
+                /* Reverse mapping failed (index unreadable): fail the whole
+                 * snapshot the way getdents64 does on a translation error,
+                 * rather than emit the raw .ef_ token as a guest-visible name.
+                 * The baseline is kept and the next successful snapshot
+                 * reconciles. (No ENAMETOOLONG-skip as in getdents64: mapped is
+                 * a full LINUX_PATH_MAX for a single component.)
+                 */
+                ok = false;
+                break;
+            }
+            if (mapped[0] != '\0')
+                store = mapped;
+        }
         if (n == cap) {
             int ncap = cap ? cap * 2 : 16;
             char **tmp = realloc(names, (size_t) ncap * sizeof(char *));
@@ -366,7 +402,7 @@ static bool dir_snapshot_fd(int dirfd, char ***out, int *n_out)
             names = tmp;
             cap = ncap;
         }
-        names[n] = strdup(de->d_name);
+        names[n] = strdup(store);
         if (!names[n]) {
             ok = false;
             break;
@@ -638,11 +674,22 @@ int64_t sys_inotify_add_watch(guest_t *g,
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
 
+    /* Watches are backed by kqueue on a host fd, which cannot observe FUSE
+     * or synthetic /proc objects, so refuse those instead of watching an
+     * unrelated host path.
+     */
+    path_translation_t tx;
+    if (path_translate_at(LINUX_AT_FDCWD, path, PATH_TR_NONE, &tx) < 0)
+        return linux_errno();
+    if (tx.fuse_path || tx.proc_resolved != 0 ||
+        path_might_use_open_intercept(tx.intercept_path))
+        return -LINUX_ENOSYS;
+
     /* Open the path for event monitoring. O_EVTONLY is macOS-specific: opens
      * for event notification only, does not prevent unmount or require read
      * access to the file contents.
      */
-    int host_fd = open(path, O_EVTONLY);
+    int host_fd = open(tx.host_path, O_EVTONLY);
     if (host_fd < 0)
         return linux_errno();
 

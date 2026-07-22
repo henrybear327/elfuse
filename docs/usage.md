@@ -166,6 +166,10 @@ Practical notes:
   (default APFS) and the sysroot is being provisioned for the first
   time; `elfuse` creates a case-sensitive APFS sparsebundle, mounts it
   at `PATH`, and uses it as the sysroot for this run.
+- The sysroot is a root, not a boundary: absolute paths absent from the
+  sysroot deliberately fall through to the literal host file, and no
+  isolation is provided. `docs/sysroot.md` defines the dispatch model,
+  the translation invariants, and the case-handling details.
 
 ## Debugging With GDB Or LLDB
 

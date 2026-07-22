@@ -96,7 +96,7 @@ Key files:
 | `src/syscall/mem.c` | `brk`, `mmap`, `mprotect`, `mremap`, `madvise`, `msync` |
 | `src/syscall/fs.c`, `fs-stat.c`, `fs-xattr.c` | filesystem syscalls |
 | `src/syscall/io.c`, `poll.c`, `fd.c`, `fdtable.c` | I/O, polling, FD lifecycle and table |
-| `src/syscall/path.c` | centralized guest-to-host path resolution |
+| `src/syscall/path.c` | centralized guest-to-host path resolution (see also [sysroot.md](sysroot.md)) |
 | `src/syscall/sidecar.c` | case-fold sidecar tokens for case-insensitive macOS volumes |
 | `src/syscall/fuse.c` | guest-internal FUSE transport and minimal VFS |
 | `src/syscall/inotify.c` | inotify via kqueue `EVFILT_VNODE` |
@@ -406,6 +406,8 @@ Socket syscalls are translated in `src/syscall/net.c` and friends:
   type argument; both bits must be extracted before calling `socket()`.
 - `SOL_SOCKET` option numbers (`SO_TYPE`, `SO_SNDBUF`, `SO_RCVBUF`, …)
   differ between platforms and are remapped per option.
+- AF_UNIX pathname and abstract socket addresses are translated through the
+  sysroot; see [sysroot.md](sysroot.md#af_unix-socket-addresses).
 
 ### Stack Alignment
 

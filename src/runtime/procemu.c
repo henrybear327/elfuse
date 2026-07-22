@@ -63,6 +63,7 @@
 #include "syscall/fuse.h"
 #include "syscall/internal.h"
 #include "syscall/net-identity.h"
+#include "syscall/path.h"
 #include "syscall/proc.h"
 #include "syscall/sys.h"
 
@@ -3788,24 +3789,21 @@ static int proc_readlink_self_exe(char *buf, size_t bufsiz)
     }
     const char *exe = exe_buf;
     char exe_real[LINUX_PATH_MAX];
-    char sysroot_snap[LINUX_PATH_MAX];
-    if (proc_sysroot_snapshot(sysroot_snap, sizeof(sysroot_snap))) {
-        /* proc_set_sysroot stores a realpath()-canonicalized form, so
-         * canonicalize exe before the prefix check or the strip fails when /var
-         * -> /private/var (and similar macOS symlinks) make the two strings
-         * diverge.
-         */
-        const char *exe_cmp = exe;
-        if (realpath(exe, exe_real))
-            exe_cmp = exe_real;
-        size_t sr_len = strlen(sysroot_snap);
-        if (sr_len > 0 && !strncmp(exe_cmp, sysroot_snap, sr_len) &&
-            (exe_cmp[sr_len] == '/' || exe_cmp[sr_len] == '\0')) {
-            exe = exe_cmp + sr_len;
-            if (*exe == '\0')
-                exe = "/";
-        }
-    }
+    char exe_guest[LINUX_PATH_MAX];
+    /* proc_set_sysroot stores a realpath()-canonicalized form, so canonicalize
+     * exe before the reverse map or the sysroot strip fails when /var ->
+     * /private/var (and similar macOS symlinks) make the two strings diverge.
+     * path_host_to_guest also rewrites sidecar token components back to guest
+     * spellings, which a bare prefix strip would leak. Only an actual rewrite
+     * is adopted: an identity result keeps the original spelling, so a
+     * host-literal exe is not silently canonicalized (/tmp -> /private/tmp).
+     */
+    const char *exe_cmp = exe;
+    if (realpath(exe, exe_real))
+        exe_cmp = exe_real;
+    if (path_host_to_guest(exe_cmp, exe_guest, sizeof(exe_guest)) == 0 &&
+        strcmp(exe_guest, exe_cmp))
+        exe = exe_guest;
     size_t len = strlen(exe);
     if (len > bufsiz)
         len = bufsiz;
@@ -3868,10 +3866,17 @@ int proc_intercept_readlink(const char *path, char *buf, size_t bufsiz)
          */
         if (proc_rosetta_active() && !strcmp(fdpath, ROSETTA_PATH))
             return proc_readlink_self_exe(buf, bufsiz);
-        size_t len = strlen(fdpath);
+        /* F_GETPATH reports the raw host path; the guest must see its own
+         * namespace (sysroot stripped, sidecar tokens reverse-mapped).
+         */
+        char guest_view[LINUX_PATH_MAX];
+        const char *report = fdpath;
+        if (path_host_to_guest(fdpath, guest_view, sizeof(guest_view)) == 0)
+            report = guest_view;
+        size_t len = strlen(report);
         if (len > bufsiz)
             len = bufsiz;
-        memcpy(buf, fdpath, len);
+        memcpy(buf, report, len);
         return (int) len;
     }
 

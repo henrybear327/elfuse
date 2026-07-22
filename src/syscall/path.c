@@ -318,6 +318,53 @@ int path_translate_dirent_name(guest_fd_t dirfd,
     return 0;
 }
 
+int64_t path_resolve_empty_at(guest_fd_t dirfd, path_empty_at_t *out)
+{
+    out->ref.fd = -1;
+    out->ref.owned = false;
+    out->fuse_fd = false;
+    out->proc_path[0] = '\0';
+    out->fuse_path[0] = '\0';
+
+    if (dirfd == LINUX_AT_FDCWD) {
+        int fuse_rc = fuse_resolve_at_path(LINUX_AT_FDCWD, ".", out->fuse_path,
+                                           sizeof(out->fuse_path));
+        if (fuse_rc < 0)
+            return linux_errno();
+        if (fuse_rc > 0)
+            return 0;
+        out->fuse_path[0] = '\0';
+        /* Open "." once so the caller's operation and any follow-up stat run
+         * against the same descriptor; resolving "." per call would let a
+         * concurrent chdir() on another thread retarget the second lookup.
+         * O_SEARCH, not O_RDONLY: Linux resolves AT_FDCWD + AT_EMPTY_PATH in
+         * a search-only (mode 0111) cwd, which an O_RDONLY open would reject
+         * with EACCES.
+         */
+        int fd = open(".", O_SEARCH);
+        if (fd < 0)
+            return linux_errno();
+        out->ref.fd = fd;
+        out->ref.owned = true;
+        return 0;
+    }
+
+    fd_entry_t snap;
+    if (!fd_snapshot(dirfd, &snap))
+        return -LINUX_EBADF;
+    if (snap.type == FD_FUSE_DEV || snap.type == FD_FUSE_FILE ||
+        snap.type == FD_FUSE_DIR) {
+        out->fuse_fd = true;
+        return 0;
+    }
+    if (snap.type == FD_PATH && snap.proc_path[0] != '\0')
+        str_copy_trunc(out->proc_path, snap.proc_path, sizeof(out->proc_path));
+
+    if (host_dirfd_ref_open(dirfd, &out->ref) < 0)
+        return -LINUX_EBADF;
+    return 0;
+}
+
 bool path_next_component(const char **pathp, const char **comp, size_t *len)
 {
     const char *p = *pathp;
@@ -339,7 +386,7 @@ bool path_next_component(const char **pathp, const char **comp, size_t *len)
 
 static bool path_component_is_dot(const char *comp, size_t len)
 {
-    return len == 1 && comp[0] == '.';
+    return path_component_eq(comp, len, ".");
 }
 
 const char *path_resolve_sysroot_path(const char *path, char *buf, size_t bufsz)
@@ -879,6 +926,15 @@ static int host_path_to_guest_path(const char *host_path,
             guest_path = host_path + sysroot_len;
             if (*guest_path == '\0')
                 guest_path = "/";
+            /* A stripped remainder can still spell guest-created components
+             * as their on-disk sidecar tokens; reverse-map them so callers
+             * classify and report the guest names. Unmapped tokens pass
+             * through unchanged, so failure keeps the stripped path.
+             */
+            else if (proc_sysroot_casefold_enabled() &&
+                     sidecar_reverse_map_host_path(sysroot, guest_path, out,
+                                                   outsz) == 0)
+                return 0;
         }
     }
 
@@ -888,6 +944,11 @@ static int host_path_to_guest_path(const char *host_path,
         return -1;
     }
     return 0;
+}
+
+int path_host_to_guest(const char *host_path, char *out, size_t outsz)
+{
+    return host_path_to_guest_path(host_path, out, outsz);
 }
 
 static int dirfd_guest_base_path(guest_fd_t dirfd, char *out, size_t outsz)

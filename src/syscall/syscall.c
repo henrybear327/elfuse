@@ -2153,10 +2153,23 @@ static int64_t sc_execveat(guest_t *g,
         char pathname[LINUX_PATH_MAX];
         if (guest_read_str(g, x1, pathname, sizeof(pathname)) < 0)
             return -LINUX_EFAULT;
+        /* Translate like every other *at handler: under a casefold sysroot a
+         * guest-created entry exists on disk only under its sidecar token, so
+         * handing the raw guest spelling to the host cannot resolve it (and
+         * could resolve a case-colliding host-literal file instead). The
+         * translated name stays dirfd-relative, so resolve it to an absolute
+         * host path through the same openat + F_GETPATH as before.
+         */
+        path_translation_t tx;
+        if (path_translate_at(dirfd, pathname, PATH_TR_NONE, &tx) < 0)
+            return linux_errno();
+        if (tx.fuse_path || tx.proc_resolved != 0)
+            return -LINUX_ENOSYS;
         host_fd_ref_t dir_ref;
-        if (host_fd_ref_open(dirfd, &dir_ref) < 0)
+        if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
             return -LINUX_EBADF;
-        int tmp_fd = openat(dir_ref.fd, pathname, O_RDONLY);
+        int tmp_fd = openat(path_translation_dirfd(&tx, &dir_ref), tx.host_path,
+                            path_translation_oflags(&tx, O_RDONLY));
         if (tmp_fd < 0) {
             host_fd_ref_close(&dir_ref);
             return linux_errno();

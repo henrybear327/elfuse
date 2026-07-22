@@ -213,10 +213,9 @@ static int64_t stat_at_path(guest_t *g,
         return 0;
     }
 
-    if (tx.proc_resolved == 0 && dirfd == LINUX_AT_FDCWD && pathp[0] != '/' &&
-        pathp[0] != '\0' && !proc_get_sysroot()) {
+    if (path_translation_relative_fast_path(&tx, dirfd)) {
         int mac_flags = translate_at_flags(flags);
-        if (fstatat(AT_FDCWD, pathp, mac_st, mac_flags) < 0)
+        if (fstatat(AT_FDCWD, tx.host_path, mac_st, mac_flags) < 0)
             return linux_errno();
         return 0;
     }
@@ -224,37 +223,34 @@ static int64_t stat_at_path(guest_t *g,
     int64_t rc = 0;
     host_fd_ref_t dir_ref = {.fd = -1, .owned = false};
     if ((flags & LINUX_AT_EMPTY_PATH) && pathp[0] == '\0') {
-        /* Linux: AT_EMPTY_PATH with dirfd == AT_FDCWD operates on the current
-         * working directory.
+        path_empty_at_t er;
+        int64_t erc = path_resolve_empty_at(dirfd, &er);
+        if (erc < 0)
+            return erc;
+        /* Stat is a query: serve the FUSE identities that the mutating
+         * empty-path callers (fchmodat/fchownat) reject with ENOSYS.
          */
-        if (dirfd == LINUX_AT_FDCWD) {
-            dir_ref.fd = AT_FDCWD;
-            int mac_flags = translate_at_flags(flags);
-            if (fstatat(AT_FDCWD, ".", mac_st, mac_flags) < 0) {
+        if (er.fuse_path[0] != '\0') {
+            int frc = fuse_stat_path(er.fuse_path, mac_st, flags);
+            return frc < 0 ? frc : 0;
+        }
+        if (er.fuse_fd) {
+            int frc = fuse_fstat_fd(dirfd, mac_st);
+            return frc < 0 ? frc : 0;
+        }
+        dir_ref = er.ref;
+        if (er.proc_path[0] != '\0') {
+            int intercepted = proc_intercept_stat(er.proc_path, mac_st);
+            if (intercepted == 0)
+                goto done;
+            if (intercepted == -1) {
                 rc = linux_errno();
                 goto done;
             }
-        } else {
-            fd_entry_t snap;
-            dir_ref.fd = fd_snapshot_and_dup(dirfd, &snap);
-            dir_ref.owned = true;
-            if (dir_ref.fd < 0) {
-                rc = -LINUX_EBADF;
-                goto done;
-            }
-            if (snap.type == FD_PATH && snap.proc_path[0] != '\0') {
-                int intercepted = proc_intercept_stat(snap.proc_path, mac_st);
-                if (intercepted == 0)
-                    goto done;
-                if (intercepted == -1) {
-                    rc = linux_errno();
-                    goto done;
-                }
-            }
-            if (fstat(dir_ref.fd, mac_st) < 0) {
-                rc = linux_errno();
-                goto done;
-            }
+        }
+        if (fstat(dir_ref.fd, mac_st) < 0) {
+            rc = linux_errno();
+            goto done;
         }
     } else {
         if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)

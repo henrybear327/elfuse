@@ -513,9 +513,8 @@ int64_t sys_openat_path(guest_t *g,
         return linux_errno();
 
     int flags = translate_open_flags(linux_flags);
-    if (!tx.fuse_path && tx.proc_resolved == 0 && dirfd == LINUX_AT_FDCWD &&
-        pathp[0] != '/' && !proc_get_sysroot()) {
-        int host_fd = openat(AT_FDCWD, pathp, flags, mode);
+    if (path_translation_relative_fast_path(&tx, dirfd)) {
+        int host_fd = openat(AT_FDCWD, tx.host_path, flags, mode);
         if (host_fd < 0)
             return linux_errno();
 
@@ -2377,9 +2376,9 @@ int64_t sys_faccessat(guest_t *g,
     if (tx.fuse_path)
         return fuse_access_path(tx.intercept_path, mode, flags);
 
-    if (tx.proc_resolved == 0 && dirfd == LINUX_AT_FDCWD && path[0] != '/') {
+    if (path_translation_relative_fast_path(&tx, dirfd)) {
         int mac_flags = translate_faccessat_flags(flags);
-        if (faccessat(AT_FDCWD, path, mode, mac_flags) < 0)
+        if (faccessat(AT_FDCWD, tx.host_path, mode, mac_flags) < 0)
             return linux_errno();
         return 0;
     }
@@ -2525,43 +2524,26 @@ int64_t sys_fchmodat(guest_t *g,
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
 
-    /* AT_EMPTY_PATH with an empty path chmods dirfd itself; see the identical
-     * branch in sys_fchownat above for the O_PATH/AT_FDCWD rationale. Neither
-     * sub-case below goes through path_translate_at, so the FUSE and /proc
-     * interception normally applied by reject_unsupported_fuse_path_op and
-     * stat_at_path's proc_intercept_stat has to be checked by hand here.
+    /* AT_EMPTY_PATH with an empty path chmods dirfd itself; see sys_fchownat
+     * below for the O_PATH rationale. A FUSE object cannot be mutated this
+     * way and a synthetic /proc identity cannot be chmodded.
      */
     if ((flags & LINUX_AT_EMPTY_PATH) && path[0] == '\0') {
-        if (dirfd == LINUX_AT_FDCWD) {
-            char fuse_buf[LINUX_PATH_MAX];
-            int fuse_rc = fuse_resolve_at_path(LINUX_AT_FDCWD, ".", fuse_buf,
-                                               sizeof(fuse_buf));
-            if (fuse_rc < 0)
-                return linux_errno();
-            if (fuse_rc > 0)
-                return -LINUX_ENOSYS;
-            if (fchmodat(AT_FDCWD, ".", mode, translate_at_flags(flags)) < 0)
-                return linux_errno();
-            return 0;
-        }
-
-        fd_entry_t snap;
-        if (!fd_snapshot(dirfd, &snap))
-            return -LINUX_EBADF;
-        if (snap.type == FD_FUSE_DEV || snap.type == FD_FUSE_FILE ||
-            snap.type == FD_FUSE_DIR)
+        path_empty_at_t er;
+        int64_t erc = path_resolve_empty_at(dirfd, &er);
+        if (erc < 0)
+            return erc;
+        if (er.fuse_path[0] != '\0' || er.fuse_fd)
             return -LINUX_ENOSYS;
-        if (snap.type == FD_PATH && snap.proc_path[0] != '\0')
+        if (er.proc_path[0] != '\0') {
+            host_fd_ref_close(&er.ref);
             return -LINUX_EPERM;
-
-        host_fd_ref_t ref;
-        if (host_dirfd_ref_open(dirfd, &ref) < 0)
-            return -LINUX_EBADF;
-        if (fchmod(ref.fd, mode) < 0) {
-            host_fd_ref_close(&ref);
+        }
+        if (fchmod(er.ref.fd, mode) < 0) {
+            host_fd_ref_close(&er.ref);
             return linux_errno();
         }
-        host_fd_ref_close(&ref);
+        host_fd_ref_close(&er.ref);
         return 0;
     }
 
@@ -2658,61 +2640,31 @@ int64_t sys_fchownat(guest_t *g,
      * beneath it. This is the only way to chown an O_PATH fd (plain fchown()
      * rejects FD_PATH, matching Linux's EBADF there), so unlike the other
      * *at() flag validation here it has to actually be handled, not just
-     * accepted. dirfd == AT_FDCWD resolves to the current directory, mirroring
-     * stat_at_path's identical AT_EMPTY_PATH branch in fs-stat.c. Neither
-     * sub-case below goes through path_translate_at, so FUSE and /proc
-     * interception has to be checked by hand, same as sys_fchmodat above.
+     * accepted. path_resolve_empty_at supplies one descriptor for both the
+     * fchown and the follow-up stat, so a concurrent chdir() cannot record
+     * the overlay against a different directory's dev/ino. A synthetic /proc
+     * identity cannot be chowned.
      */
     if ((flags & LINUX_AT_EMPTY_PATH) && path[0] == '\0') {
-        if (dirfd == LINUX_AT_FDCWD) {
-            char fuse_buf[LINUX_PATH_MAX];
-            int fuse_rc = fuse_resolve_at_path(LINUX_AT_FDCWD, ".", fuse_buf,
-                                               sizeof(fuse_buf));
-            if (fuse_rc < 0)
-                return linux_errno();
-            if (fuse_rc > 0)
-                return -LINUX_ENOSYS;
-
-            /* Open "." once so fchown and the follow-up stat operate on the
-             * same descriptor. Resolving "." twice (fchownat then fstatat)
-             * would let a concurrent chdir() on another thread of this guest
-             * record the overlay against a different directory's dev/ino.
-             */
-            int fd = open(".", O_RDONLY);
-            if (fd < 0)
-                return linux_errno();
-            int host_rc = fchown(fd, owner, group);
-            int saved_errno = errno;
-            struct stat host_st;
-            const struct stat *st_ptr =
-                fstat(fd, &host_st) == 0 ? &host_st : NULL;
-            errno = saved_errno;
-            int64_t out = chown_result(host_rc, st_ptr, owner, group);
-            close_keep_errno(fd);
-            return out;
+        path_empty_at_t er;
+        int64_t erc = path_resolve_empty_at(dirfd, &er);
+        if (erc < 0)
+            return erc;
+        if (er.fuse_path[0] != '\0' || er.fuse_fd)
+            return -LINUX_ENOSYS;
+        if (er.proc_path[0] != '\0') {
+            host_fd_ref_close(&er.ref);
+            return -LINUX_EPERM;
         }
 
-        fd_entry_t snap;
-        if (!fd_snapshot(dirfd, &snap))
-            return -LINUX_EBADF;
-        if (snap.type == FD_FUSE_DEV || snap.type == FD_FUSE_FILE ||
-            snap.type == FD_FUSE_DIR)
-            return -LINUX_ENOSYS;
-        if (snap.type == FD_PATH && snap.proc_path[0] != '\0')
-            return -LINUX_EPERM;
-
-        host_fd_ref_t ref;
-        if (host_dirfd_ref_open(dirfd, &ref) < 0)
-            return -LINUX_EBADF;
-
-        int host_rc = fchown(ref.fd, owner, group);
+        int host_rc = fchown(er.ref.fd, owner, group);
         int saved_errno = errno;
         struct stat host_st;
         const struct stat *st_ptr =
-            fstat(ref.fd, &host_st) == 0 ? &host_st : NULL;
+            fstat(er.ref.fd, &host_st) == 0 ? &host_st : NULL;
         errno = saved_errno;
         int64_t out = chown_result(host_rc, st_ptr, owner, group);
-        host_fd_ref_close(&ref);
+        host_fd_ref_close(&er.ref);
         return out;
     }
 

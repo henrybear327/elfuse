@@ -24,6 +24,7 @@
 #include "syscall/net.h"
 #include "syscall/net-sockopt.h"
 #include "syscall/net-abi.h"
+#include "syscall/net-absock.h"
 #include "syscall/proc.h"
 #include "syscall/signal.h"
 
@@ -222,10 +223,11 @@ int64_t sys_sendmsg(guest_t *g, int fd, uint64_t msg_gva, int linux_flags)
             host_fd_ref_close(&host_ref);
             return -LINUX_EFAULT;
         }
-        int ml = linux_to_mac_sockaddr(linux_sa, lmsg.msg_namelen, &mac_sa);
+        int ml =
+            net_sockaddr_to_mac(linux_sa, lmsg.msg_namelen, false, &mac_sa);
         if (ml < 0) {
             host_fd_ref_close(&host_ref);
-            return -LINUX_EINVAL;
+            return ml;
         }
         dest_sa = (struct sockaddr *) &mac_sa;
         dest_len = (socklen_t) ml;
@@ -554,7 +556,7 @@ int64_t sys_recvmsg(guest_t *g, int fd, uint64_t msg_gva, int flags)
     if (lmsg.msg_name) {
         if (msg.msg_namelen > 0) {
             uint8_t linux_sa[128];
-            int out_len = mac_to_linux_sockaddr((struct sockaddr *) &mac_sa,
+            int out_len = net_sockaddr_from_mac((struct sockaddr *) &mac_sa,
                                                 msg.msg_namelen, linux_sa,
                                                 (uint32_t) sizeof(linux_sa));
             if (out_len > 0) {

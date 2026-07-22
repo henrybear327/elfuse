@@ -616,6 +616,20 @@ jobs:
           make build/elfuse-oci
           scripts/ci/oci-run-smoke.sh
 
+      - name: OCI execution checks (unix sockets, cold/warm boot, dynamic interp)
+        # Guest-execution seams the smoke above does not cross: a pathname
+        # AF_UNIX socket bound inside the guest with a getsockname
+        # round-trip, the cold-provision versus warm re-attach boot path,
+        # and an explicit dynamically linked from-image binary. Shares the
+        # smoke step's warm store (alpine/debian, plus python:3.12-slim).
+        # Release leg only.
+        if: ${{ matrix.run_matrix }}
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-store"
+          make build/elfuse-oci
+          scripts/ci/oci-exec-checks.sh
+
       - name: OCI image lifecycle (pull -> inspect -> list -> run -> rmi -> prune)
         # Walks the whole user-facing image lifecycle on the only leg with
         # HVF. python:3.12-slim adds what the alpine smoke above does not:

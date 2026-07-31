@@ -317,6 +317,35 @@ class SplitBaselineTest(unittest.TestCase):
             self.assertNotIn(self.SWEEP_ID, curated)
             self.assertEqual(list(swept), [self.SWEEP_ID])
 
+    def test_record_rejects_ids_outside_the_manifests(self):
+        """An observed test no manifest knows is a configuration
+        anomaly (stale results directory, edited manifest); recording
+        must refuse it rather than silently dropping it from the
+        snapshot."""
+        report = corpus.passing_report_fast(FAST_IDS + ["ghost01"])
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = os.path.join(tmp, "run")
+            os.makedirs(run_dir)
+            with open(
+                os.path.join(run_dir, "kirk-elfuse.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(report, handle)
+
+            proc = run_harness(
+                [
+                    "record-baseline",
+                    "--backend",
+                    "elfuse",
+                    "--tier",
+                    "all",
+                    "--from-results",
+                    run_dir,
+                ],
+                {"LTP_BASELINE_DIR": tmp},
+            )
+            self.assertEqual(proc.returncode, 2, proc.stdout)
+            self.assertIn("ghost01", proc.stdout)
+
     def test_gate_needs_only_the_selected_tier_classes(self):
         from ltp_harness import baseline, cli
 

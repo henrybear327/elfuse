@@ -438,11 +438,13 @@ def cmd_record_baseline(args: argparse.Namespace) -> int:
     for backend in backends:
         observed = _observed_for_backend(run_dir, backend, tests)
         for sweep in (False, True):
+            # Direct indexing is safe: observed_from_report rejects any
+            # report id without a manifest result_format, so every
+            # observed id is in tests_by_id.
             part = {
                 test_id: entry
                 for test_id, entry in observed.items()
-                if test_id in tests_by_id
-                and _is_sweep_test(tests_by_id[test_id]) == sweep
+                if _is_sweep_test(tests_by_id[test_id]) == sweep
             }
             if not part:
                 continue

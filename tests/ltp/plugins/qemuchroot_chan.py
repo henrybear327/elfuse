@@ -69,7 +69,9 @@ MOUNTS = [
 ]
 
 AUX_CAP_SEC = 30
-SUITE_SETUP_CAP_SEC = 300
+# Bounds the rootfs copy into the VM; the sweep payload is ~1.3 GiB
+# over read-only 9p, which can take several minutes under tcg.
+SUITE_SETUP_CAP_SEC = 900
 
 # The per-command remote script always exits 0 and reports the test's real
 # exit status on this sentinel line, so a test that legitimately exits 255

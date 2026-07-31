@@ -128,7 +128,10 @@ class Vm:
             "-cpu",
             cpu,
             "-m",
-            os.environ.get("QEMU_MEM", "2048"),
+            # Larger than qemu-runner.sh's default: the sweep rootfs
+            # (~1.3 GiB of test binaries) is copied onto the VM's /tmp
+            # tmpfs, whose pages live in guest RAM alongside the tests.
+            os.environ.get("QEMU_MEM", "4096"),
             "-smp",
             os.environ.get("QEMU_SMP", "4"),
             "-kernel",
@@ -187,9 +190,12 @@ class Vm:
             raise HarnessFatal("VM SSH endpoint never became ready")
 
         # The initramfs keeps /tmp on rootfs; give it a real tmpfs so the
-        # copied LTP root gets a resolvable, writable mount.
+        # copied LTP root gets a resolvable, writable mount. The explicit
+        # size lifts tmpfs's 50%-of-RAM default, which the sweep rootfs
+        # alone would exhaust.
         mount = self._ssh(
-            'grep -q " /tmp tmpfs " /proc/mounts || mount -t tmpfs tmpfs /tmp',
+            'grep -q " /tmp tmpfs " /proc/mounts '
+            "|| mount -t tmpfs -o size=80% tmpfs /tmp",
             cap=30,
         )
         if mount.returncode != 0:

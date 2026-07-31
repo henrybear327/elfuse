@@ -152,6 +152,9 @@ What they do:
   `make test-gvisor-conformance` adds the `elfuse` lane, which
   intentionally exits nonzero at the current baseline (see gVisor
   Syscall Conformance below)
+- `make gvisor-passrate`: measure the raw gVisor pass rate on both backends
+  with the expectations manifest ignored, so excluded and expected-failing
+  tests run too (see Measuring the raw pass rate below)
 - `make lint`: static analysis through `clang-tidy`
 
 ## Quick Iteration
@@ -305,6 +308,37 @@ aggregate JSON and JUnit output per backend and overall. Set
 `GVISOR_RESULTS_DIR` to choose another results base; the runner still
 creates a unique run-id directory beneath it.
 
+### Measuring the raw pass rate
+
+```sh
+make gvisor-passrate                       # QEMU reference first, then elfuse
+tests/run-gvisor-passrate.sh elfuse-aarch64
+tests/run-gvisor-passrate.sh qemu-aarch64
+```
+
+The conformance lane measures agreement with the reviewed manifest: `EXCLUDE`
+rows never run and expected states keep known divergences out of the failure
+columns. The pass-rate lane answers a different question: of every test the
+payload discovers, how much passes on each backend today. The wrapper runs
+the conformance runner with `GVISOR_BOOTSTRAP=1`, which plans every
+discovered test as expected `PASS`, so the normally excluded tests run too
+and every divergence lands in the failure columns. It then reduces each
+backend's `summary.tsv` to one row:
+
+```
+backend          total   PASS   FAIL   SKIP  BROKEN  TIMEOUT  SIGNAL  pass-rate
+qemu-aarch64      2319   ...
+```
+
+`pass-rate` is `PASS / total`. A red backend does not fail the wrapper,
+because the run itself is the measurement; only a backend that leaves no
+aggregate behind (missing payload, broken runner) is an error. On the
+reference, expect the tests the manifest excludes to surface here as `FAIL`,
+`TIMEOUT`, or `SIGNAL`: they are excluded precisely because they do not run
+cleanly against the reference in this environment, and the same caveat
+applies when reading their elfuse column. Full artifacts land under the
+printed run directory, the same layout as the conformance lane.
+
 ### CI topology
 
 CI splits the lane across two runners. A Linux ARM64 job builds the payload
@@ -404,6 +438,40 @@ first. They are valid tests, since the QEMU reference passes them, but the
 elfuse hang or crash should be confirmed as a genuine semantic gap rather than
 an artifact of the heavier GoogleTest runtime before a root cause is assigned.
 
+### How the enabled set is chosen
+
+The allowlist in `targets.txt` is derived from the upstream inventory, not
+hand-picked from memory, and every decision is judged against the reference
+environment, never against elfuse:
+
+1. Enumerate. `make check-gvisor-targets` scans `test/syscalls/linux/BUILD`
+   in the pinned gVisor checkout for `*_test` targets and diffs the result
+   against `targets.txt`, printing every available-but-not-enabled target as
+   an opt-in candidate. The same audit fails when an enabled label no longer
+   exists at the pin, so a pin bump cannot leave stale entries behind. It
+   needs the checkout that `make build-gvisor-tests` creates and skips
+   cleanly when the checkout is absent.
+2. Decline on requirements. A candidate that needs what the reference guest
+   does not provide is declined without being built: a network stack beyond
+   loopback, elevated privilege or namespaces (capabilities, seccomp,
+   ptrace, mount, chroot), the host's `/proc` layout, a working devpts,
+   gVisor-internal interfaces, or x86-only behavior. Each lands in the
+   `# DECLINED` block of `targets.txt` under its category.
+3. Decline on build. A candidate that does not build from its single Bazel
+   target without companion helpers (`exec_test`, `sticky_test`) or that
+   links no GoogleTest cases (`fpsig_mut_test`, `time_test`) is also
+   declined there.
+4. Qualify on the reference. Everything else is built and run through the
+   QEMU lane in bootstrap mode. A suite that runs cleanly is enabled;
+   individual tests inside an enabled suite that do not (crash the
+   reference, need a companion binary or a device the guest lacks, or are
+   flaky at clock granularity) get `EXCLUDE` rows in the manifest with the
+   observed reason.
+
+elfuse failing a candidate is never grounds to decline it. Selection tracks
+what the reference can execute, so the lane keeps measuring elfuse instead
+of curating around its gaps.
+
 ### Adding coverage
 
 Opting a new suite in is a three-step change:
@@ -420,12 +488,6 @@ QEMU before interpreting its elfuse results: a suite that does not run
 cleanly against the reference (crashes, x86-only, needs a companion binary
 or a device the guest lacks) belongs in the `# DECLINED` block of
 `targets.txt`, not in the enabled set.
-
-`make check-gvisor-targets` lists the upstream `*_test` targets that are
-available at the pin but not yet enabled (opt-in candidates), and fails if
-an enabled label no longer exists after a pin bump. It needs the gVisor
-checkout that `make build-gvisor-tests` creates, and skips cleanly when the
-checkout is absent.
 
 ## Test Matrix
 

@@ -31,6 +31,7 @@ def sample_test(**overrides):
         "command": "/opt/ltp/testcases/bin/readv01",
         "arguments": [],
         "tier": "fast",
+        "group": "readv",
         "timeout_seconds": 120,
         "result_format": "new-api",
         "helpers": [],
@@ -52,6 +53,15 @@ class RealFilesTest(unittest.TestCase):
 
         legacy = [t["id"] for t in tests if t["result_format"] == "legacy-exit"]
         self.assertEqual(legacy, ["recv01"])
+
+    def test_committed_groups_match_source_dirs(self):
+        """Spot-check ids whose group is not a prefix of the id, so a
+        regression to id-prefix parsing cannot pass unnoticed."""
+        tests = manifest.load_manifest(MANIFEST_PATH)
+        groups = {t["id"]: t["group"] for t in tests}
+        self.assertEqual(groups["futex_wake01"], "futex")
+        self.assertEqual(groups["epoll_wait03"], "epoll_wait")
+        self.assertEqual(groups["exit_group01"], "exit_group")
 
     def test_committed_pins_are_valid(self):
         pins = manifest.load_pins(PIN_PATH)
@@ -153,6 +163,15 @@ class ValidationTest(unittest.TestCase):
 
     def test_bad_timeout(self):
         self.check_rejected([sample_test(timeout_seconds=0)])
+
+    def test_empty_group(self):
+        self.check_rejected([sample_test(group="")])
+
+    def test_absolute_group(self):
+        self.check_rejected([sample_test(group="/readv")])
+
+    def test_traversal_group(self):
+        self.check_rejected([sample_test(group="../readv")])
 
     def test_valid_manifest_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -22,12 +22,19 @@ RESULT_FORMATS = ("new-api", "legacy-exit")
 SUITE_PREFIX = "elfuse-"
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_.+-]+$")
+# A group is the test's source directory relative to LTP's
+# testcases/kernel/syscalls (or testcases/ for suites outside it), the
+# unit pass rates aggregate over. It is an explicit field because the
+# id does not encode it reliably (epoll01 builds from epoll/, pipeio_1
+# from ../ipc/pipeio/).
+_GROUP_RE = re.compile(r"^[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+)*$")
 _REQUIRED_TEST_KEYS = frozenset(
     {
         "id",
         "command",
         "arguments",
         "tier",
+        "group",
         "timeout_seconds",
         "result_format",
         "helpers",
@@ -130,6 +137,19 @@ def load_manifest(path: str) -> List[Dict[str, Any]]:
 
         if test["tier"] not in TIERS:
             raise ManifestError(f"{where}: tier must be one of {TIERS}")
+
+        group = test["group"]
+        if not isinstance(group, str) or not _GROUP_RE.fullmatch(group):
+            raise ManifestError(
+                f"{where}: group must be a relative source directory path"
+            )
+        normalized = os.path.normpath(group)
+        # The regex admits dot-only segments, so ".." passes it; the
+        # normpath comparison is what actually rejects traversal.
+        if normalized != group or normalized.startswith(".."):
+            raise ManifestError(
+                f"{where}: group must be a normalized relative path"
+            )
         if test["result_format"] not in RESULT_FORMATS:
             raise ManifestError(
                 f"{where}: result_format must be one of {RESULT_FORMATS}"

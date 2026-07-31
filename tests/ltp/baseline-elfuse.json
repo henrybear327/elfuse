@@ -56,9 +56,6 @@
       "subtests": {
         "exit_group01.c:96": {
           "TPASS": 1
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         }
       }
     },
@@ -67,9 +64,6 @@
       "subtests": {
         "fcntl34.c:124": {
           "TPASS": 1
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         }
       }
     },
@@ -79,9 +73,6 @@
       "subtests": {
         "fcntl36.c:316": {
           "TBROK": 1
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         }
       }
     },
@@ -99,6 +90,9 @@
       "subtests": {
         "futex_wait02.c:33": {
           "TBROK": 1
+        },
+        "futex_wait02.c:54": {
+          "TFAIL": 1
         }
       }
     },
@@ -124,9 +118,6 @@
         },
         "preadv02.c:81": {
           "TFAIL": 1
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         }
       }
     },
@@ -139,9 +130,6 @@
         },
         "pwritev02.c:77": {
           "TFAIL": 1
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         }
       }
     },
@@ -153,9 +141,6 @@
         },
         "readv01.c:85": {
           "TPASS": 5
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         }
       }
     },
@@ -166,9 +151,6 @@
         "readv02.c:72": {
           "TFAIL": 1,
           "TPASS": 4
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         }
       }
     },
@@ -188,22 +170,25 @@
     },
     "setitimer01": {
       "reason": "reaches and passes its assertions but does not terminate cleanly within the deadline; teardown/timeout gap",
-      "status": "BROKEN",
+      "status": "FAIL",
       "subtests": {
         "setitimer01.c:108": {
-          "TPASS": 1
+          "TPASS": 3
+        },
+        "setitimer01.c:124": {
+          "TFAIL": 3
         },
         "setitimer01.c:75": {
-          "TPASS": 1
+          "TPASS": 3
         },
         "setitimer01.c:78": {
-          "TPASS": 1
+          "TPASS": 3
         },
         "setitimer01.c:80": {
-          "TPASS": 1
+          "TPASS": 3
         },
         "setitimer01.c:81": {
-          "TPASS": 1
+          "TPASS": 3
         }
       }
     },
@@ -251,9 +236,6 @@
         },
         "setpgid03.c:41": {
           "TBROK": 1
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         }
       }
     },
@@ -274,6 +256,9 @@
         },
         "times03.c:94": {
           "TPASS": 1
+        },
+        "tst_test.c:544": {
+          "TBROK": 1
         }
       }
     },
@@ -283,9 +268,6 @@
       "subtests": {
         "tst_test.c:1948": {
           "TBROK": 1
-        },
-        "tst_tmpdir.c:339": {
-          "TWARN": 1
         },
         "writev01.c:124": {
           "TFAIL": 1,

@@ -172,10 +172,43 @@ def _result_formats(tests: List[Dict[str, Any]]) -> Dict[str, str]:
     return {test["id"]: test["result_format"] for test in tests}
 
 
+def _reference_map(
+    tests: List[Dict[str, Any]],
+    selection: List[Dict[str, Any]],
+    run_dir: str,
+    pins: Dict[str, Any],
+) -> Dict[str, Any]:
+    """The QEMU reference verdict for each selected test.
+
+    Only a test the reference VM passes attests Linux conformance when
+    elfuse passes it too; any other reference status (or a test the
+    reference has never recorded) leaves the elfuse result meaningful
+    but unattested. The freshest source wins: the qemu report from this
+    run when present ('all' mode), else the committed qemu baseline.
+    """
+    qemu_observed: Dict[str, Any] = {}
+    if os.path.isfile(_kirk_report_path(run_dir, "qemu")):
+        qemu_observed = _observed_for_backend(run_dir, "qemu", tests)
+    elif os.path.isfile(_baseline_path("qemu")):
+        pin = manifest_mod.baseline_pin(pins)
+        qemu_observed = baseline_mod.load(_baseline_path("qemu"), pin)
+
+    reference = {}
+    for test in selection:
+        entry = qemu_observed.get(test["id"])
+        status = entry["status"] if entry else "UNRECORDED"
+        reference[test["id"]] = {
+            "status": status,
+            "attesting": status == "PASS",
+        }
+    return reference
+
+
 def _gate_backend(
     backend: str,
     tier: str,
     pins: Dict[str, Any],
+    tests: List[Dict[str, Any]],
     selection: List[Dict[str, Any]],
     observed: Dict[str, Any],
     run_dir: str,
@@ -206,8 +239,25 @@ def _gate_backend(
         if not gate.passed:
             status = EXIT_FAIL
 
+    reference: Optional[Dict[str, Any]] = None
+    if backend == "elfuse":
+        reference = _reference_map(tests, selection, run_dir, pins)
+        non_attesting = sum(
+            1 for entry in reference.values() if not entry["attesting"]
+        )
+        if non_attesting:
+            print(
+                f"note: {non_attesting} of {len(reference)} selected tests do "
+                f"not attest conformance (reference non-PASS or unrecorded)"
+            )
+
     report_mod.write_gate_json(
-        os.path.join(run_dir, f"gate-{backend}.json"), backend, tier, gate, observed
+        os.path.join(run_dir, f"gate-{backend}.json"),
+        backend,
+        tier,
+        gate,
+        observed,
+        reference,
     )
 
     kirk_report = _read_kirk_report(run_dir, backend)
@@ -254,8 +304,9 @@ def _observed_for_backend(
 def _execute_backends(args: argparse.Namespace, pins, tests, selection) -> str:
     """Run kirk for the requested backends; returns the run directory.
 
-    QEMU always runs before elfuse in 'all' mode and must qualify first,
-    so elfuse is only ever compared against ground-truthed expectations.
+    QEMU runs before elfuse in 'all' mode so its fresh results can
+    annotate the elfuse report with per-test attestation; a reference
+    failure is recorded, not a reason to withhold the elfuse leg.
     """
     try:
         from ltp_harness import kirkdrive
@@ -286,7 +337,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     for backend in backends:
         observed = _observed_for_backend(run_dir, backend, tests)
         backend_status = _gate_backend(
-            backend, args.tier, pins, selection, observed, run_dir, args.no_gate
+            backend,
+            args.tier,
+            pins,
+            tests,
+            selection,
+            observed,
+            run_dir,
+            args.no_gate,
         )
         status = max(status, backend_status)
 

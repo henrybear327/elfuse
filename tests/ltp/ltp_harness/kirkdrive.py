@@ -253,30 +253,4 @@ def run_backends(
         else:
             raise HarnessFatal(f"unknown backend '{backend}'")
 
-        if backend == "qemu" and len(backends) > 1:
-            _require_qemu_green(run_dir, tests)
-
     return run_dir
-
-
-def _require_qemu_green(run_dir: str, tests: List[Dict[str, Any]]) -> None:
-    """In 'all' mode the reference lane must qualify before elfuse runs."""
-    from ltp_harness import baseline as baseline_mod
-    from ltp_harness.cli import HarnessFatal
-
-    report_path = os.path.join(run_dir, "kirk-qemu.json")
-    with open(report_path, "r", encoding="utf-8") as handle:
-        report = json.load(handle)
-
-    formats = {test["id"]: test["result_format"] for test in tests}
-    observed = baseline_mod.observed_from_report(report, formats)
-    bad = sorted(
-        test_id
-        for test_id, entry in observed.items()
-        if entry["status"] not in ("PASS", "SKIP")
-    )
-    if bad:
-        raise HarnessFatal(
-            "QEMU reference lane did not qualify; elfuse will not run. "
-            f"Non-passing: {', '.join(bad)}"
-        )

@@ -90,6 +90,116 @@ class ExitContractTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 2, proc.stdout)
 
 
+class AllModeReferenceTest(unittest.TestCase):
+    """In 'all' mode the QEMU reference annotates the elfuse report; it
+    must not block the elfuse leg. A reference failure marks the test
+    as not attesting conformance in gate-elfuse.json while elfuse still
+    runs, gates, and reports. This was observed red against the old
+    _require_qemu_green hard stop, which aborted the run instead."""
+
+    FAILING_ID = "readv01"
+
+    def _fake_qemu_report(self):
+        results = []
+        for test_id in FAST_IDS:
+            if test_id == self.FAILING_ID:
+                results.append(
+                    corpus.kirk_result(
+                        test_id,
+                        log=corpus.new_api_log(
+                            [f"{test_id}.c:40: TFAIL: reference limitation"],
+                            summary={"failed": 1},
+                        ),
+                        failed=1,
+                        status="fail",
+                    )
+                )
+                continue
+            results.append(
+                corpus.kirk_result(
+                    test_id,
+                    log=corpus.new_api_log(
+                        [f"{test_id}.c:40: TPASS: ok"], summary={"passed": 1}
+                    ),
+                    passed=1,
+                )
+            )
+        return corpus.kirk_report(results)
+
+    def test_elfuse_runs_and_reports_despite_qemu_failure(self):
+        from ltp_harness import cli, kirkdrive, vm
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = os.path.join(tmp, "fixture")
+            os.makedirs(os.path.join(fixture, "kirk", "libkirk"))
+            os.makedirs(os.path.join(fixture, "rootfs"))
+            for name in ("kirk/libkirk/main.py", ".complete"):
+                with open(os.path.join(fixture, name), "w") as handle:
+                    handle.write("x\n")
+            elfuse_bin = os.path.join(tmp, "elfuse")
+            with open(elfuse_bin, "w") as handle:
+                handle.write("#!/bin/sh\nexit 0\n")
+            os.chmod(elfuse_bin, 0o755)
+
+            qemu_report = self._fake_qemu_report()
+
+            def fake_run_qemu_backend(**kwargs):
+                path = os.path.join(kwargs["run_dir"], "kirk-qemu.json")
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(qemu_report, handle)
+
+            def fake_run_kirk(argv, env, log_path):
+                report_path = argv[argv.index("--json-report") + 1]
+                with open(report_path, "w", encoding="utf-8") as handle:
+                    json.dump(corpus.passing_report_fast(FAST_IDS), handle)
+                return 0
+
+            saved = (vm.run_qemu_backend, kirkdrive._run_kirk)
+            saved_env = os.environ.get("ELFUSE")
+            vm.run_qemu_backend = fake_run_qemu_backend
+            kirkdrive._run_kirk = fake_run_kirk
+            os.environ["ELFUSE"] = elfuse_bin
+            try:
+                rc = cli.main(
+                    [
+                        "run",
+                        "--backend",
+                        "all",
+                        "--tier",
+                        "fast",
+                        "--no-gate",
+                        "--fixture-dir",
+                        fixture,
+                        "--results-dir",
+                        os.path.join(tmp, "results"),
+                    ]
+                )
+            finally:
+                vm.run_qemu_backend, kirkdrive._run_kirk = saved
+                if saved_env is None:
+                    os.environ.pop("ELFUSE", None)
+                else:
+                    os.environ["ELFUSE"] = saved_env
+
+            self.assertEqual(rc, 0)
+            run_dirs = os.listdir(os.path.join(tmp, "results"))
+            self.assertEqual(len(run_dirs), 1)
+            gate_path = os.path.join(
+                tmp, "results", run_dirs[0], "gate-elfuse.json"
+            )
+            self.assertTrue(
+                os.path.isfile(gate_path),
+                "elfuse leg did not run or report after the qemu failure",
+            )
+            with open(gate_path, encoding="utf-8") as handle:
+                gate = json.load(handle)
+            reference = gate["reference"]
+            self.assertFalse(reference[self.FAILING_ID]["attesting"])
+            self.assertEqual(reference[self.FAILING_ID]["status"], "FAIL")
+            other = [t for t in FAST_IDS if t != self.FAILING_ID][0]
+            self.assertTrue(reference[other]["attesting"])
+
+
 class RecordAndGateTest(unittest.TestCase):
     def _write_report(self, run_dir, report):
         with open(

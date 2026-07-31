@@ -1124,8 +1124,11 @@ LTP_FIXTURE_DIR ?= $(FIXTURES_DIR)/ltp-aarch64
 LTP_RESULTS_DIR ?= $(CURDIR)/$(BUILD_DIR)/ltp-results
 LTP_TIER ?= fast
 LTP_TEST ?=
+# LTP_SWEEP=0 builds the small curated-tiers fixture instead of the
+# full runtest/syscalls sweep payload.
+LTP_SWEEP ?= 1
 
-.PHONY: build-ltp-fixture test-ltp test-ltp-elfuse test-ltp-qemu record-ltp-baseline
+.PHONY: build-ltp-fixture gen-ltp-sweep test-ltp test-ltp-elfuse test-ltp-qemu record-ltp-baseline
 
 # Check the optional fixture before building elfuse or any helper, so a
 # missing opt-in payload stays a useful setup SKIP even on hosts that
@@ -1140,7 +1143,11 @@ LTP_ENV := LTP_FIXTURE_DIR="$(LTP_FIXTURE_DIR)" LTP_RESULTS_DIR="$(LTP_RESULTS_D
 
 ## Download, verify, cross-build, and stage the pinned LTP + kirk fixture
 build-ltp-fixture:
-	$(Q)$(LTP_ENV) python3 tests/ltp/harness.py build-fixture $(if $(filter-out 0,$(FORCE)),--force)
+	$(Q)$(LTP_ENV) python3 tests/ltp/harness.py build-fixture $(if $(filter-out 0,$(FORCE)),--force) $(if $(filter 0,$(LTP_SWEEP)),--no-sweep)
+
+## Regenerate tests/ltp/manifest-sweep.json from the pinned runtest file
+gen-ltp-sweep:
+	$(Q)$(LTP_ENV) python3 tests/ltp/harness.py gen-sweep
 
 ## Run the selected LTP tier through elfuse under kirk (default: LTP_TIER=fast)
 test-ltp-elfuse:

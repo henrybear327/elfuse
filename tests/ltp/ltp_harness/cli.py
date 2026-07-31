@@ -68,6 +68,12 @@ def make_parser() -> argparse.ArgumentParser:
     build = sub.add_parser("build-fixture", help="build the pinned LTP payload")
     build.add_argument("--force", action="store_true")
     build.add_argument("--jobs", type=int, default=0)
+    build.add_argument(
+        "--no-sweep",
+        dest="sweep",
+        action="store_false",
+        help="build only the curated tiers' payload, not the full sweep",
+    )
     _add_fixture_arg(build)
 
     verify = sub.add_parser("verify-fixture", help="re-validate the built payload")

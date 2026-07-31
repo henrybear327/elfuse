@@ -14,11 +14,15 @@ Layout:
     bin/         qemu-supervisor (runs in the VM outside the chroot)
     fixture-metadata.json, inventory.txt, .complete
 
-Only the manifest-selected test directories are cross-compiled, not the
-full LTP tree; the pinned source of a selected test is located by its
-<id>.c file under testcases/. The .complete marker holds a fingerprint
-over pin.json, manifest.json, the helper sources, and this module, so
-any input change invalidates the fixture.
+The fixture has two flavors. The sweep flavor (default) cross-compiles
+the whole testcases/kernel/syscalls tree plus the out-of-tree
+directories the sweep manifest references, and stages the full
+installed testcases/bin so every sweep entry can run. --no-sweep keeps
+the small curated flavor, which compiles only the directories of the
+manifest-selected tests, located by their <id>.c under testcases/. The
+.complete marker holds a fingerprint over pin.json, both manifests,
+sweep-overrides.json, the helper sources, the generator, and this
+module, so any input change invalidates the fixture.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ltp_harness import EXIT_FAIL, EXIT_OK
 from ltp_harness import manifest as manifest_mod
+from ltp_harness import sweep as sweep_mod
 
 BUSYBOX_APPLETS = (
     "sh", "ls", "cat", "echo", "test", "id", "uname", "mkdir", "rm", "true",
@@ -171,22 +176,33 @@ def _verify_official_checksum(archive: str, asset_path: str, name: str) -> None:
         )
 
 
-def input_fingerprint(ltp_dir: str) -> str:
+def input_fingerprint(ltp_dir: str, sweep: bool = True) -> str:
     """Digest over every input that shapes the fixture."""
     digest = hashlib.sha256()
+    digest.update(b"sweep" if sweep else b"curated")
+    digest.update(b"\0")
     paths = [
         os.path.join(ltp_dir, "pin.json"),
         os.path.join(ltp_dir, "manifest.json"),
         os.path.abspath(__file__),
     ]
+    if sweep:
+        paths.append(os.path.join(ltp_dir, "manifest-sweep.json"))
+        paths.append(os.path.join(ltp_dir, "sweep-overrides.json"))
+        paths.append(os.path.abspath(sweep_mod.__file__))
     paths.extend(
         os.path.join(ltp_dir, "helpers", source) for source in HELPER_SOURCES
     )
     for path in paths:
         digest.update(os.path.basename(path).encode())
         digest.update(b"\0")
-        with open(path, "rb") as handle:
-            digest.update(handle.read())
+        # The sweep manifest is generated after the first build, so its
+        # absence must fingerprint deterministically rather than fail.
+        if os.path.isfile(path):
+            with open(path, "rb") as handle:
+                digest.update(handle.read())
+        else:
+            digest.update(b"<absent>")
         digest.update(b"\0")
     return digest.hexdigest()
 
@@ -266,6 +282,67 @@ def _configure_and_build(
         rel = os.path.relpath(build_dir, src_root)
         print(f"  MAKE    {rel}")
         _run(["make", job_flag, "-C", build_dir], env=env, capture=True)
+
+
+def _is_elf(path: str) -> bool:
+    """INSTALL_TARGETS entries can be shell scripts (test_ioctl), so
+    machine and closure checks must not assume every staged file is an
+    ELF binary."""
+    with open(path, "rb") as handle:
+        return handle.read(4) == b"\x7fELF"
+
+
+def _sweep_external_dirs(sweep_tests: List[Dict[str, Any]]) -> List[str]:
+    """Build directories the sweep references outside the recursive
+    testcases/kernel/syscalls make, relative to testcases/."""
+    return sorted(
+        {
+            test["source_dir"]
+            for test in sweep_tests
+            if not test["source_dir"].startswith("kernel/syscalls/")
+        }
+    )
+
+
+def _build_sweep_payload(
+    src_root: str,
+    external_dirs: List[str],
+    env: Dict[str, str],
+    jobs: int,
+) -> str:
+    """Cross-build and install the full sweep payload; returns the
+    staging directory holding the installed /opt/ltp tree.
+
+    Uses LTP's own per-directory install rules so INSTALL_TARGETS
+    scripts, helper binaries, and data files land in testcases/bin
+    exactly as upstream installs them.
+    """
+    job_flag = f"-j{jobs}" if jobs > 0 else f"-j{os.cpu_count() or 2}"
+    build_dirs = [os.path.join("testcases", "kernel", "syscalls")]
+    build_dirs.extend(os.path.join("testcases", rel) for rel in external_dirs)
+
+    staging = os.path.join(src_root, "sweep-install")
+    if os.path.isdir(staging):
+        shutil.rmtree(staging)
+
+    for rel in build_dirs:
+        print(f"  MAKE    {rel}")
+        _run(["make", job_flag, "-C", os.path.join(src_root, rel)], env=env, capture=True)
+    for rel in build_dirs:
+        print(f"  INSTALL {rel}")
+        _run(
+            [
+                "make",
+                job_flag,
+                "-C",
+                os.path.join(src_root, rel),
+                "install",
+                f"DESTDIR={staging}",
+            ],
+            env=env,
+            capture=True,
+        )
+    return staging
 
 
 def _readelf(cross_compile: str, args: List[str]) -> str:
@@ -516,7 +593,7 @@ def _build(
 ) -> int:
     fixture_dir = os.path.realpath(args.fixture_dir)
     marker = os.path.join(fixture_dir, ".complete")
-    fingerprint = input_fingerprint(ltp_dir)
+    fingerprint = input_fingerprint(ltp_dir, args.sweep)
 
     if os.path.isfile(marker) and not args.force:
         with open(marker, "r", encoding="utf-8") as handle:
@@ -568,28 +645,74 @@ def _build(
         print("  UNTAR   " + ltp_name)
         _extract_tar(ltp_archive, src_parent, f"ltp-full-{ltp_pin['release']}")
 
-    source_dirs = _find_test_source_dirs(src_root, tests)
     env = _build_env(cross_compile, ltp_pin["source_date_epoch"])
-    _configure_and_build(src_root, source_dirs, cross_compile, env, args.jobs)
+    merged = tests
+    staging = ""
+    if args.sweep:
+        overrides = sweep_mod.load_overrides(
+            os.path.join(ltp_dir, "sweep-overrides.json")
+        )
+        # Generation runs twice: before the build to learn which
+        # out-of-tree directories need compiling, and after it to mark
+        # unbuilt entries for the drift check against the committed
+        # sweep manifest.
+        pre_doc = sweep_mod.generate(
+            src_root, tests, overrides, ltp_pin["release"], mark_unbuilt=False
+        )
+        _configure_and_build(src_root, {}, cross_compile, env, args.jobs)
+        staging = _build_sweep_payload(
+            src_root, _sweep_external_dirs(pre_doc["tests"]), env, args.jobs
+        )
+        post_doc = sweep_mod.generate(
+            src_root, tests, overrides, ltp_pin["release"], mark_unbuilt=True
+        )
+        committed = os.path.join(ltp_dir, "manifest-sweep.json")
+        drift = sweep_mod.check_drift(committed, post_doc)
+        if drift:
+            raise FixtureError(
+                f"{drift}; run: make gen-ltp-sweep, review and commit the "
+                f"diff, then rebuild the fixture"
+            )
+        merged = manifest_mod.merge_tests(
+            tests, manifest_mod.load_sweep(committed)
+        )
+    else:
+        source_dirs = _find_test_source_dirs(src_root, tests)
+        _configure_and_build(src_root, source_dirs, cross_compile, env, args.jobs)
 
     rootfs = os.path.join(fixture_dir, "rootfs")
     if os.path.isdir(rootfs):
         shutil.rmtree(rootfs)
 
     tc_bin = os.path.join(rootfs, "opt", "ltp", "testcases", "bin")
-    staged_elves = []
+    if args.sweep:
+        installed_bin = os.path.join(staging, "opt", "ltp", "testcases", "bin")
+        if not os.path.isdir(installed_bin):
+            raise FixtureError(
+                f"the sweep install produced no {installed_bin}"
+            )
+        shutil.copytree(installed_bin, tc_bin)
+        for test in merged:
+            if test.get("unbuilt"):
+                continue
+            names = [os.path.basename(test["command"])] + test["helpers"]
+            for name in names:
+                if not os.path.isfile(os.path.join(tc_bin, name)):
+                    raise FixtureError(
+                        f"{name} is missing from the installed sweep payload"
+                    )
+    else:
+        for test in tests:
+            names = [test["id"]] + test["helpers"]
+            for name in names:
+                source = os.path.join(source_dirs[test["id"]], name)
+                if not os.path.isfile(source):
+                    raise FixtureError(
+                        f"{name} was not produced by the build in "
+                        f"{source_dirs[test['id']]}"
+                    )
+                _stage_file(source, os.path.join(tc_bin, name), 0o755)
     for test in tests:
-        names = [test["id"]] + test["helpers"]
-        for name in names:
-            source = os.path.join(source_dirs[test["id"]], name)
-            if not os.path.isfile(source):
-                raise FixtureError(
-                    f"{name} was not produced by the build in "
-                    f"{source_dirs[test['id']]}"
-                )
-            dest = os.path.join(tc_bin, name)
-            _stage_file(source, dest, 0o755)
-            staged_elves.append(dest)
         for entry in test["data"]:
             source = os.path.join(src_root, entry)
             dest = os.path.join(rootfs, "opt", "ltp", entry)
@@ -597,10 +720,16 @@ def _build(
                 raise FixtureError(f"data file {entry} missing from the source tree")
             _stage_file(source, dest, 0o644)
 
-    for staged in staged_elves:
-        machine = _elf_machine(cross_compile, staged)
-        if machine != "AArch64":
-            raise FixtureError(f"{staged} is {machine}, not AArch64")
+    staged_elves = []
+    for dirpath, _dirnames, filenames in os.walk(tc_bin):
+        for filename in sorted(filenames):
+            path = os.path.join(dirpath, filename)
+            if os.path.islink(path) or not _is_elf(path):
+                continue
+            machine = _elf_machine(cross_compile, path)
+            if machine != "AArch64":
+                raise FixtureError(f"{path} is {machine}, not AArch64")
+            staged_elves.append(path)
 
     _stage_file(
         os.path.join(src_root, "COPYING"),
@@ -615,7 +744,7 @@ def _build(
     _stage_library_closure(cross_compile, sysroot, rootfs, staged_elves)
     busybox_source, busybox_sha = _stage_busybox(cross_compile, repo_root, rootfs)
     helper_digests = _build_helpers(ltp_dir, cross_compile, env, fixture_dir, rootfs)
-    runtest_names = _stage_runtest_files(tests, rootfs)
+    runtest_names = _stage_runtest_files(merged, rootfs)
 
     for name, content in (
         ("passwd", ETC_PASSWD),
@@ -649,6 +778,7 @@ def _build(
     ).splitlines()[0]
     metadata = {
         "schema_version": 1,
+        "sweep": bool(args.sweep),
         "pins": {
             "ltp_release": ltp_pin["release"],
             "ltp_commit": ltp_pin["commit"],
@@ -709,16 +839,17 @@ def _verify(
     if not os.path.isdir(rootfs):
         raise FixtureError(f"{rootfs} is missing; run: make build-ltp-fixture")
 
+    with open(metadata_path, "r", encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    sweep = bool(metadata.get("sweep"))
+
     with open(marker, "r", encoding="utf-8") as handle:
         recorded = handle.read().strip()
-    fingerprint = input_fingerprint(ltp_dir)
+    fingerprint = input_fingerprint(ltp_dir, sweep)
     if recorded != fingerprint:
         raise FixtureError(
             "fixture inputs changed since the last build; run: make build-ltp-fixture"
         )
-
-    with open(metadata_path, "r", encoding="utf-8") as handle:
-        metadata = json.load(handle)
     expected_pins = {
         "ltp_release": pins["ltp"]["release"],
         "ltp_commit": pins["ltp"]["commit"],
@@ -753,14 +884,25 @@ def _verify(
     if hashlib.sha256(recorded_inventory.encode()).hexdigest() != current_digest:
         raise FixtureError("rootfs contents drifted from inventory.txt")
 
+    merged = tests
+    if sweep:
+        committed = os.path.join(ltp_dir, "manifest-sweep.json")
+        merged = manifest_mod.merge_tests(
+            tests, manifest_mod.load_sweep(committed)
+        )
+
     cross_compile = _resolve_cross_compile()
     tc_bin = os.path.join(rootfs, "opt", "ltp", "testcases", "bin")
     seeds = []
-    for test in tests:
-        for name in [test["id"]] + test["helpers"]:
+    for test in merged:
+        if test.get("unbuilt"):
+            continue
+        for name in [os.path.basename(test["command"])] + test["helpers"]:
             path = os.path.join(tc_bin, name)
             if not os.path.isfile(path):
                 raise FixtureError(f"{name} is missing from the staged rootfs")
+            if not _is_elf(path):
+                continue
             machine = _elf_machine(cross_compile, path)
             if machine != "AArch64":
                 raise FixtureError(f"{path} is {machine}, not AArch64")

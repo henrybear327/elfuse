@@ -278,7 +278,7 @@ and QEMU plus the boot fixtures (`bash tests/fetch-fixtures.sh`) for the
 reference backend. Build and check the fixture explicitly:
 
 ```sh
-make build-ltp-fixture
+make build-ltp-fixture        # full sweep payload; LTP_SWEEP=0 for curated-only
 python3 tests/ltp/harness.py verify-fixture
 ```
 
@@ -287,37 +287,68 @@ Run the lane:
 ```sh
 make test-ltp-qemu            # reference VM only
 make test-ltp-elfuse          # elfuse only
-make test-ltp                 # QEMU must fully pass before elfuse runs
+make test-ltp                 # QEMU first, then elfuse with attestation
 make test-ltp LTP_TIER=extended
+make test-ltp LTP_TIER=sweep  # the full upstream syscalls suite
 make test-ltp-elfuse LTP_TIER=fast LTP_TEST=readv01
 ```
 
-`fast` is the bounded gate; `extended` adds socket-message, process
-state, exec, interval-timer, and exit-group coverage; `nightly` holds
-the slower OFD-lock, CPU-time, and process-group cases; `all` selects
-everything. `LTP_TEST` selects one manifest test and must match the
-requested tier (or `LTP_TIER=all`); an unknown id is an error, never a
-silent skip. `LTP_TIMEOUT_MUL=2` scales every enforcement layer at once
-(LTP's own watchdog, the QEMU supervisor, kirk's exec timeout, the SSH
-caps). Results land under `build/ltp-results/<run>/` as kirk JSON (full
-per-test output), a machine-readable gate diff, and JUnit XML.
+The curated tiers are hand-picked: `fast` is the bounded gate;
+`extended` adds socket-message, process state, exec, interval-timer,
+and exit-group coverage; `nightly` holds the slower OFD-lock, CPU-time,
+and process-group cases. The `sweep` tier (plus `sweep-slow` for
+promoted long-runners) covers every remaining entry of upstream's
+`runtest/syscalls` file, generated into `tests/ltp/manifest-sweep.json`
+by `make gen-ltp-sweep`; `all` selects everything, 1506 tests. A sweep
+run is an on-demand or nightly lane, not part of `make check`: expect
+hours of serial wall clock per backend (each hang costs its 60 s
+timeout), a ~1.3 GiB staged rootfs, and a reference VM sized for it
+(4 GiB default, `QEMU_MEM` overrides). `LTP_TEST` selects one manifest
+test and must match the requested tier (or `LTP_TIER=all`); an unknown
+id is an error, never a silent skip, and targeting an `unbuilt` sweep
+entry names the reason. `LTP_TIMEOUT_MUL=2` scales every enforcement
+layer at once (LTP's own watchdog, the QEMU supervisor, kirk's exec
+timeout, the SSH caps). Results land under `build/ltp-results/<run>/`
+as kirk JSON (full per-test output), a machine-readable gate diff,
+pass-rate artifacts, and JUnit XML.
 
-Results are gated against committed per-subtest baselines
-(`tests/ltp/baseline-{elfuse,qemu}.json`), snapshots of current behavior
-keyed by each LTP result line's `file.c:line` with counts per result
-type. The gate fails only on movement: a known-BROKEN test staying
-BROKEN is green, a regression is red, and an improvement is also red
-until `make record-ltp-baseline` refreshes the snapshot in the same
-change, so the baselines never rot. Baselines embed the pin; bumping
-`tests/ltp/pin.json` forces a rebuild and a reviewed re-record. To add a
-test, extend `tests/ltp/manifest.json`, rebuild the fixture, run both
-backends, and commit the manifest with the recorded baseline diff.
+Both backends run tests at the same privilege: the QEMU supervisor
+drops to uid 1000 inside the chroot and elfuse runs as the host user,
+so root-requiring tests TCONF on both. That is the intended
+symmetric-privilege design (conformance compares like with like), not a
+coverage gap.
+
+Results are gated against committed per-subtest baselines, snapshots of
+current behavior keyed by each LTP result line's `file.c:line` with
+counts per result type: `tests/ltp/baseline-{elfuse,qemu}.json` for the
+curated tiers and `baseline-{elfuse,qemu}-sweep.json` for the sweep.
+The gate fails only on movement: a known-BROKEN test staying BROKEN is
+green, a regression is red, and an improvement is also red until
+`make record-ltp-baseline` refreshes the snapshot in the same change,
+so the baselines never rot. The QEMU reference no longer has to be
+green to run elfuse; its per-test verdict annotates the elfuse report
+instead (`reference` map in `gate-elfuse.json`), and only tests the
+reference passes attest conformance. Baselines embed the pin; bumping
+`tests/ltp/pin.json` forces a rebuild, a reviewed `make gen-ltp-sweep`
+diff, and a re-record. To add a curated test, extend
+`tests/ltp/manifest.json`, regenerate the sweep, rebuild the fixture,
+run both backends, and commit the manifests with the recorded baseline
+diff.
+
+Each run prints its pass rate and writes `passrate-<backend>.md` under
+the results directory: PASS over the selection, PASS excluding skips,
+and (for elfuse) the conformance rate over reference-passing tests,
+with a worst-first table grouped by syscall directory. That table is
+the fix-priority list for growing elfuse's syscall surface.
 
 ### Conformance baseline and known divergences
 
-The QEMU reference passes every selected case (24 PASS, 50 recorded
-subtest keys). The elfuse baseline records 9 PASS, 5 FAIL, and 10
-BROKEN. Two properties the suite depends on throughout are worth naming
+This subsection catalogues the curated tiers, where every divergence is
+analyzed individually. On them the QEMU reference passes every selected
+case (24 PASS, 50 recorded subtest keys) and the elfuse baseline
+records 9 PASS, 5 FAIL, and 10 BROKEN. Sweep-tier standing is read
+from the recorded `baseline-*-sweep.json` files and each run's
+`passrate-elfuse.md` worst-first table rather than catalogued here. Two properties the suite depends on throughout are worth naming
 before the divergence list, because almost every test exercises them:
 `/dev/shm` resolves through the single redirect in `path_translate_at`
 (`tests/test-dev-shm-paths.c` pins it), and PIDs and TIDs come from a
@@ -479,9 +510,10 @@ merely to hide a step:
    exposed divergence red by default and fix or document it in the
    baseline entry before recording.
 5. Once fast and extended are stable across repeated serial runs,
-   qualify nightly, then grow the manifest (a zero-length blocking
-   `recv` case is a good next addition; legacy `recv01` does not cover
-   it).
+   qualify nightly, then work down the sweep's worst-first pass-rate
+   table: promote a sweep group into the curated tiers once its
+   failures are understood and annotated, rather than editing the
+   sweep manifest or baselines merely to hide a step.
 
 ## Rosetta Limitations
 

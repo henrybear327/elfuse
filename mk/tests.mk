@@ -11,7 +11,7 @@
         test-matrix test-matrix-elfuse-aarch64 test-matrix-qemu-aarch64 \
         test-gvisor-conformance-parser build-gvisor-tests check-gvisor-targets \
         test-gvisor-conformance test-gvisor-conformance-elfuse \
-        test-gvisor-conformance-qemu \
+        test-gvisor-conformance-qemu gvisor-passrate \
         test-full test-multi-vcpu test-rwx test-sysroot-rename \
         test-case-collision test-case-collision-fallback test-getdents64-overlong \
         test-sysroot-tmp-remove test-sysroot-host-fallback test-sysroot-case-exact \
@@ -1417,6 +1417,10 @@ test-gvisor-conformance-qemu: test-gvisor-conformance-parser
 ## Run the pinned gVisor syscall tests on QEMU first, then elfuse
 test-gvisor-conformance: $(ELFUSE_BIN) test-gvisor-conformance-parser
 	$(call RUN_OPTIONAL_SKIP77,GVISOR_TESTS_DIR="$(GVISOR_TESTS_DIR)" bash tests/run-gvisor-conformance.sh all,gVisor test payload is not built)
+
+## Measure the raw gVisor pass rate on both backends, manifest ignored (missing payload is SKIP)
+gvisor-passrate: $(ELFUSE_BIN) test-gvisor-conformance-parser
+	$(call RUN_OPTIONAL_SKIP77,GVISOR_TESTS_DIR="$(GVISOR_TESTS_DIR)" bash tests/run-gvisor-passrate.sh all,gVisor test payload is not built)
 
 ## List upstream gVisor *_test targets available at the pin but not enabled in
 ## targets.txt (needs the checkout from build-gvisor-tests; missing is a SKIP)

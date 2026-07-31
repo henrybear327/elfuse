@@ -273,5 +273,101 @@ class RecordAndGateTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 2, proc.stdout)
 
 
+class SplitBaselineTest(unittest.TestCase):
+    """Sweep-tier results record into baseline-<backend>-sweep.json so
+    the curated baselines stay hand-reviewable; the gate loads exactly
+    the files the selection's tier classes need."""
+
+    SWEEP_ID = "accept01"
+
+    def test_record_partitions_by_tier_class(self):
+        report = corpus.passing_report_fast(FAST_IDS + [self.SWEEP_ID])
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = os.path.join(tmp, "run")
+            os.makedirs(run_dir)
+            with open(
+                os.path.join(run_dir, "kirk-elfuse.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(report, handle)
+
+            proc = run_harness(
+                [
+                    "record-baseline",
+                    "--backend",
+                    "elfuse",
+                    "--tier",
+                    "all",
+                    "--from-results",
+                    run_dir,
+                ],
+                {"LTP_BASELINE_DIR": tmp},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+
+            with open(
+                os.path.join(tmp, "baseline-elfuse.json"), encoding="utf-8"
+            ) as handle:
+                curated = json.load(handle)["tests"]
+            with open(
+                os.path.join(tmp, "baseline-elfuse-sweep.json"), encoding="utf-8"
+            ) as handle:
+                swept = json.load(handle)["tests"]
+
+            self.assertIn("readv01", curated)
+            self.assertNotIn(self.SWEEP_ID, curated)
+            self.assertEqual(list(swept), [self.SWEEP_ID])
+
+    def test_gate_needs_only_the_selected_tier_classes(self):
+        from ltp_harness import baseline, cli
+
+        pin = {"ltp_release": "r", "ltp_commit": "c", "kirk_tag": "t"}
+        curated_test = {"id": "fast01", "tier": "fast"}
+        sweep_test = {"id": "sweep01", "tier": "sweep"}
+
+        def write_baseline(path, tests):
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema_version": 1,
+                        "backend": "elfuse",
+                        "pin": pin,
+                        "tests": tests,
+                    },
+                    handle,
+                )
+
+        saved = os.environ.get("LTP_BASELINE_DIR")
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["LTP_BASELINE_DIR"] = tmp
+            try:
+                entry = {"status": "PASS", "subtests": None}
+                write_baseline(
+                    os.path.join(tmp, "baseline-elfuse.json"), {"fast01": entry}
+                )
+
+                # A curated-only selection must not require the sweep file.
+                recorded = cli._load_recorded("elfuse", pin, [curated_test])
+                self.assertEqual(list(recorded), ["fast01"])
+
+                # A sweep selection without its baseline file is exit-2
+                # material, not a silent pass.
+                with self.assertRaises(baseline.BaselineError):
+                    cli._load_recorded("elfuse", pin, [curated_test, sweep_test])
+
+                write_baseline(
+                    os.path.join(tmp, "baseline-elfuse-sweep.json"),
+                    {"sweep01": entry},
+                )
+                recorded = cli._load_recorded(
+                    "elfuse", pin, [curated_test, sweep_test]
+                )
+                self.assertEqual(sorted(recorded), ["fast01", "sweep01"])
+            finally:
+                if saved is None:
+                    os.environ.pop("LTP_BASELINE_DIR", None)
+                else:
+                    os.environ["LTP_BASELINE_DIR"] = saved
+
+
 if __name__ == "__main__":
     unittest.main()

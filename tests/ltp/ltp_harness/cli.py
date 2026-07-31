@@ -162,11 +162,52 @@ def _load_inputs(args: argparse.Namespace):
     return pins, tests, selection
 
 
-def _baseline_path(backend: str) -> str:
+def _baseline_path(backend: str, sweep: bool = False) -> str:
     # LTP_BASELINE_DIR exists for the harness selftests; production
-    # baselines are the committed files next to the manifest.
+    # baselines are the committed files next to the manifest. The sweep
+    # tiers record into their own files so the curated baselines stay
+    # hand-reviewable.
     base = os.environ.get("LTP_BASELINE_DIR", LTP_DIR)
-    return os.path.join(base, f"baseline-{backend}.json")
+    suffix = "-sweep" if sweep else ""
+    return os.path.join(base, f"baseline-{backend}{suffix}.json")
+
+
+def _is_sweep_test(test: Dict[str, Any]) -> bool:
+    return test["tier"] in manifest_mod.SWEEP_TIERS
+
+
+def _partition_ids(
+    tests: List[Dict[str, Any]]
+) -> Dict[bool, set]:
+    """Test ids keyed by sweep-class membership."""
+    parts: Dict[bool, set] = {False: set(), True: set()}
+    for test in tests:
+        parts[_is_sweep_test(test)].add(test["id"])
+    return parts
+
+
+def _load_recorded(
+    backend: str,
+    pin: Dict[str, str],
+    selection: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """The recorded baseline entries covering this selection, merged
+    across the curated and sweep baseline files. Only the files a
+    selected tier class needs are required to exist."""
+    parts = _partition_ids(selection)
+    recorded: Dict[str, Any] = {}
+    for sweep in (False, True):
+        if not parts[sweep]:
+            continue
+        loaded = baseline_mod.load(_baseline_path(backend, sweep), pin)
+        overlap = recorded.keys() & loaded.keys()
+        if overlap:
+            raise baseline_mod.BaselineError(
+                f"tests recorded in both baseline files: "
+                f"{', '.join(sorted(overlap))}"
+            )
+        recorded.update(loaded)
+    return recorded
 
 
 def _result_formats(tests: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -190,9 +231,16 @@ def _reference_map(
     qemu_observed: Dict[str, Any] = {}
     if os.path.isfile(_kirk_report_path(run_dir, "qemu")):
         qemu_observed = _observed_for_backend(run_dir, "qemu", tests)
-    elif os.path.isfile(_baseline_path("qemu")):
+    else:
         pin = manifest_mod.baseline_pin(pins)
-        qemu_observed = baseline_mod.load(_baseline_path("qemu"), pin)
+        parts = _partition_ids(selection)
+        for sweep in (False, True):
+            path = _baseline_path("qemu", sweep)
+            # A missing reference baseline degrades to UNRECORDED
+            # entries rather than an error: the elfuse result is still
+            # reportable, it just attests nothing.
+            if parts[sweep] and os.path.isfile(path):
+                qemu_observed.update(baseline_mod.load(path, pin))
 
     reference = {}
     for test in selection:
@@ -221,7 +269,7 @@ def _gate_backend(
 
     if not no_gate:
         pin = manifest_mod.baseline_pin(pins)
-        recorded = baseline_mod.load(_baseline_path(backend), pin)
+        recorded = _load_recorded(backend, pin, selection)
         selected_ids = {test["id"] for test in selection}
         sliced = {
             test_id: entry
@@ -384,26 +432,46 @@ def cmd_record_baseline(args: argparse.Namespace) -> int:
         run_dir = _execute_backends(args, pins, tests, selection)
 
     pin = manifest_mod.baseline_pin(pins)
-    manifest_ids = {test["id"] for test in tests}
+    tests_by_id = {test["id"]: test for test in tests}
     backends = list(BACKENDS) if args.backend == "all" else [args.backend]
 
     for backend in backends:
         observed = _observed_for_backend(run_dir, backend, tests)
-        path = _baseline_path(backend)
-        previous: Optional[Dict[str, Any]] = None
-        if os.path.isfile(path):
-            try:
-                previous = baseline_mod.load(path, pin)
-            except baseline_mod.BaselineError:
-                print(f"note: replacing {path} recorded against a different pin")
+        for sweep in (False, True):
+            part = {
+                test_id: entry
+                for test_id, entry in observed.items()
+                if test_id in tests_by_id
+                and _is_sweep_test(tests_by_id[test_id]) == sweep
+            }
+            if not part:
+                continue
+            path = _baseline_path(backend, sweep)
+            previous: Optional[Dict[str, Any]] = None
+            if os.path.isfile(path):
+                try:
+                    previous = baseline_mod.load(path, pin)
+                except baseline_mod.BaselineError:
+                    print(
+                        f"note: replacing {path} recorded against a "
+                        f"different pin"
+                    )
 
-        added, changed, pruned = baseline_mod.record(
-            path, backend, pin, observed, previous, manifest_ids
-        )
-        print(
-            f"recorded {path}: {len(observed)} tests "
-            f"({len(added)} added, {len(changed)} changed, {len(pruned)} pruned)"
-        )
+            # Unbuilt sweep entries are never observed, so keeping them
+            # out of keep_ids prunes their stale baseline entries.
+            keep_ids = {
+                test["id"]
+                for test in tests
+                if _is_sweep_test(test) == sweep and not test.get("unbuilt")
+            }
+            added, changed, pruned = baseline_mod.record(
+                path, backend, pin, part, previous, keep_ids
+            )
+            print(
+                f"recorded {path}: {len(part)} tests "
+                f"({len(added)} added, {len(changed)} changed, "
+                f"{len(pruned)} pruned)"
+            )
 
     return EXIT_OK
 

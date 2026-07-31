@@ -308,7 +308,11 @@ test and must match the requested tier (or `LTP_TIER=all`); an unknown
 id is an error, never a silent skip, and targeting an `unbuilt` sweep
 entry names the reason. `LTP_TIMEOUT_MUL=2` scales every enforcement
 layer at once (LTP's own watchdog, the QEMU supervisor, kirk's exec
-timeout, the SSH caps). Results land under `build/ltp-results/<run>/`
+timeout, the SSH caps). Baselines are recorded from a `tier=all` run,
+and kirk's exec-timeout is the selection maximum, so gate sweep
+results with `LTP_TIER=all` or a single `LTP_TEST`: a tier-scoped run
+gives timeout-marginal tests a shorter deadline than the recording and
+can classify them differently. Results land under `build/ltp-results/<run>/`
 as kirk JSON (full per-test output), a machine-readable gate diff,
 pass-rate artifacts, and JUnit XML.
 
@@ -346,9 +350,14 @@ the fix-priority list for growing elfuse's syscall surface.
 This subsection catalogues the curated tiers, where every divergence is
 analyzed individually. On them the QEMU reference passes every selected
 case (24 PASS, 50 recorded subtest keys) and the elfuse baseline
-records 9 PASS, 5 FAIL, and 10 BROKEN. Sweep-tier standing is read
+records 9 PASS, 5 FAIL, 10 BROKEN, with setitimer01 finishing as FAIL
+under the tier=all recording deadline. Sweep-tier standing is read
 from the recorded `baseline-*-sweep.json` files and each run's
-`passrate-elfuse.md` worst-first table rather than catalogued here. Two properties the suite depends on throughout are worth naming
+`passrate-elfuse.md` worst-first table rather than catalogued here; at
+the recorded snapshot the reference passes 749 of 1506 (85.8%
+excluding its 632 privilege/kernel-feature skips), elfuse passes 402
+(47.2% excluding skips), and the conformance rate is 53.0% of the 749
+attesting tests. Two properties the suite depends on throughout are worth naming
 before the divergence list, because almost every test exercises them:
 `/dev/shm` resolves through the single redirect in `path_translate_at`
 (`tests/test-dev-shm-paths.c` pins it), and PIDs and TIDs come from a

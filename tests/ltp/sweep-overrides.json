@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "comment": [
+    "Hand-maintained escape hatch for sweep entries the generator's",
+    "conventions cannot resolve (see ltp_harness/sweep.py). source names",
+    "the file that classifies the result format and, by default, the",
+    "build directory; source_dir overrides the build directory when the",
+    "binary is compiled from another directory's source. timeout_seconds",
+    "raises above the sweep default promote an entry to sweep-slow."
+  ],
+  "tests": {
+    "ioctl02": {
+      "source": "testcases/kernel/syscalls/ioctl/test_ioctl",
+      "notes": "POSIX shell script installed via INSTALL_TARGETS"
+    },
+    "nftw01": {
+      "source": "testcases/kernel/syscalls/nftw/nftw.c",
+      "notes": "multi-source legacy binary; nftw.c drives the suite"
+    },
+    "nftw6401": {
+      "source": "testcases/kernel/syscalls/nftw/nftw64.c",
+      "notes": "multi-source legacy binary; nftw64.c drives the suite"
+    },
+    "sethostname01": {
+      "source": "testcases/kernel/syscalls/setdomainname/setdomainname01.c",
+      "source_dir": "kernel/syscalls/sethostname",
+      "notes": "compiled from the setdomainname source with -DTEST_SETHOSTNAME"
+    },
+    "sethostname02": {
+      "source": "testcases/kernel/syscalls/setdomainname/setdomainname02.c",
+      "source_dir": "kernel/syscalls/sethostname",
+      "notes": "compiled from the setdomainname source with -DTEST_SETHOSTNAME"
+    },
+    "sethostname03": {
+      "source": "testcases/kernel/syscalls/setdomainname/setdomainname03.c",
+      "source_dir": "kernel/syscalls/sethostname",
+      "notes": "compiled from the setdomainname source with -DTEST_SETHOSTNAME"
+    }
+  }
+}

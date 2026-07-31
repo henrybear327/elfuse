@@ -420,7 +420,10 @@ def _stage_runtest_files(
     runtest_dir = os.path.join(rootfs, "opt", "ltp", "runtest")
     os.makedirs(runtest_dir, exist_ok=True)
     names = []
+    populated = {test["tier"] for test in tests if not test.get("unbuilt")}
     for tier in manifest_mod.TIERS:
+        if tier not in populated:
+            continue
         name = manifest_mod.suite_name(tier)
         content = manifest_mod.generate_runtest(tests, tier)
         with open(os.path.join(runtest_dir, name), "w", encoding="utf-8") as handle:

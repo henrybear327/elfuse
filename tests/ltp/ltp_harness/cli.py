@@ -18,11 +18,14 @@ from ltp_harness import EXIT_FAIL, EXIT_OK, EXIT_SKIP, EXIT_USAGE
 from ltp_harness import baseline as baseline_mod
 from ltp_harness import manifest as manifest_mod
 from ltp_harness import report as report_mod
+from ltp_harness import sweep as sweep_mod
 
 LTP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.realpath(os.path.join(LTP_DIR, os.pardir, os.pardir))
 
 MANIFEST_PATH = os.path.join(LTP_DIR, "manifest.json")
+SWEEP_MANIFEST_PATH = os.path.join(LTP_DIR, "manifest-sweep.json")
+SWEEP_OVERRIDES_PATH = os.path.join(LTP_DIR, "sweep-overrides.json")
 PIN_PATH = os.path.join(LTP_DIR, "pin.json")
 
 BACKENDS = ("elfuse", "qemu")
@@ -87,6 +90,16 @@ def make_parser() -> argparse.ArgumentParser:
     rep.add_argument("--results", required=True)
     rep.add_argument("--junit", default="")
 
+    gen = sub.add_parser(
+        "gen-sweep", help="regenerate manifest-sweep.json from the pinned runtest"
+    )
+    _add_fixture_arg(gen)
+    gen.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if the committed sweep manifest drifted instead of writing",
+    )
+
     return parser
 
 
@@ -118,10 +131,27 @@ def _skip(message: str) -> int:
     return EXIT_SKIP
 
 
+def _load_tests() -> List[Dict[str, Any]]:
+    """The merged curated + sweep test list. The sweep manifest is
+    optional so the curated tiers keep working in a tree that has not
+    generated it (make gen-ltp-sweep)."""
+    tests = manifest_mod.load_manifest(MANIFEST_PATH)
+    if os.path.isfile(SWEEP_MANIFEST_PATH):
+        sweep_tests = manifest_mod.load_sweep(SWEEP_MANIFEST_PATH)
+        tests = manifest_mod.merge_tests(tests, sweep_tests)
+    return tests
+
+
 def _load_inputs(args: argparse.Namespace):
     pins = manifest_mod.load_pins(PIN_PATH)
-    tests = manifest_mod.load_manifest(MANIFEST_PATH)
+    tests = _load_tests()
     selection = manifest_mod.select_tests(tests, args.tier, args.test)
+    unbuilt = manifest_mod.unbuilt_tests(tests, args.tier)
+    if unbuilt and not args.test:
+        print(
+            f"note: {len(unbuilt)} tier={args.tier} tests excluded as unbuilt "
+            f"(recorded in manifest-sweep.json)"
+        )
     return pins, tests, selection
 
 
@@ -300,7 +330,7 @@ def cmd_record_baseline(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    tests = manifest_mod.load_manifest(MANIFEST_PATH)
+    tests = _load_tests()
 
     reports = sorted(glob.glob(os.path.join(args.results, "kirk-*.json")))
     if not reports:
@@ -324,6 +354,56 @@ def cmd_report(args: argparse.Namespace) -> int:
         )
         print(f"wrote {junit}")
 
+    return EXIT_OK
+
+
+def _sweep_src_root(args: argparse.Namespace, pins: Dict[str, Any]) -> str:
+    src_root = os.path.join(
+        os.path.realpath(args.fixture_dir),
+        "src",
+        f"ltp-full-{pins['ltp']['release']}",
+    )
+    if not os.path.isdir(src_root):
+        raise HarnessSkip(
+            f"pinned LTP source is absent at {src_root}; "
+            f"run: make build-ltp-fixture"
+        )
+    return src_root
+
+
+def cmd_gen_sweep(args: argparse.Namespace) -> int:
+    pins = manifest_mod.load_pins(PIN_PATH)
+    curated = manifest_mod.load_manifest(MANIFEST_PATH)
+    overrides = sweep_mod.load_overrides(SWEEP_OVERRIDES_PATH)
+    src_root = _sweep_src_root(args, pins)
+
+    document = sweep_mod.generate(
+        src_root,
+        curated,
+        overrides,
+        pins["ltp"]["release"],
+        mark_unbuilt=True,
+    )
+
+    tests = document["tests"]
+    unbuilt = [test for test in tests if "unbuilt" in test]
+    slow = [test for test in tests if test["tier"] == "sweep-slow"]
+    print(
+        f"sweep: {len(tests)} entries ({len(slow)} sweep-slow, "
+        f"{len(unbuilt)} unbuilt, {len(curated)} curated ids skipped)"
+    )
+
+    if args.check:
+        drift = sweep_mod.check_drift(SWEEP_MANIFEST_PATH, document)
+        if drift:
+            raise manifest_mod.ManifestError(
+                f"{drift}; run: make gen-ltp-sweep and review the diff"
+            )
+        print(f"{SWEEP_MANIFEST_PATH} matches the pinned runtest")
+        return EXIT_OK
+
+    sweep_mod.write(SWEEP_MANIFEST_PATH, document)
+    print(f"wrote {SWEEP_MANIFEST_PATH}")
     return EXIT_OK
 
 
@@ -353,6 +433,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "run": cmd_run,
         "record-baseline": cmd_record_baseline,
         "report": cmd_report,
+        "gen-sweep": cmd_gen_sweep,
         "build-fixture": cmd_build_fixture,
         "verify-fixture": cmd_verify_fixture,
     }

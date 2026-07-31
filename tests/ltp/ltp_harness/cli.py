@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from ltp_harness import EXIT_FAIL, EXIT_OK, EXIT_SKIP, EXIT_USAGE
 from ltp_harness import baseline as baseline_mod
 from ltp_harness import manifest as manifest_mod
+from ltp_harness import passrate as passrate_mod
 from ltp_harness import report as report_mod
 from ltp_harness import sweep as sweep_mod
 
@@ -251,6 +252,18 @@ def _gate_backend(
                 f"not attest conformance (reference non-PASS or unrecorded)"
             )
 
+    tests_by_id = {test["id"]: test for test in tests}
+    rates = passrate_mod.compute(observed, reference, tests_by_id)
+    with open(
+        os.path.join(run_dir, f"passrate-{backend}.json"), "w", encoding="utf-8"
+    ) as handle:
+        json.dump(rates, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    with open(
+        os.path.join(run_dir, f"passrate-{backend}.md"), "w", encoding="utf-8"
+    ) as handle:
+        handle.write(passrate_mod.render_markdown(rates, backend, tier))
+
     report_mod.write_gate_json(
         os.path.join(run_dir, f"gate-{backend}.json"),
         backend,
@@ -258,6 +271,7 @@ def _gate_backend(
         gate,
         observed,
         reference,
+        rates,
     )
 
     kirk_report = _read_kirk_report(run_dir, backend)
@@ -276,6 +290,7 @@ def _gate_backend(
     )
     verdict = "green" if status == EXIT_OK else "RED"
     print(f"LTP {backend} tier={tier}: {summary} gate={verdict}")
+    print(passrate_mod.summary_line(rates, backend, tier))
 
     return status
 

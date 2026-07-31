@@ -16,11 +16,13 @@ def write_gate_json(
     gate: Optional[GateResult],
     observed: Dict[str, Any],
     reference: Optional[Dict[str, Any]] = None,
+    passrate: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Machine-readable gate outcome next to the kirk report.
 
     @reference carries the per-test QEMU verdict for the elfuse backend
-    (None on the qemu backend, which is its own reference).
+    (None on the qemu backend, which is its own reference); @passrate
+    carries the aggregate rates from passrate.compute.
     """
     data = {
         "backend": backend,
@@ -28,6 +30,7 @@ def write_gate_json(
         "gate": gate.to_dict() if gate else None,
         "observed": observed,
         "reference": reference,
+        "passrate": passrate,
     }
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, sort_keys=True)

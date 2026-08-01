@@ -115,6 +115,32 @@ Key files:
 | `src/runtime/proctitle.c` | argv / comm rewriting for `prctl PR_SET_NAME` |
 | `src/debug/gdbstub.c`, `gdbstub-rsp.c`, `gdbstub-reg.c` | GDB RSP stub |
 
+## Generic Dynamic Containers
+
+`src/dynamic-array.h` and `src/dynamic-array.c` provide the raw
+`dynamic_array_t` used by the procfs VMA snapshot and the string builder. Capacity
+is measured in element slots, while `count` is the number of logical elements.
+The allocation is one contiguous block of `capacity * element_size` bytes;
+both the count addition and the multiplication are checked before a growth.
+Arithmetic overflow reports `EOVERFLOW`, invalid arguments report `EINVAL`,
+and an allocation failure reports `ENOMEM`. Growth is transactional: on any
+failure the old pointer, count, and capacity remain valid.
+
+The generated typed facades own only their array storage. Elements are copied
+as trivially-copyable bytes, so the container does not call destructors and
+does not manage pointers or other resources held by an element. `destroy`
+frees the contiguous block and restores the zero state. A facade can therefore
+be declared as `{0}` and initialized lazily on its first operation.
+
+`string_builder_t` is a thin facade over a generated `char` container. The
+container count is the C-string length and excludes the terminator; its
+capacity accessor reports bytes including the trailing NUL slot. Reserve and
+append account for that slot, and every successful mutation restores
+`data[count] == '\0'`. `string_builder_append` accepts a C string and uses its
+first NUL as the end of the input. Formatted appends retain the existing
+two-pass `vsnprintf` behavior and commit only the prefix through the first NUL,
+matching standard C string semantics.
+
 ## Hypervisor.framework Constraints
 
 Apple HVF imposes a handful of constraints that shape the rest of the design:
@@ -768,6 +794,50 @@ under `/proc`, `/dev`, and a few Linux-expected compatibility files:
   BusyBox `ps`, `uptime`, and `top`.
 - Guest cwd handling preserves a virtual `/proc` working directory even
   though the host operates on synthetic backing directories.
+
+`/proc/self/smaps` and `/proc/<pid>/smaps` are generated from the same tracked
+VMA list as `/proc/self/maps`. The complete field set currently emitted for
+each VMA is the maps header followed by these 25 fields, in this order:
+
+```text
+Size, KernelPageSize, MMUPageSize, Rss, Pss, Pss_Dirty,
+Shared_Clean, Shared_Dirty, Private_Clean, Private_Dirty, Referenced,
+Anonymous, KSM, LazyFree, AnonHugePages, ShmemPmdMapped, FilePmdMapped,
+Shared_Hugetlb, Private_Hugetlb, Swap, SwapPss, Locked, THPeligible,
+ProtectionKey, VmFlags
+```
+
+`Size` is the VMA length in KiB. `KernelPageSize` and `MMUPageSize` are
+reported as 4 KiB. `Shared_Dirty` is the one page-accounting field with a
+non-zero value: in a fork child, writable private anonymous VMAs report their
+full VMA size because they are logically shared with the parent's CoW
+snapshot. Every other numeric counter is emitted as zero, including
+`THPeligible` and `ProtectionKey`. `VmFlags` is evidence-based and contains
+only the permission/sharing flags represented by the tracked VMA (`rd`, `wr`,
+`ex`, `sh`, and `nr` when applicable); no untracked kernel flags are invented.
+elfuse always emits `THPeligible` and `ProtectionKey`; consumers comparing
+against a real Linux kernel should tolerate either conditional field being
+absent.
+These are coarse VMA-level values, not host page-residency, dirty-bit, or
+proportional-sharing accounting, so they are suitable for fork-safety checks
+but not precise memory profiling. `smaps_rollup` is not implemented.
+
+Synthetic proc directories have explicit snapshot boundaries. The backing
+trees reached by opening `/proc` or `/proc/self` are materialized once, on the
+first access, and their initial `stat`, `status`, `cmdline`, `maps`, and `smaps`
+files remain fixed for the process lifetime. An absolute open of one of those
+proc paths is intercepted directly and generates fresh content; opening the
+same name through an already-open synthetic directory reads that directory's
+snapshot. `/proc/self/fd` and `/proc/self/fdinfo` are rebuilt into an
+independent scratch directory on every open, so each directory fd sees the
+guest-fd table as it existed at that open and concurrent enumerations cannot
+mutate one another. `/proc/self/task` is repopulated from the current thread
+set whenever the directory is opened. These boundaries are intentional: a
+directory stream is stable while it is being read, while dynamic task and fd
+listings refresh only when a new directory is opened. The synthetic
+`/sys/devices/system/cpu` tree follows the one-shot rule: its CPU count,
+cpumask files, and `cpuN` directories are captured on first access and then
+remain fixed.
 
 Related implementation: `src/runtime/procemu.c`, `src/syscall/path.c`,
 `src/syscall/fs.c`, `src/syscall/proc-state.c`.

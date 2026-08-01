@@ -14,6 +14,8 @@
         test-sysroot-tmp-remove test-sysroot-host-fallback test-sysroot-case-exact \
         test-sysroot-create-paths test-fork-ipc-protocol-host \
         test-vcpu-run-hooks-host test-identity-override-host \
+        test-dynamic-array-host \
+        test-string-builder-host \
         test-proctitle-host test-proctitle-low-stack \
         test-sysroot-procfs-exec test-timeout-disable test-launch-flags \
         test-fuse-alpine \
@@ -100,7 +102,9 @@ check-sanitizer: $(ELFUSE_BIN) $(TEST_DEPS) \
 		$(BUILD_DIR)/test-teardown-live-vcpu-host \
 		$(BUILD_DIR)/test-casefold-host \
 		$(BUILD_DIR)/test-casefold-walk-host \
-		$(BUILD_DIR)/test-absock-names-host
+		$(BUILD_DIR)/test-absock-names-host \
+		$(BUILD_DIR)/test-dynamic-array-host \
+		$(BUILD_DIR)/test-string-builder-host
 	@bash tests/driver.sh -e $(ELFUSE_BIN) -d $(TEST_DIR) -v -s '$(SANITIZER_SECTIONS)'
 	@printf "\n$(BLUE)━━━ TLBI RVAE1IS encoder unit test ━━━$(RESET)\n"
 	@$(BUILD_DIR)/test-tlbi-encoder-host
@@ -118,6 +122,10 @@ check-sanitizer: $(ELFUSE_BIN) $(TEST_DEPS) \
 	@$(BUILD_DIR)/test-casefold-walk-host
 	@printf "\n$(BLUE)━━━ absock derived-name unit test ━━━$(RESET)\n"
 	@$(BUILD_DIR)/test-absock-names-host
+	@printf "\n$(BLUE)━━━ dynamic array unit test ━━━$(RESET)\n"
+	@$(BUILD_DIR)/test-dynamic-array-host
+	@printf "\n$(BLUE)━━━ string builder unit test ━━━$(RESET)\n"
+	@$(BUILD_DIR)/test-string-builder-host
 	@printf "\n$(BLUE)━━━ one on-disk name per guest name ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-sysroot-name-unique
 	@printf "\n$(BLUE)━━━ relative and dirfd-relative names ━━━$(RESET)\n"
@@ -138,7 +146,9 @@ check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
 		$(BUILD_DIR)/test-teardown-live-vcpu-host \
 		$(BUILD_DIR)/test-casefold-host \
 		$(BUILD_DIR)/test-casefold-walk-host \
-		$(BUILD_DIR)/test-absock-names-host
+		$(BUILD_DIR)/test-absock-names-host \
+		$(BUILD_DIR)/test-dynamic-array-host \
+		$(BUILD_DIR)/test-string-builder-host
 	@bash tests/driver.sh -e $(ELFUSE_BIN) -d $(TEST_DIR) -v
 	@printf "\n$(BLUE)━━━ TLBI RVAE1IS encoder unit test ━━━$(RESET)\n"
 	@$(BUILD_DIR)/test-tlbi-encoder-host
@@ -156,6 +166,10 @@ check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
 	@$(BUILD_DIR)/test-casefold-walk-host
 	@printf "\n$(BLUE)━━━ absock derived-name unit test ━━━$(RESET)\n"
 	@$(BUILD_DIR)/test-absock-names-host
+	@printf "\n$(BLUE)━━━ dynamic array unit test ━━━$(RESET)\n"
+	@$(BUILD_DIR)/test-dynamic-array-host
+	@printf "\n$(BLUE)━━━ string builder unit test ━━━$(RESET)\n"
+	@$(BUILD_DIR)/test-string-builder-host
 	@printf "\n$(BLUE)━━━ one on-disk name per guest name ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-sysroot-name-unique
 	@printf "\n$(BLUE)━━━ relative and dirfd-relative names ━━━$(RESET)\n"
@@ -1463,6 +1477,16 @@ test-fork-ipc-protocol-host: $(BUILD_DIR)/test-fork-ipc-protocol-host
 ## Run the vCPU run-loop hook API unit test
 test-vcpu-run-hooks-host: $(BUILD_DIR)/test-vcpu-run-hooks-host
 	$(BUILD_DIR)/test-vcpu-run-hooks-host
+
+# String builder unit test
+## Run the growable string builder host unit test
+test-string-builder-host: $(BUILD_DIR)/test-string-builder-host
+	$(BUILD_DIR)/test-string-builder-host
+
+# Generic dynamic array unit test
+## Run the raw/typed dynamic array host unit test
+test-dynamic-array-host: $(BUILD_DIR)/test-dynamic-array-host
+	$(BUILD_DIR)/test-dynamic-array-host
 
 # Proctitle argv-tail regression
 ## Run the deterministic argv-tail overshoot guard test

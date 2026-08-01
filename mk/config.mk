@@ -25,6 +25,8 @@ NATIVE_TESTS := tests/test-multi-vcpu.c tests/test-rwx.c \
                 tests/test-casefold-host.c \
                 tests/test-casefold-walk-host.c \
                 tests/test-absock-names-host.c \
+                tests/test-dynamic-array-host.c \
+                tests/test-string-builder-host.c \
                 tests/probe-volume-naming.c
 SPECIAL_TEST_SRCS := tests/test-lowbase-mem.c
 SPECIAL_TEST_BINS := $(BUILD_DIR)/test-lowbase-mem-200000 $(BUILD_DIR)/test-lowbase-mem-300000

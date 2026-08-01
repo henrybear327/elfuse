@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
@@ -63,6 +64,69 @@ static inline ssize_t read_file_nul(const char *path, char *buf, size_t bufsz)
     ssize_t total = read_fd_all_nul(fd, buf, bufsz);
     close(fd);
     return total;
+}
+
+/* Read a file whose size is not available from st_size (for example a proc
+ * file) until EOF, growing the buffer and appending a NUL terminator. */
+static inline ssize_t read_file_dynamic_nul(const char *path, char **buf_out,
+                                            size_t *len_out)
+{
+    if (!path || !buf_out || !len_out) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return -1;
+
+    size_t cap = 64 * 1024;
+    size_t len = 0;
+    char *buf = malloc(cap);
+    if (!buf) {
+        close(fd);
+        errno = ENOMEM;
+        return -1;
+    }
+
+    for (;;) {
+        if (len + 1 >= cap) {
+            if (cap > SIZE_MAX / 2) {
+                free(buf);
+                close(fd);
+                errno = EOVERFLOW;
+                return -1;
+            }
+            size_t new_cap = cap * 2;
+            char *new_buf = realloc(buf, new_cap);
+            if (!new_buf) {
+                free(buf);
+                close(fd);
+                errno = ENOMEM;
+                return -1;
+            }
+            buf = new_buf;
+            cap = new_cap;
+        }
+
+        ssize_t n = read(fd, buf + len, cap - len - 1);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0) {
+            free(buf);
+            close(fd);
+            return -1;
+        }
+        if (n == 0)
+            break;
+        len += (size_t) n;
+    }
+    close(fd);
+
+    buf[len] = '\0';
+    *buf_out = buf;
+    *len_out = len;
+    return (ssize_t) len;
 }
 
 static inline ssize_t raw_read_fd_all_nul(int fd, char *buf, size_t bufsz)

@@ -2052,8 +2052,8 @@ int guest_region_add_ex_owned_gpa(guest_t *g,
     r->flags = flags;
     r->offset = offset;
     r->backing_fd = owned_backing_fd;
-    r->shared = (flags & 0x01) != 0;      /* LINUX_MAP_SHARED = 0x01 */
-    r->noreserve = (flags & 0x4000) != 0; /* LINUX_MAP_NORESERVE = 0x4000 */
+    r->shared = (flags & LINUX_MAP_SHARED) != 0;
+    r->noreserve = (flags & LINUX_MAP_NORESERVE) != 0;
     r->backing_ro = false;
     guest_region_clear_overlay(r);
     if (name) {

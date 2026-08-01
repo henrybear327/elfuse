@@ -25,7 +25,7 @@
 #define PROC_NOT_INTERCEPTED (-2)
 
 /* Intercept openat for /proc and /dev paths. The guest_t pointer is needed to
- * generate /proc/self/maps from region data.
+ * generate /proc/self/maps and /proc/self/smaps from region data.
  * Returns a host fd on match (caller should fd_alloc it), -1 on error with
  * errno set, or PROC_NOT_INTERCEPTED if the path is not intercepted.
  */

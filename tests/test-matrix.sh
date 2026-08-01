@@ -705,6 +705,7 @@ run_unit_tests()
     test_rc "$runner" "test-procfs-exec" 0 "$bindir/test-procfs-exec"
     test_rc "$runner" "test-proc-limits" 0 "$bindir/test-proc-limits"
     test_rc "$runner" "test-proc-fidelity" 0 "$bindir/test-proc-fidelity"
+    test_rc "$runner" "test-proc-smap" 0 "$bindir/test-proc-smap"
 
     printf "\nNetwork\n"
     test_check "$runner" "test-net" "0 failed" "$bindir/test-net"
@@ -1314,8 +1315,8 @@ run_suite()
 # observed counts diverge. apple-unknown is the fallback row for SoC strings the
 # detector does not recognize yet.
 EXPECTED_BASELINES=(
-    "elfuse-aarch64|241|0"
-    "qemu-aarch64|224|0"
+    "elfuse-aarch64|242|0"
+    "qemu-aarch64|225|0"
     "elfuse-x86_64:apple-m1-m2|71|0"
     "elfuse-x86_64:apple-m3-plus|71|0"
     "elfuse-x86_64:apple-unknown|71|0"

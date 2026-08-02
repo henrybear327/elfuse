@@ -357,7 +357,37 @@ from the recorded `baseline-*-sweep.json` files and each run's
 the recorded snapshot the reference passes 749 of 1506 (85.8%
 excluding its 632 privilege/kernel-feature skips), elfuse passes 402
 (47.2% excluding skips), and the conformance rate is 53.0% of the 749
-attesting tests. Two properties the suite depends on throughout are worth naming
+attesting tests.
+
+#### Why the reference does not pass everything
+
+The reference VM defines what a test should do; it is not expected to
+run every test. Roughly half the suite is inapplicable in an
+unprivileged VM, so a raw reference pass rate near 50% is the designed
+outcome rather than a sign that the reference is broken. The recorded
+snapshot divides as:
+
+| Count | Outcome | Cause |
+| ----- | ------- | ----- |
+| 749 | PASS | runs and passes; the attestation denominator |
+| 470 | TCONF | needs root, which neither backend has by design |
+| 104 | TCONF | missing optional libraries (libnuma, libaio, XFS headers), syscalls absent on aarch64, or kernel policy (bpf and io_uring lockdown, no LSM sysfs) |
+| 58 | TCONF | legacy tests skipping through their exit code, printing no reason line |
+| 75 | BROKEN | the fixture kernel exposes no config, so tests declaring `.needs_kconfigs` cannot resolve one |
+| 18 | BROKEN | needs a block device, unavailable unprivileged in the chroot |
+| 6 | BROKEN | resource-file copy, which the staged busybox applet set now covers and which clears at the next re-record |
+| 7 | BROKEN | other environment limits: no devpts, root-only procfs writes |
+| 19 | FAIL | genuine reference failures, mostly wakeup-latency bounds (`nanosleep01`, `poll02`, `select02`, `pselect01`) that overshoot under virtualized timers |
+
+The 470 root skips follow directly from the symmetric privilege rule
+above: running the reference as root would pass tests elfuse can never
+attempt, measuring the VM rather than elfuse. Two buckets are worth
+reclaiming. Shipping the fixture kernel's config and pointing
+`KCONFIG_PATH` at it converts the 75 config entries into real results,
+and cross-building libnuma and libaio adds about 20 more. Both change
+the payload, so both need a fixture rebuild and a reviewed re-record.
+
+Two properties the suite depends on throughout are worth naming
 before the divergence list, because almost every test exercises them:
 `/dev/shm` resolves through the single redirect in `path_translate_at`
 (`tests/test-dev-shm-paths.c` pins it), and PIDs and TIDs come from a

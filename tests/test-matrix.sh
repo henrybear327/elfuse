@@ -363,8 +363,8 @@ QEMU_SKIP="
 #   under elfuse, while a real kernel allows the open and only rejects the
 #   write -- a genuine behavioral difference worth reviewing on its own,
 #   not just an environment artifact.
-# test-proc-smap: validates elfuse's synthetic smaps VMA snapshot, including a
-#   coarse Shared_Dirty compatibility signal for untouched writable VMAs. Real
+# test-proc-smap: validates elfuse's synthetic smaps VMA snapshot, including
+#   per-VMA Shared_Dirty inheritance and exclusion of post-fork VMAs. Real
 #   Linux smaps exposes kernel-owned VMA/page accounting instead, so this is
 #   intentionally not a reference-kernel invariant.
 

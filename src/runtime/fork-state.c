@@ -926,6 +926,13 @@ int fork_ipc_recv_process_state(int ipc_fd, guest_t *g, signal_state_t *sig)
         return -1;
 
     g->nregions = (int) recv_regions;
+    /* Every VMA present in the serialized parent snapshot is inherited by
+     * this child, regardless of whether the parent itself created it after an
+     * earlier fork. New mappings added in this process start unmarked through
+     * guest_region_add_ex_owned[_gpa].
+     */
+    for (int i = 0; i < g->nregions; i++)
+        g->regions[i].inherited_at_fork = true;
     g->regions_tracker_stale =
         (regions_tracker_stale != 0) || (num_guest_regions > recv_regions);
 

@@ -809,18 +809,21 @@ ProtectionKey, VmFlags
 
 `Size` is the VMA length in KiB. `KernelPageSize` and `MMUPageSize` are
 reported as 4 KiB. `Shared_Dirty` is the one page-accounting field with a
-non-zero value: in a fork child, writable private anonymous VMAs report their
-full VMA size because they are logically shared with the parent's CoW
-snapshot. Every other numeric counter is emitted as zero, including
-`THPeligible` and `ProtectionKey`. `VmFlags` is evidence-based and contains
-only the permission/sharing flags represented by the tracked VMA (`rd`, `wr`,
+non-zero value: in a fork child, writable private anonymous VMAs that existed
+in the parent's CoW snapshot report their full VMA size because they are
+logically shared with that snapshot. Every other numeric counter, including
+`THPeligible` and `ProtectionKey`, is emitted as zero. `VmFlags` is
+evidence-based and contains only the permission/sharing flags represented by
+the tracked VMA (`rd`, `wr`,
 `ex`, `sh`, and `nr` when applicable); no untracked kernel flags are invented.
 elfuse always emits `THPeligible` and `ProtectionKey`; consumers comparing
 against a real Linux kernel should tolerate either conditional field being
 absent.
 These are coarse VMA-level values, not host page-residency, dirty-bit, or
 proportional-sharing accounting, so they are suitable for fork-safety checks
-but not precise memory profiling. `smaps_rollup` is not implemented.
+but not precise memory profiling. The fork-child marker is tracked per VMA, so
+writable private anonymous mappings created after fork are excluded from the
+compatibility signal. `smaps_rollup` is not implemented.
 
 Synthetic proc directories have explicit snapshot boundaries. The backing
 trees reached by opening `/proc` or `/proc/self` are materialized once, on the

@@ -103,6 +103,7 @@ typedef struct {
     uint64_t start, end;
     int prot, flags;
     uint64_t offset;
+    bool inherited_at_fork;
     char name[64];
     /* Preserve the producer order for equal-start entries when qsort() is
      * used below. Existing snapshots placed equal-start entries after one
@@ -115,13 +116,45 @@ typedef struct {
  * allocation bookkeeping in the generic array implementation. */
 DYNAMIC_ARRAY_DEFINE(maps_entries, maps_entry_t)
 
+/* Round a VMA endpoint up to the 4 KiB granularity exposed by procfs without
+ * allowing the addition to wrap. There is no representable page-aligned
+ * endpoint above UINT64_MAX - 0xFFF, so saturate to UINT64_MAX and let the
+ * caller's normal end <= start validation handle an empty interval.
+ */
+static uint64_t maps_align_up_page(uint64_t value)
+{
+    const uint64_t mask = 0xFFFULL;
+    if (value > UINT64_MAX - mask)
+        return UINT64_MAX;
+    return (value + mask) & ~mask;
+}
+
+/* Translate a shadow VMA's cursor into its file offset. A wrapped offset would
+ * produce a syntactically valid but semantically wrong maps entry, so surface
+ * the overflow to the intercepted open instead.
+ */
+static int maps_shadow_offset(const guest_region_t *shadow,
+                              uint64_t shadow_start,
+                              uint64_t cursor,
+                              uint64_t *offset_out)
+{
+    uint64_t delta = cursor - shadow_start;
+    if (delta > UINT64_MAX - shadow->offset) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    *offset_out = shadow->offset + delta;
+    return 0;
+}
+
 static int maps_entries_append_entry(maps_entries_t *entries,
                                      uint64_t start,
                                      uint64_t end,
                                      int prot,
                                      int flags,
                                      uint64_t offset,
-                                     const char *name)
+                                     const char *name,
+                                     bool inherited_at_fork)
 {
     if (end <= start)
         return 0;
@@ -139,6 +172,7 @@ static int maps_entries_append_entry(maps_entries_t *entries,
         .prot = prot,
         .flags = flags,
         .offset = offset,
+        .inherited_at_fork = inherited_at_fork,
         .order = maps_entries_count(entries),
     };
     if (name && name[0])
@@ -183,6 +217,7 @@ static void maps_entries_merge_adjacent(maps_entries_t *entries)
             current->prot == previous->prot &&
             current->flags == previous->flags &&
             current->offset == previous->offset &&
+            current->inherited_at_fork == previous->inherited_at_fork &&
             strcmp(current->name, previous->name) == 0) {
             previous->end = current->end;
             continue;
@@ -204,14 +239,14 @@ static int maps_entries_append_shadow_gaps(maps_entries_t *entries,
                                            int nlive)
 {
     uint64_t shadow_start = shadow->start & ~0xFFFULL;
-    uint64_t shadow_end = (shadow->end + 0xFFFULL) & ~0xFFFULL;
+    uint64_t shadow_end = maps_align_up_page(shadow->end);
     if (shadow_end <= shadow_start)
         return 0;
 
     uint64_t cursor = shadow_start;
     for (int i = 0; i < nlive && cursor < shadow_end; i++) {
         uint64_t live_start = live_regions[i].start & ~0xFFFULL;
-        uint64_t live_end = (live_regions[i].end + 0xFFFULL) & ~0xFFFULL;
+        uint64_t live_end = maps_align_up_page(live_regions[i].end);
         if (live_end <= live_start || live_end <= cursor)
             continue;
         if (live_start >= shadow_end)
@@ -220,13 +255,12 @@ static int maps_entries_append_shadow_gaps(maps_entries_t *entries,
         if (live_start > cursor) {
             uint64_t gap_end =
                 live_start < shadow_end ? live_start : shadow_end;
-            uint64_t offset = shadow->offset;
-            uint64_t delta = cursor - shadow_start;
-            if (delta <= UINT64_MAX - offset)
-                offset += delta;
-            if (maps_entries_append_entry(entries, cursor, gap_end,
-                                          shadow->prot, shadow->flags, offset,
-                                          shadow->name) < 0)
+            uint64_t offset;
+            if (maps_shadow_offset(shadow, shadow_start, cursor, &offset) < 0)
+                return -1;
+            if (maps_entries_append_entry(
+                    entries, cursor, gap_end, shadow->prot, shadow->flags,
+                    offset, shadow->name, shadow->inherited_at_fork) < 0)
                 return -1;
         }
         if (live_end > cursor)
@@ -234,12 +268,12 @@ static int maps_entries_append_shadow_gaps(maps_entries_t *entries,
     }
 
     if (cursor < shadow_end) {
-        uint64_t offset = shadow->offset;
-        uint64_t delta = cursor - shadow_start;
-        if (delta <= UINT64_MAX - offset)
-            offset += delta;
+        uint64_t offset;
+        if (maps_shadow_offset(shadow, shadow_start, cursor, &offset) < 0)
+            return -1;
         if (maps_entries_append_entry(entries, cursor, shadow_end, shadow->prot,
-                                      shadow->flags, offset, shadow->name) < 0)
+                                      shadow->flags, offset, shadow->name,
+                                      shadow->inherited_at_fork) < 0)
             return -1;
     }
     return 0;
@@ -2495,6 +2529,7 @@ static int proc_build_maps_entries(const guest_t *g,
 
     maps_entries_t entries = {0};
     int result = -1;
+    int saved_errno = 0;
 
     pthread_mutex_lock(&mmap_lock);
 
@@ -2510,18 +2545,20 @@ static int proc_build_maps_entries(const guest_t *g,
     for (int i = 0; i < nregions; i++) {
         const guest_region_t *r = &g->regions[i];
         uint64_t start = r->start & ~0xFFFULL;
-        uint64_t end = (r->end + 0xFFFULL) & ~0xFFFULL;
+        uint64_t end = maps_align_up_page(r->end);
         size_t count = maps_entries_count(&entries);
         maps_entry_t *last =
             count > 0 ? maps_entries_at(&entries, count - 1) : NULL;
         if (last != NULL && last->end == start && last->prot == r->prot &&
             last->flags == r->flags && last->offset == r->offset &&
+            last->inherited_at_fork == r->inherited_at_fork &&
             !strcmp(last->name, r->name)) {
             last->end = end;
             continue;
         }
         if (maps_entries_append_entry(&entries, start, end, r->prot, r->flags,
-                                      r->offset, r->name) < 0)
+                                      r->offset, r->name,
+                                      r->inherited_at_fork) < 0)
             goto out_unlock;
     }
 
@@ -2547,10 +2584,11 @@ static int proc_build_maps_entries(const guest_t *g,
     result = (int) maps_entries_count(&entries);
 
 out_unlock:
+    saved_errno = errno;
     pthread_mutex_unlock(&mmap_lock);
     if (result < 0) {
         maps_entries_destroy(&entries);
-        errno = ENOMEM;
+        errno = saved_errno;
         return -1;
     }
     *entries_out = entries;
@@ -2655,9 +2693,10 @@ out:
 
 /* Emit a Linux-shaped /proc/self/smaps approximation. The runtime tracks
  * guest VMAs and logical fork snapshots, but it cannot observe kernel page
- * residency or dirty bits on the host. For a fork child, writable private
- * anonymous VMAs therefore report their full VMA size as Shared_Dirty; all
- * other fields that require kernel page accounting are stable zeroes.
+ * residency or dirty bits on the host. Writable private anonymous VMAs that
+ * were present in the most recent fork snapshot report their full VMA size as
+ * Shared_Dirty; newly-created VMAs are excluded. All other fields that
+ * require kernel page accounting are stable zeroes.
  */
 static int proc_open_self_smaps(const guest_t *g)
 {
@@ -2672,7 +2711,6 @@ static int proc_open_self_smaps(const guest_t *g)
     if (string_builder_init(&builder, initial_capacity) < 0)
         goto out;
 
-    bool fork_child = proc_get_ppid() != 0;
     for (int i = 0; i < nentries; i++) {
         const maps_entry_t *e = maps_entries_at_const(&entries, (size_t) i);
         char header[256];
@@ -2686,8 +2724,8 @@ static int proc_open_self_smaps(const guest_t *g)
         bool noreserve = (e->flags & LINUX_MAP_NORESERVE) != 0;
         bool private_anon =
             (e->flags & LINUX_MAP_PRIVATE) && anonymous && !shared;
-        bool logical_shared_dirty =
-            fork_child && private_anon && (e->prot & LINUX_PROT_WRITE);
+        bool logical_shared_dirty = e->inherited_at_fork && private_anon &&
+                                    (e->prot & LINUX_PROT_WRITE);
         uint64_t shared_dirty_kb = logical_shared_dirty ? size_kb : 0;
 
         char vmflags[64];

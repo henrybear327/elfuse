@@ -83,6 +83,7 @@ typedef struct {
     uint64_t overlay_start;
     uint64_t overlay_end;
     bool backing_ro;
+    bool inherited_at_fork;
     char name[sizeof(((guest_region_t *) 0)->name)];
 } region_snapshot_t;
 
@@ -207,19 +208,67 @@ static void mark_overlay_metadata_range(guest_t *g,
     }
 }
 
-/* Mark the region spanning exactly [start, end) as backed by a fd that lost
- * write access, so sys_mprotect rejects a later PROT_WRITE upgrade. Exact match
- * (not overlap) because callers use this right after installing a single
- * freshly-added region.
+/* Mark every region overlapping [start, end) as backed by a fd that lost write
+ * access, so sys_mprotect rejects a later PROT_WRITE upgrade. mremap can split
+ * an inherited VMA at the fork boundary, so callers must not require one
+ * exact region match here.
  */
 static void mark_region_backing_ro(guest_t *g, uint64_t start, uint64_t end)
 {
     for (int i = 0; i < g->nregions; i++) {
-        if (g->regions[i].start == start && g->regions[i].end == end) {
-            g->regions[i].backing_ro = true;
+        if (g->regions[i].start >= end)
             break;
-        }
+        if (g->regions[i].end <= start)
+            continue;
+        g->regions[i].backing_ro = true;
     }
+}
+
+/* Track an mremap result without losing the fork boundary inside an in-place
+ * growth or a moved mapping. Bytes copied from the old VMA were present at the
+ * fork snapshot; an extension is new child-private address space and must
+ * remain unmarked. Keep the two portions as separate VMAs even when all other
+ * metadata matches so the synthetic smaps view can distinguish them.
+ */
+static int add_mremap_region(guest_t *g,
+                             uint64_t start,
+                             uint64_t old_size,
+                             uint64_t new_size,
+                             int prot,
+                             int flags,
+                             uint64_t offset,
+                             const char *name,
+                             int backing_fd,
+                             bool inherited_at_fork)
+{
+    if (inherited_at_fork && old_size > 0 && old_size < new_size) {
+        int tail_backing_fd = -1;
+        if (backing_fd >= 0) {
+            tail_backing_fd = dup(backing_fd);
+            if (tail_backing_fd < 0) {
+                close(backing_fd);
+                return -1;
+            }
+        }
+        if (guest_region_add_ex_owned(g, start, start + old_size, prot, flags,
+                                      offset, name, backing_fd, true) < 0) {
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return -1;
+        }
+
+        if (guest_region_add_ex_owned(g, start + old_size, start + new_size,
+                                      prot, flags, offset + old_size, name,
+                                      tail_backing_fd, false) < 0) {
+            guest_region_remove(g, start, start + old_size);
+            return -1;
+        }
+        return 0;
+    }
+
+    return guest_region_add_ex_owned(g, start, start + new_size, prot, flags,
+                                     offset, name, backing_fd,
+                                     inherited_at_fork && old_size > 0);
 }
 
 static void region_clip_overlay(guest_region_t *r)
@@ -851,8 +900,8 @@ populate_existing:
         replaced_region_removed = true;
     }
     if (guest_region_add_ex_owned_gpa(g, addr, addr + length, gpa_base, prot,
-                                      flags, offset, NULL,
-                                      track_backing_fd) < 0)
+                                      flags, offset, NULL, track_backing_fd,
+                                      false) < 0)
         goto fail;
     /* Ownership of track_backing_fd is now held by the new region. The fail
      * handler below skips closing when track_backing_fd < 0, so subsequent
@@ -1133,6 +1182,7 @@ static int capture_region_snapshots(guest_t *g,
         snap->overlay_start = r->overlay_start;
         snap->overlay_end = r->overlay_end;
         snap->backing_ro = r->backing_ro;
+        snap->inherited_at_fork = r->inherited_at_fork;
         str_copy_trunc(snap->name, r->name, sizeof(snap->name));
     }
 
@@ -1239,7 +1289,7 @@ static int restore_region_snapshots(guest_t *g, region_snapshot_t *snaps, int n)
         if (guest_region_add_ex_owned_gpa(
                 g, snap->start, snap->end, snap->gpa_base, snap->prot,
                 snap->flags, snap->offset, snap->name[0] ? snap->name : NULL,
-                snap->backing_fd) < 0) {
+                snap->backing_fd, snap->inherited_at_fork) < 0) {
             snap->backing_fd = -1;
             close_region_snapshots(snaps, n);
             return -LINUX_ENOMEM;
@@ -1829,7 +1879,26 @@ int64_t sys_brk(guest_t *g, uint64_t addr)
         for (int i = 0; i < g->nregions; i++) {
             if (g->regions[i].start == g->brk_base &&
                 !strcmp(g->regions[i].name, "[heap]")) {
-                g->regions[i].end = new_off;
+                guest_region_t *heap = &g->regions[i];
+                uint64_t old_heap_end = heap->end;
+                if (new_off > old_heap_end && heap->inherited_at_fork) {
+                    /* Keep the fork-snapshot portion separate from pages
+                     * materialized by this post-fork brk growth. If the
+                     * semantic table is full, retain the historical
+                     * conservative range and mark it stale rather than
+                     * failing an otherwise successful brk syscall.
+                     */
+                    if (guest_region_add(
+                            g, old_heap_end, new_off,
+                            LINUX_PROT_READ | LINUX_PROT_WRITE,
+                            LINUX_MAP_PRIVATE | LINUX_MAP_ANONYMOUS, 0,
+                            "[heap]") < 0) {
+                        heap->end = new_off;
+                        g->regions_tracker_stale = true;
+                    }
+                } else {
+                    heap->end = new_off;
+                }
                 found = true;
                 break;
             }
@@ -2559,7 +2628,7 @@ int64_t sys_mmap(guest_t *g,
      */
     if (guest_region_add_ex_owned(g, result_off, result_off + length, prot,
                                   track_flags, is_anon ? 0 : (uint64_t) offset,
-                                  NULL, track_backing_fd) < 0) {
+                                  NULL, track_backing_fd, false) < 0) {
         /* Region table was full: undo any host overlay we just installed so the
          * file is not left mmap'd at host_base+ipa with no tracking. Without
          * this, a later operation in that range would memset zeros directly
@@ -2760,8 +2829,6 @@ int64_t sys_mremap(guest_t *g,
             {old_off, old_end},
             {new_off, new_end},
         };
-        if (!region_has_capacity_after_removes(g, removed, 2, 1))
-            return -LINUX_ENOMEM;
 
         /* Capture old region metadata BEFORE modifying any regions. If mremap
          * removed destination first, an overlapping source would lose its
@@ -2779,6 +2846,14 @@ int64_t sys_mremap(guest_t *g,
             return -LINUX_ENOMEM;
         bool source_overlay = old_reg && region_has_live_overlay(old_reg);
         bool source_backing_ro = old_reg && old_reg->backing_ro;
+        bool source_inherited_at_fork = old_reg && old_reg->inherited_at_fork;
+        int added_regions =
+            source_inherited_at_fork && old_size < new_size ? 2 : 1;
+        if (!region_has_capacity_after_removes(g, removed, 2, added_regions)) {
+            if (track_backing_fd >= 0)
+                close(track_backing_fd);
+            return -LINUX_ENOMEM;
+        }
         uint64_t source_file_off =
             old_reg ? old_reg->offset + (old_off - old_reg->start) : 0;
         char track_name[sizeof(old_reg->name)] = {0};
@@ -2948,9 +3023,9 @@ int64_t sys_mremap(guest_t *g,
                 g->mmap_rx_gap_hint = old_off;
         }
 
-        if (guest_region_add_ex_owned(
-                g, new_off, new_off + new_size, prot, track_flags, track_offset,
-                track_name[0] ? track_name : NULL, track_backing_fd) < 0) {
+        if (add_mremap_region(g, new_off, old_size, new_size, prot, track_flags,
+                              track_offset, track_name[0] ? track_name : NULL,
+                              track_backing_fd, source_inherited_at_fork) < 0) {
             (void) restore_region_snapshots(g, dest_snaps, dest_nsnaps);
             dispose_region_snapshots(&source_snaps, &source_nsnaps);
             dispose_region_snapshots(&dest_snaps, &dest_nsnaps);
@@ -2993,9 +3068,6 @@ int64_t sys_mremap(guest_t *g,
 
             if (can_grow) {
                 remove_range_t removed = {old_off, old_off + old_size};
-                if (!region_has_capacity_after_removes(g, &removed, 1, 1))
-                    return -LINUX_ENOMEM;
-
                 /* Extend in place */
                 const guest_region_t *old_reg = guest_region_find(g, old_off);
                 int prot = old_reg ? old_reg->prot
@@ -3011,6 +3083,15 @@ int64_t sys_mremap(guest_t *g,
                 uint64_t old_overlay_end =
                     old_overlay ? old_reg->overlay_end : 0;
                 bool old_backing_ro = old_reg && old_reg->backing_ro;
+                bool old_inherited_at_fork =
+                    old_reg && old_reg->inherited_at_fork;
+                int added_regions = old_inherited_at_fork ? 2 : 1;
+                if (!region_has_capacity_after_removes(g, &removed, 1,
+                                                       added_regions)) {
+                    if (track_backing_fd >= 0)
+                        close(track_backing_fd);
+                    return -LINUX_ENOMEM;
+                }
                 if (old_reg && old_reg->backing_fd >= 0 && track_backing_fd < 0)
                     return -LINUX_ENOMEM;
                 char track_name[sizeof(old_reg->name)] = {0};
@@ -3028,10 +3109,10 @@ int64_t sys_mremap(guest_t *g,
 
                 /* Update region tracking: remove old, add extended */
                 guest_region_remove(g, old_off, old_off + old_size);
-                if (guest_region_add_ex_owned(g, old_off, old_off + new_size,
-                                              prot, track_flags, track_offset,
-                                              track_name[0] ? track_name : NULL,
-                                              track_backing_fd) < 0)
+                if (add_mremap_region(
+                        g, old_off, old_size, new_size, prot, track_flags,
+                        track_offset, track_name[0] ? track_name : NULL,
+                        track_backing_fd, old_inherited_at_fork) < 0)
                     return -LINUX_ENOMEM;
                 if (old_overlay)
                     mark_overlay_metadata_range(g, old_off, old_off + old_size,
@@ -3073,6 +3154,7 @@ int64_t sys_mremap(guest_t *g,
             source_overlay ? old_reg->overlay_start : 0;
         uint64_t source_overlay_end = source_overlay ? old_reg->overlay_end : 0;
         bool source_backing_ro = old_reg && old_reg->backing_ro;
+        bool source_inherited_at_fork = old_reg && old_reg->inherited_at_fork;
         uint64_t source_file_off =
             old_reg ? old_reg->offset + (old_off - old_reg->start) : 0;
         uint64_t source_overlay_file_off =
@@ -3104,7 +3186,9 @@ int64_t sys_mremap(guest_t *g,
         }
 
         remove_range_t removed = {old_off, old_off + old_size};
-        if (!region_has_capacity_after_removes(g, &removed, 1, 1)) {
+        int added_regions =
+            source_inherited_at_fork && old_size < new_size ? 2 : 1;
+        if (!region_has_capacity_after_removes(g, &removed, 1, added_regions)) {
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
             return -LINUX_ENOMEM;
@@ -3189,9 +3273,9 @@ int64_t sys_mremap(guest_t *g,
             g->mmap_rx_gap_hint = old_off;
 
         /* Track new region */
-        if (guest_region_add_ex_owned(
-                g, new_off, new_off + new_size, prot, track_flags, track_offset,
-                track_name[0] ? track_name : NULL, track_backing_fd) < 0)
+        if (add_mremap_region(g, new_off, old_size, new_size, prot, track_flags,
+                              track_offset, track_name[0] ? track_name : NULL,
+                              track_backing_fd, source_inherited_at_fork) < 0)
             return -LINUX_ENOMEM;
         if (source_backing_ro)
             mark_region_backing_ro(g, new_off, new_off + new_size);

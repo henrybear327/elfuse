@@ -242,6 +242,11 @@ typedef struct {
                         * later PROT_WRITE request against it with EACCES,
                         * matching a real kernel's VMA max_prot tracking.
                         */
+    bool inherited_at_fork; /* Region existed at the most recent fork
+                             * snapshot. Used by synthetic smaps to report
+                             * only VMAs that can participate in that fork's
+                             * CoW snapshot as Shared_Dirty.
+                             */
     bool overlay_active; /* Region has a live host MAP_FIXED|MAP_SHARED overlay
                           * of backing_fd at host_base+start. The kernel's page
                           * cache keeps it coherent with the file and with peer
@@ -1176,7 +1181,9 @@ int guest_region_add_ex_gpa(guest_t *g,
                             int backing_fd);
 
 /* Like guest_region_add_ex, but consumes owned_backing_fd on success or
- * failure.
+ * failure. inherited_at_fork identifies bytes copied from the latest fork
+ * snapshot; ordinary mmap/exec callers pass false, while fork/mremap restore
+ * paths preserve the source VMA's value.
  */
 int guest_region_add_ex_owned(guest_t *g,
                               uint64_t start,
@@ -1185,7 +1192,8 @@ int guest_region_add_ex_owned(guest_t *g,
                               int flags,
                               uint64_t offset,
                               const char *name,
-                              int owned_backing_fd);
+                              int owned_backing_fd,
+                              bool inherited_at_fork);
 int guest_region_add_ex_owned_gpa(guest_t *g,
                                   uint64_t start,
                                   uint64_t end,
@@ -1194,7 +1202,8 @@ int guest_region_add_ex_owned_gpa(guest_t *g,
                                   int flags,
                                   uint64_t offset,
                                   const char *name,
-                                  int owned_backing_fd);
+                                  int owned_backing_fd,
+                                  bool inherited_at_fork);
 
 /* Add a preannounced region that appears in /proc/self/maps only. These entries
  * are kept separate from regions[] so they do not cause -EEXIST on guest

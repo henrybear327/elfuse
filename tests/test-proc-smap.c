@@ -467,14 +467,21 @@ static int child_probe(uintptr_t target,
                        size_t page_size,
                        size_t stress_size)
 {
+    void *postfork = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (postfork == MAP_FAILED)
+        return 1;
+
     char pid_path[64];
     snprintf(pid_path, sizeof(pid_path), "/proc/%ld/smaps", (long) getpid());
     const char *paths[] = {"/proc/self/smaps", pid_path};
 
     for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
         smaps_info_t info;
-        if (!load_smaps(paths[i], &info))
+        if (!load_smaps(paths[i], &info)) {
+            munmap(postfork, page_size);
             return 1;
+        }
         bool ok =
             validate_layout(&info, target, stress, page_size, stress_size);
         const smaps_vma_t *first = find_vma(&info, target);
@@ -482,15 +489,20 @@ static int child_probe(uintptr_t target,
         const smaps_vma_t *last = find_vma(&info, target + 2 * page_size);
         const smaps_vma_t *stress_ro = find_vma(&info, stress);
         const smaps_vma_t *stress_rw = find_vma(&info, stress + page_size);
+        const smaps_vma_t *postfork_vma = find_vma(&info, (uintptr_t) postfork);
         if (!ok || !first || !middle || !last || !stress_ro || !stress_rw ||
-            first->shared_dirty_kb == 0 || middle->shared_dirty_kb != 0 ||
-            last->shared_dirty_kb == 0 || stress_ro->shared_dirty_kb != 0 ||
-            stress_rw->shared_dirty_kb == 0) {
+            !postfork_vma || first->shared_dirty_kb == 0 ||
+            middle->shared_dirty_kb != 0 || last->shared_dirty_kb == 0 ||
+            stress_ro->shared_dirty_kb != 0 ||
+            stress_rw->shared_dirty_kb == 0 ||
+            postfork_vma->shared_dirty_kb != 0) {
             free_smaps(&info);
+            munmap(postfork, page_size);
             return 1;
         }
         free_smaps(&info);
     }
+    munmap(postfork, page_size);
     return 0;
 }
 
@@ -562,7 +574,7 @@ int main(void)
         EXPECT_TRUE(ok, "smaps parser/layout/completeness");
     }
 
-    TEST("fork Shared_Dirty positive and read-only negative");
+    TEST("fork Shared_Dirty inheritance and post-fork exclusion");
     if (!fixture_ok) {
         FAIL("fixture unavailable");
     } else {

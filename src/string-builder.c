@@ -148,6 +148,7 @@ int string_builder_appendf(string_builder_t *builder, const char *format, ...)
     va_list arguments;
     va_list sizing;
     va_list rendering;
+    char sizing_sink;
 
     if (builder == NULL || format == NULL)
         return string_builder_invalid();
@@ -159,7 +160,10 @@ int string_builder_appendf(string_builder_t *builder, const char *format, ...)
     errno = 0;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
-    formatted_len = vsnprintf(NULL, 0, format, sizing);
+    /* A non-NULL destination keeps static analyzers from treating the
+     * standards-sanctioned n == 0 sizing call as a null dereference. The
+     * destination is never written when its size is zero. */
+    formatted_len = vsnprintf(&sizing_sink, 0, format, sizing);
 #pragma clang diagnostic pop
     va_end(sizing);
     if (formatted_len < 0) {
@@ -194,6 +198,8 @@ int string_builder_appendf(string_builder_t *builder, const char *format, ...)
         va_end(arguments);
         return 0;
     }
+    if (string_builder_reserve(builder, visible_len) < 0)
+        goto out;
     if (string_builder_commit_append(builder, formatted, visible_len) < 0)
         goto out;
 

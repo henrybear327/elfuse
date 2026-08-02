@@ -122,6 +122,22 @@ static void test_c_string_semantics(void)
     string_builder_destroy(&fit);
 }
 
+static void test_formatted_append_reserves_terminator(void)
+{
+    string_builder_t builder = {0};
+
+    /* A formatted append must reserve one byte beyond the visible payload for
+     * the builder's trailing NUL. This exact-length payload used to make the
+     * generic array allocate only the payload bytes before the terminator was
+     * written.
+     */
+    assert(string_builder_appendf(&builder, "%s", "12345678") == 0);
+    expect_string(&builder, "12345678");
+    assert(string_builder_capacity(&builder) >=
+           string_builder_length(&builder) + 1);
+    string_builder_destroy(&builder);
+}
+
 static void test_growth_preserves_content(void)
 {
     enum { COUNT = 4096 };
@@ -204,6 +220,7 @@ int main(void)
     test_zero_and_initial_capacity();
     test_text_and_formatted_append();
     test_c_string_semantics();
+    test_formatted_append_reserves_terminator();
     test_growth_preserves_content();
     test_alias_append();
     test_formatted_alias_append();

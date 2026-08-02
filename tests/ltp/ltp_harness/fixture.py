@@ -44,8 +44,13 @@ from ltp_harness import EXIT_FAIL, EXIT_OK
 from ltp_harness import manifest as manifest_mod
 from ltp_harness import sweep as sweep_mod
 
+# "cp" is not decoration: LTP's safe_cp builds the shell string
+# cp "src" "dst" and runs it through system() (lib/safe_file_ops.c),
+# so every test declaring resource_files aborts with
+# TBROK "Failed to copy" when the guest has no cp in PATH.
 BUSYBOX_APPLETS = (
-    "sh", "ls", "cat", "echo", "test", "id", "uname", "mkdir", "rm", "true",
+    "sh", "ls", "cat", "cp", "echo", "test", "id", "uname", "mkdir", "rm",
+    "true",
 )
 
 SYSROOT_LIB_DIRS = (

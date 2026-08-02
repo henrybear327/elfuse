@@ -104,19 +104,24 @@ typedef struct {
     int prot, flags;
     uint64_t offset;
     char name[64];
+    /* Preserve the producer order for equal-start entries when qsort() is
+     * used below. Existing snapshots placed equal-start entries after one
+     * another in append order, and keeping that order avoids changing the
+     * handling of malformed/overlapping shadow metadata. */
+    size_t order;
 } maps_entry_t;
 
 /* A growable VMA snapshot. The generated facade keeps element-size and
  * allocation bookkeeping in the generic array implementation. */
 DYNAMIC_ARRAY_DEFINE(maps_entries, maps_entry_t)
 
-static int maps_entries_insert_sorted(maps_entries_t *entries,
-                                      uint64_t start,
-                                      uint64_t end,
-                                      int prot,
-                                      int flags,
-                                      uint64_t offset,
-                                      const char *name)
+static int maps_entries_append_entry(maps_entries_t *entries,
+                                     uint64_t start,
+                                     uint64_t end,
+                                     int prot,
+                                     int flags,
+                                     uint64_t offset,
+                                     const char *name)
 {
     if (end <= start)
         return 0;
@@ -134,17 +139,34 @@ static int maps_entries_insert_sorted(maps_entries_t *entries,
         .prot = prot,
         .flags = flags,
         .offset = offset,
+        .order = maps_entries_count(entries),
     };
     if (name && name[0])
         str_copy_trunc(value.name, name, sizeof(value.name));
     else
         value.name[0] = '\0';
 
-    size_t i = maps_entries_count(entries);
-    while (i > 0 && maps_entries_at(entries, i - 1)->start > start) {
-        i--;
-    }
-    return maps_entries_insert(entries, i, &value);
+    return maps_entries_append_value(entries, value);
+}
+
+/* The live-region and shadow-gap producers are each ordered, but their
+ * outputs interleave. Append both streams while holding mmap_lock and sort
+ * once after all gaps have been generated. This avoids shifting an already
+ * populated array for every split shadow gap (the old insertion path was
+ * quadratic for fragmented snapshots). */
+static int maps_entries_compare_start(const void *lhs, const void *rhs)
+{
+    const maps_entry_t *a = lhs;
+    const maps_entry_t *b = rhs;
+    if (a->start < b->start)
+        return -1;
+    if (a->start > b->start)
+        return 1;
+    if (a->order < b->order)
+        return -1;
+    if (a->order > b->order)
+        return 1;
+    return 0;
 }
 
 static void maps_entries_merge_adjacent(maps_entries_t *entries)
@@ -176,7 +198,7 @@ static void maps_entries_merge_adjacent(maps_entries_t *entries)
  * A shadow VMA must never overlap a realized VMA: strict smaps consumers treat
  * overlapping headers as a malformed snapshot. Both inputs are page-rounded
  * because that is the granularity exposed by /proc/self/maps. */
-static int maps_entries_insert_shadow_gaps(maps_entries_t *entries,
+static int maps_entries_append_shadow_gaps(maps_entries_t *entries,
                                            const guest_region_t *shadow,
                                            const guest_region_t *live_regions,
                                            int nlive)
@@ -202,9 +224,9 @@ static int maps_entries_insert_shadow_gaps(maps_entries_t *entries,
             uint64_t delta = cursor - shadow_start;
             if (delta <= UINT64_MAX - offset)
                 offset += delta;
-            if (maps_entries_insert_sorted(entries, cursor, gap_end,
-                                           shadow->prot, shadow->flags, offset,
-                                           shadow->name) < 0)
+            if (maps_entries_append_entry(entries, cursor, gap_end,
+                                          shadow->prot, shadow->flags, offset,
+                                          shadow->name) < 0)
                 return -1;
         }
         if (live_end > cursor)
@@ -216,9 +238,9 @@ static int maps_entries_insert_shadow_gaps(maps_entries_t *entries,
         uint64_t delta = cursor - shadow_start;
         if (delta <= UINT64_MAX - offset)
             offset += delta;
-        if (maps_entries_insert_sorted(entries, cursor, shadow_end,
-                                       shadow->prot, shadow->flags, offset,
-                                       shadow->name) < 0)
+        if (maps_entries_append_entry(entries, cursor, shadow_end,
+                                      shadow->prot, shadow->flags, offset,
+                                      shadow->name) < 0)
             return -1;
     }
     return 0;
@@ -2456,6 +2478,8 @@ static int pty_open_master(int linux_flags)
 /* Build the VMA list shared by /proc/self/maps and /proc/self/smaps. Merges
  * contiguous regions[] runs that came from one mmap, then folds in the
  * uncovered pieces of preannounced[] shadow entries around live coverage.
+ * Producers append entries while the lock is held; one sort/merge pass puts
+ * the interleaved live and shadow streams back into VMA order.
  *
  * The region and preannounced arrays are mutable from guest mmap/mprotect/
  * munmap operations. Snapshot and merge while mmap_lock is held, then release
@@ -2497,8 +2521,8 @@ static int proc_build_maps_entries(const guest_t *g,
             last->end = end;
             continue;
         }
-        if (maps_entries_insert_sorted(&entries, start, end, r->prot, r->flags,
-                                       r->offset, r->name) < 0)
+        if (maps_entries_append_entry(&entries, start, end, r->prot, r->flags,
+                                      r->offset, r->name) < 0)
             goto out_unlock;
     }
 
@@ -2513,10 +2537,13 @@ static int proc_build_maps_entries(const guest_t *g,
         npreannounced = GUEST_MAX_PREANNOUNCED;
     for (int i = 0; i < npreannounced; i++) {
         const guest_region_t *r = &g->preannounced[i];
-        if (maps_entries_insert_shadow_gaps(&entries, r, g->regions, nregions) <
-            0)
+        if (maps_entries_append_shadow_gaps(&entries, r, g->regions,
+                                            nregions) < 0)
             goto out_unlock;
     }
+    if (maps_entries_count(&entries) > 1)
+        qsort(maps_entries_data(&entries), maps_entries_count(&entries),
+              sizeof(maps_entry_t), maps_entries_compare_start);
     maps_entries_merge_adjacent(&entries);
     result = (int) maps_entries_count(&entries);
 

@@ -23,6 +23,17 @@ DYNAMIC_ARRAY_DEFINE(odd_array, odd_t)
 
 static void test_zero_and_init(void)
 {
+    int_array_t fresh;
+    assert(int_array_init_with_capacity(&fresh, 4) == 0);
+    assert(int_array_capacity(&fresh) >= 4);
+    int_array_destroy(&fresh);
+
+    int_array_t fresh_lazy;
+    assert(int_array_init(&fresh_lazy) == 0);
+    assert(int_array_append_value(&fresh_lazy, 11) == 0);
+    assert(*int_array_at(&fresh_lazy, 0) == 11);
+    int_array_destroy(&fresh_lazy);
+
     int_array_t values = {0};
     int value = 7;
     assert(int_array_count(&values) == 0);

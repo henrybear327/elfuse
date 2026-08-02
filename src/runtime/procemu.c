@@ -19,7 +19,8 @@
  * bounded.
  */
 #define MAPS_ENTRY_INITIAL_CAP 64
-#define MAPS_ENTRY_MAX (GUEST_MAX_REGIONS + GUEST_MAX_PREANNOUNCED)
+#define MAPS_ENTRY_MAX \
+    (GUEST_MAX_REGIONS + GUEST_MAX_PREANNOUNCED * (GUEST_MAX_REGIONS + 1))
 
 /* Bound the transient host-PID snapshot used by /proc/net enumeration. This
  * is an output-work limit, not the dynamically growing lifecycle-table cap.
@@ -169,6 +170,58 @@ static void maps_entries_merge_adjacent(maps_entries_t *entries)
             *maps_entries_at(entries, out) = *current;
     }
     (void) maps_entries_resize(entries, out + 1);
+}
+
+/* Add only the portions of a preannounced interval not covered by live VMAs.
+ * A shadow VMA must never overlap a realized VMA: strict smaps consumers treat
+ * overlapping headers as a malformed snapshot. Both inputs are page-rounded
+ * because that is the granularity exposed by /proc/self/maps. */
+static int maps_entries_insert_shadow_gaps(maps_entries_t *entries,
+                                           const guest_region_t *shadow,
+                                           const guest_region_t *live_regions,
+                                           int nlive)
+{
+    uint64_t shadow_start = shadow->start & ~0xFFFULL;
+    uint64_t shadow_end = (shadow->end + 0xFFFULL) & ~0xFFFULL;
+    if (shadow_end <= shadow_start)
+        return 0;
+
+    uint64_t cursor = shadow_start;
+    for (int i = 0; i < nlive && cursor < shadow_end; i++) {
+        uint64_t live_start = live_regions[i].start & ~0xFFFULL;
+        uint64_t live_end = (live_regions[i].end + 0xFFFULL) & ~0xFFFULL;
+        if (live_end <= live_start || live_end <= cursor)
+            continue;
+        if (live_start >= shadow_end)
+            break;
+
+        if (live_start > cursor) {
+            uint64_t gap_end =
+                live_start < shadow_end ? live_start : shadow_end;
+            uint64_t offset = shadow->offset;
+            uint64_t delta = cursor - shadow_start;
+            if (delta <= UINT64_MAX - offset)
+                offset += delta;
+            if (maps_entries_insert_sorted(entries, cursor, gap_end,
+                                           shadow->prot, shadow->flags, offset,
+                                           shadow->name) < 0)
+                return -1;
+        }
+        if (live_end > cursor)
+            cursor = live_end;
+    }
+
+    if (cursor < shadow_end) {
+        uint64_t offset = shadow->offset;
+        uint64_t delta = cursor - shadow_start;
+        if (delta <= UINT64_MAX - offset)
+            offset += delta;
+        if (maps_entries_insert_sorted(entries, cursor, shadow_end,
+                                       shadow->prot, shadow->flags, offset,
+                                       shadow->name) < 0)
+            return -1;
+    }
+    return 0;
 }
 
 /* Synthetic /sys/devices/system/cpu directory backing store. Populated lazily
@@ -2401,9 +2454,8 @@ static int pty_open_master(int linux_flags)
 }
 
 /* Build the VMA list shared by /proc/self/maps and /proc/self/smaps. Merges
- * contiguous regions[] runs that came from one mmap, then folds in
- * preannounced[] shadow entries whose advertised interval is not yet fully
- * covered by live regions.
+ * contiguous regions[] runs that came from one mmap, then folds in the
+ * uncovered pieces of preannounced[] shadow entries around live coverage.
  *
  * The region and preannounced arrays are mutable from guest mmap/mprotect/
  * munmap operations. Snapshot and merge while mmap_lock is held, then release
@@ -2450,12 +2502,10 @@ static int proc_build_maps_entries(const guest_t *g,
             goto out_unlock;
     }
 
-    /* Add preannounced entries only while they still have an uncovered tail.
-     * Once the union of live regions covers the full advertised interval,
-     * suppress the shadow entry so /proc/self/maps shows only the realized
-     * split VMAs. A partial union must stay visible because some
-     * reserved-but-not-realized span remains to advertise.
-     */
+    /* Add only uncovered portions of each preannounced interval. Keeping the
+     * shadow VMA whole when a live mapping realizes its middle produces
+     * overlapping maps/smaps headers; subtract every covered live interval
+     * instead, preserving any reserved-but-not-realized gaps. */
     int npreannounced = g->npreannounced;
     if (npreannounced < 0)
         npreannounced = 0;
@@ -2463,30 +2513,8 @@ static int proc_build_maps_entries(const guest_t *g,
         npreannounced = GUEST_MAX_PREANNOUNCED;
     for (int i = 0; i < npreannounced; i++) {
         const guest_region_t *r = &g->preannounced[i];
-        bool shadowed = false;
-        uint64_t covered_end = r->start;
-
-        for (int j = 0; j < nregions; j++) {
-            const guest_region_t *live = &g->regions[j];
-
-            if (live->end <= covered_end)
-                continue;
-            if (live->start > covered_end)
-                break;
-
-            covered_end = live->end;
-            if (covered_end >= r->end) {
-                shadowed = true;
-                break;
-            }
-        }
-
-        if (shadowed)
-            continue;
-
-        if (maps_entries_insert_sorted(&entries, r->start & ~0xFFFULL,
-                                       (r->end + 0xFFFULL) & ~0xFFFULL, r->prot,
-                                       r->flags, r->offset, r->name) < 0)
+        if (maps_entries_insert_shadow_gaps(&entries, r, g->regions, nregions) <
+            0)
             goto out_unlock;
     }
     maps_entries_merge_adjacent(&entries);

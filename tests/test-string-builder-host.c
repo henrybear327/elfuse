@@ -29,10 +29,24 @@ static void expect_string(const string_builder_t *builder, const char *expected)
 
 static void test_zero_and_initial_capacity(void)
 {
+    /* Fresh automatic objects need not be manually zeroed before init. */
+    string_builder_t fresh;
+    assert(string_builder_init(&fresh, 0) == 0);
+    assert(string_builder_append(&fresh, "fresh") == 0);
+    expect_string(&fresh, "fresh");
+    string_builder_destroy(&fresh);
+
+    string_builder_t fresh_capacity;
+    assert(string_builder_init(&fresh_capacity, 32) == 0);
+    assert(string_builder_capacity(&fresh_capacity) >= 32);
+    string_builder_destroy(&fresh_capacity);
+
     string_builder_t zero = {0};
     assert(string_builder_data(&zero) == NULL);
     assert(string_builder_length(&zero) == 0);
     assert(string_builder_capacity(&zero) == 0);
+    assert(string_builder_appendf(&zero, "%c", '\0') == 0);
+    assert(string_builder_data(&zero) == NULL);
     /* The public API also accepts a plain {0} value without an init call. */
     assert(string_builder_append(&zero, "zero") == 0);
     expect_string(&zero, "zero");
@@ -139,6 +153,19 @@ static void test_alias_append(void)
     string_builder_destroy(&builder);
 }
 
+static void test_formatted_alias_append(void)
+{
+    string_builder_t builder = {0};
+    assert(string_builder_append(&builder, "x%s") == 0);
+    const char *alias = string_builder_data_const(&builder);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+    assert(string_builder_appendf(&builder, alias, alias) == 0);
+#pragma clang diagnostic pop
+    expect_string(&builder, "x%sxx%s");
+    string_builder_destroy(&builder);
+}
+
 static void test_overflow_preserves_content(void)
 {
     string_builder_t builder = {0};
@@ -179,6 +206,7 @@ int main(void)
     test_c_string_semantics();
     test_growth_preserves_content();
     test_alias_append();
+    test_formatted_alias_append();
     test_overflow_preserves_content();
     puts("test-string-builder-host: PASS");
     return 0;

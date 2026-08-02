@@ -81,33 +81,42 @@ static int dynamic_array_source_offset(const dynamic_array_t *array,
     return 1;
 }
 
-/* Initialize only metadata; allocate storage separately when requested. */
+/* Initialize only metadata; allocate storage separately when requested.
+ *
+ * This is a fresh-initialization operation and deliberately does not inspect
+ * prior object contents, so an automatic, uninitialized object is safe. Use
+ * dynamic_array_destroy before reinitializing an array that already owns
+ * storage; otherwise that allocation is intentionally abandoned.
+ */
 int dynamic_array_init(dynamic_array_t *array, size_t element_size)
 {
     if (array == NULL || element_size == 0)
         return dynamic_array_invalid();
 
-    /* There is no allocation to fail here. Preserve storage only when the
-     * caller is reinitializing an array with the same element type. */
-    if (array->data != NULL && array->element_size != element_size) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (array->data == NULL) {
-        array->count = 0;
-        array->capacity = 0;
-    }
-    array->element_size = element_size;
+    *array = (dynamic_array_t) {
+        .element_size = element_size,
+    };
     return 0;
 }
 
-/* Initialize and reserve storage for an initial number of elements. */
+/* Initialize and reserve storage for an initial number of elements.
+ *
+ * Like dynamic_array_init, this is a fresh-initialization operation that does
+ * not inspect prior object contents. In particular, do not free an
+ * indeterminate pointer from an automatic object; destroy an existing array
+ * before reinitializing it.
+ */
 int dynamic_array_init_with_capacity(dynamic_array_t *array,
                                      size_t element_size,
                                      size_t initial_capacity)
 {
     if (array == NULL || element_size == 0)
         return dynamic_array_invalid();
+
+    /* Establish a safe zero state before any fallible allocation. This is a
+     * fresh initializer, so an existing allocation must have been destroyed
+     * by the caller rather than silently leaked here. */
+    *array = (dynamic_array_t) {0};
 
     size_t bytes;
     if (initial_capacity != 0 && element_size > SIZE_MAX / initial_capacity) {
@@ -124,11 +133,11 @@ int dynamic_array_init_with_capacity(dynamic_array_t *array,
         }
     }
 
-    free(array->data);
-    array->data = storage;
-    array->count = 0;
-    array->capacity = initial_capacity;
-    array->element_size = element_size;
+    *array = (dynamic_array_t) {
+        .data = storage,
+        .capacity = initial_capacity,
+        .element_size = element_size,
+    };
     return 0;
 }
 

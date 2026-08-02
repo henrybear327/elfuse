@@ -43,10 +43,14 @@ static inline int dynamic_array_typed_prepare(dynamic_array_t *array,
     return was_uninitialized;
 }
 
-/* Initialize an array for elements of element_size bytes without allocation. */
+/* Initialize an array for elements of element_size bytes without allocation.
+ * This fresh initializer is safe on an uninitialized automatic object; destroy
+ * an existing array before reinitializing it. */
 int dynamic_array_init(dynamic_array_t *array, size_t element_size);
 
-/* Initialize and reserve initial_capacity element slots. */
+/* Initialize and reserve initial_capacity element slots. This fresh
+ * initializer is safe on an uninitialized automatic object; destroy an
+ * existing array before reinitializing it. */
 int dynamic_array_init_with_capacity(dynamic_array_t *array,
                                      size_t element_size,
                                      size_t initial_capacity);
@@ -94,19 +98,26 @@ const void *dynamic_array_at_const(const dynamic_array_t *array, size_t index);
 
 /* Generate a small type-safe facade over the raw container. The facade owns
  * no additional state; all growth and copying remains in dynamic-array.c.
+ * A typed object must be zero-initialized before first-touch operations such
+ * as append, insert, reserve, or resize; the explicit init functions are safe
+ * on a fresh automatic object and establish the metadata themselves.
  */
 #define DYNAMIC_ARRAY_DEFINE(name, type)                                       \
     typedef struct name {                                                      \
         dynamic_array_t raw;                                                   \
     } name##_t;                                                                \
                                                                                \
-    /* Initialize the typed array with no preallocated storage. */             \
+    /* Initialize the typed array with no preallocated storage. This fresh     \
+     * initializer is safe on an uninitialized automatic object; destroy an    \
+     * existing array before reinitializing it. */                             \
     DYNAMIC_ARRAY_INLINE int name##_init(name##_t *array)                      \
     {                                                                          \
         return dynamic_array_init(array != NULL ? &array->raw : NULL,          \
                                   sizeof(type));                               \
     }                                                                          \
-    /* Initialize typed array and preallocate initial slots. */                \
+    /* Initialize typed array and preallocate initial slots. This fresh        \
+     * initializer is safe on an uninitialized automatic object; destroy an    \
+     * existing array before reinitializing it. */                             \
     DYNAMIC_ARRAY_INLINE int name##_init_with_capacity(                        \
         name##_t *array, size_t initial_capacity)                              \
     {                                                                          \

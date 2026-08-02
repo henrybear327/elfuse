@@ -63,24 +63,30 @@ int dynamic_array_resize(dynamic_array_t *array, size_t count);
 /* Append one element, or count elements when the three-argument form is
  * used. The macro keeps both forms available to callers. */
 int dynamic_array_append_one(dynamic_array_t *array, const void *data);
-int dynamic_array_append_n(dynamic_array_t *array, const void *data,
+int dynamic_array_append_n(dynamic_array_t *array,
+                           const void *data,
                            size_t count);
 #define DYNAMIC_ARRAY_APPEND_PICK(_1, _2, _3, NAME, ...) NAME
-#define dynamic_array_append(...)                                             \
-    DYNAMIC_ARRAY_APPEND_PICK(__VA_ARGS__, dynamic_array_append_n,             \
-                              dynamic_array_append_one, dynamic_array_append_dummy) \
-        (__VA_ARGS__)
+#define dynamic_array_append(...)                                  \
+    DYNAMIC_ARRAY_APPEND_PICK(__VA_ARGS__, dynamic_array_append_n, \
+                              dynamic_array_append_one,            \
+                              dynamic_array_append_dummy)          \
+    (__VA_ARGS__)
 
 /* Insert one element, or count elements in the four-argument form. */
-int dynamic_array_insert_one(dynamic_array_t *array, size_t index,
+int dynamic_array_insert_one(dynamic_array_t *array,
+                             size_t index,
                              const void *data);
-int dynamic_array_insert_n(dynamic_array_t *array, size_t index,
-                           const void *data, size_t count);
+int dynamic_array_insert_n(dynamic_array_t *array,
+                           size_t index,
+                           const void *data,
+                           size_t count);
 #define DYNAMIC_ARRAY_INSERT_PICK(_1, _2, _3, _4, NAME, ...) NAME
-#define dynamic_array_insert(...)                                             \
-    DYNAMIC_ARRAY_INSERT_PICK(__VA_ARGS__, dynamic_array_insert_n,             \
-                              dynamic_array_insert_one, dynamic_array_insert_dummy) \
-        (__VA_ARGS__)
+#define dynamic_array_insert(...)                                  \
+    DYNAMIC_ARRAY_INSERT_PICK(__VA_ARGS__, dynamic_array_insert_n, \
+                              dynamic_array_insert_one,            \
+                              dynamic_array_insert_dummy)          \
+    (__VA_ARGS__)
 
 /* Return an element pointer, or NULL with errno=EINVAL for a bad index. */
 void *dynamic_array_at(dynamic_array_t *array, size_t index);
@@ -101,8 +107,8 @@ const void *dynamic_array_at_const(const dynamic_array_t *array, size_t index);
                                   sizeof(type));                               \
     }                                                                          \
     /* Initialize typed array and preallocate initial slots. */                \
-    DYNAMIC_ARRAY_INLINE int name##_init_with_capacity(name##_t *array,        \
-                                                size_t initial_capacity)       \
+    DYNAMIC_ARRAY_INLINE int name##_init_with_capacity(                        \
+        name##_t *array, size_t initial_capacity)                              \
     {                                                                          \
         return dynamic_array_init_with_capacity(                               \
             array != NULL ? &array->raw : NULL, sizeof(type),                  \
@@ -156,8 +162,7 @@ const void *dynamic_array_at_const(const dynamic_array_t *array, size_t index);
     }                                                                          \
     /* Append a typed range of values. */                                      \
     DYNAMIC_ARRAY_INLINE int name##_append_n(name##_t *array,                  \
-                                      const type *values,                      \
-                                      size_t count)                            \
+                                             const type *values, size_t count) \
     {                                                                          \
         int was_uninitialized = dynamic_array_typed_prepare(                   \
             array != NULL ? &array->raw : NULL, sizeof(type));                 \
@@ -167,9 +172,8 @@ const void *dynamic_array_at_const(const dynamic_array_t *array, size_t index);
                                  count));                                      \
     }                                                                          \
     /* Insert one typed value through a pointer form. */                       \
-    DYNAMIC_ARRAY_INLINE int name##_insert_ptr(name##_t *array,                \
-                                               size_t index,                   \
-                                    const type *value)                         \
+    DYNAMIC_ARRAY_INLINE int name##_insert_ptr(name##_t *array, size_t index,  \
+                                               const type *value)              \
     {                                                                          \
         int was_uninitialized = dynamic_array_typed_prepare(                   \
             array != NULL ? &array->raw : NULL, sizeof(type));                 \
@@ -180,21 +184,19 @@ const void *dynamic_array_at_const(const dynamic_array_t *array, size_t index);
     }                                                                          \
     /* Insert one typed value by value. */                                     \
     DYNAMIC_ARRAY_INLINE int name##_insert_value(name##_t *array,              \
-                                          size_t index,                        \
-                                          type value)                          \
+                                                 size_t index, type value)     \
     {                                                                          \
         return name##_insert_ptr(array, index, &value);                        \
     }                                                                          \
     /* Insert one typed value from a pointer argument. */                      \
     DYNAMIC_ARRAY_INLINE int name##_insert(name##_t *array, size_t index,      \
-                                    const type *value)                         \
+                                           const type *value)                  \
     {                                                                          \
         return name##_insert_ptr(array, index, value);                         \
     }                                                                          \
     /* Insert a typed range of values at index. */                             \
-    DYNAMIC_ARRAY_INLINE int name##_insert_n(name##_t *array,                  \
-                                      size_t index, const type *values,        \
-                                      size_t count)                            \
+    DYNAMIC_ARRAY_INLINE int name##_insert_n(name##_t *array, size_t index,    \
+                                             const type *values, size_t count) \
     {                                                                          \
         int was_uninitialized = dynamic_array_typed_prepare(                   \
             array != NULL ? &array->raw : NULL, sizeof(type));                 \
@@ -207,11 +209,11 @@ const void *dynamic_array_at_const(const dynamic_array_t *array, size_t index);
     DYNAMIC_ARRAY_INLINE type *name##_at(name##_t *array, size_t index)        \
     {                                                                          \
         return (type *) dynamic_array_at(array != NULL ? &array->raw : NULL,   \
-                                        index);                                \
+                                         index);                               \
     }                                                                          \
     /* Return a typed const pointer to the element at index. */                \
     DYNAMIC_ARRAY_INLINE const type *name##_at_const(const name##_t *array,    \
-                                              size_t index)                    \
+                                                     size_t index)             \
     {                                                                          \
         return (const type *) dynamic_array_at_const(                          \
             array != NULL ? &array->raw : NULL, index);                        \

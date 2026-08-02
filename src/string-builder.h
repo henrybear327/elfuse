@@ -52,7 +52,8 @@ int string_builder_appendf(string_builder_t *builder, const char *format, ...);
  */
 char *string_builder_data(string_builder_t *builder);
 
-/* Return read-only builder data, or NULL when builder is NULL or unallocated. */
+/* Return read-only builder data, or NULL when builder is NULL or unallocated.
+ */
 const char *string_builder_data_const(const string_builder_t *builder);
 
 /* Return the number of data bytes currently stored, excluding the NUL. */

@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DYNAMIC_ARRAY_INITIAL_CAPACITY ((size_t)8)
+#define DYNAMIC_ARRAY_INITIAL_CAPACITY ((size_t) 8)
 
 /* Set errno for a bad argument and return a standard failure code. */
 static int dynamic_array_invalid(void)
@@ -31,7 +31,8 @@ static int dynamic_array_validate(const dynamic_array_t *array)
 
 /* Return count + extra after guarding against size_t overflow. */
 static int dynamic_array_count_plus(const dynamic_array_t *array,
-                                    size_t extra, size_t *total)
+                                    size_t extra,
+                                    size_t *total)
 {
     if (extra > SIZE_MAX - array->count) {
         errno = EOVERFLOW;
@@ -42,7 +43,8 @@ static int dynamic_array_count_plus(const dynamic_array_t *array,
 }
 
 /* Compute the byte size for a number of elements with overflow protection. */
-static int dynamic_array_bytes(const dynamic_array_t *array, size_t count,
+static int dynamic_array_bytes(const dynamic_array_t *array,
+                               size_t count,
                                size_t *bytes)
 {
     if (count != 0 && array->element_size > SIZE_MAX / count) {
@@ -55,7 +57,8 @@ static int dynamic_array_bytes(const dynamic_array_t *array, size_t count,
 
 /* Return the offset of an in-array source span, including capacity bytes. */
 static int dynamic_array_source_offset(const dynamic_array_t *array,
-                                       const void *source, size_t bytes,
+                                       const void *source,
+                                       size_t bytes,
                                        size_t *offset)
 {
     if (array->data == NULL || source == NULL)
@@ -66,7 +69,7 @@ static int dynamic_array_source_offset(const dynamic_array_t *array,
     if (address < base)
         return 0;
     uintptr_t delta = address - base;
-    if (delta > (uintptr_t)SIZE_MAX)
+    if (delta > (uintptr_t) SIZE_MAX)
         return 0;
     size_t start = (size_t) delta;
     size_t allocation_bytes;
@@ -135,7 +138,7 @@ void dynamic_array_destroy(dynamic_array_t *array)
     if (array == NULL)
         return;
     free(array->data);
-    *array = (dynamic_array_t){0};
+    *array = (dynamic_array_t) {0};
 }
 
 /* Ensure the array has capacity for at least extra additional elements. */
@@ -186,8 +189,10 @@ int dynamic_array_resize(dynamic_array_t *array, size_t count)
     }
     if (count > array->count) {
         size_t old_bytes, new_bytes;
-        (void) dynamic_array_bytes(array, array->count, &old_bytes);
-        (void) dynamic_array_bytes(array, count, &new_bytes);
+        if (dynamic_array_bytes(array, array->count, &old_bytes) < 0)
+            return -1;
+        if (dynamic_array_bytes(array, count, &new_bytes) < 0)
+            return -1;
         memset((unsigned char *) array->data + old_bytes, 0,
                new_bytes - old_bytes);
     }
@@ -196,7 +201,8 @@ int dynamic_array_resize(dynamic_array_t *array, size_t count)
 }
 
 /* Append multiple elements from source memory to the end of the array. */
-int dynamic_array_append_n(dynamic_array_t *array, const void *data,
+int dynamic_array_append_n(dynamic_array_t *array,
+                           const void *data,
                            size_t count)
 {
     if (dynamic_array_validate(array) < 0)
@@ -220,15 +226,18 @@ int dynamic_array_append_n(dynamic_array_t *array, const void *data,
     if (aliases)
         data = (const unsigned char *) array->data + offset;
     size_t old_bytes;
-    (void) dynamic_array_bytes(array, array->count, &old_bytes);
+    if (dynamic_array_bytes(array, array->count, &old_bytes) < 0)
+        return -1;
     memmove((unsigned char *) array->data + old_bytes, data, bytes);
     array->count = total;
     return 0;
 }
 
 /* Insert multiple elements at index while preserving existing elements. */
-int dynamic_array_insert_n(dynamic_array_t *array, size_t index,
-                           const void *data, size_t count)
+int dynamic_array_insert_n(dynamic_array_t *array,
+                           size_t index,
+                           const void *data,
+                           size_t count)
 {
     if (dynamic_array_validate(array) < 0)
         return -1;
@@ -252,8 +261,8 @@ int dynamic_array_insert_n(dynamic_array_t *array, size_t index,
         return -1;
 
     size_t source_offset = 0;
-    int aliases = dynamic_array_source_offset(array, data, bytes,
-                                               &source_offset);
+    int aliases =
+        dynamic_array_source_offset(array, data, bytes, &source_offset);
     void *temporary = NULL;
     if (aliases) {
         temporary = malloc(bytes);
@@ -285,7 +294,8 @@ int dynamic_array_append_one(dynamic_array_t *array, const void *data)
 }
 
 /* Insert a single element by forwarding to insert_n. */
-int dynamic_array_insert_one(dynamic_array_t *array, size_t index,
+int dynamic_array_insert_one(dynamic_array_t *array,
+                             size_t index,
                              const void *data)
 {
     return dynamic_array_insert_n(array, index, data, 1);

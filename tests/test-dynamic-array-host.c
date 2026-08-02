@@ -65,7 +65,8 @@ static void test_alias_and_resize(void)
     int *old_data = int_array_data(&values);
     int *alias = int_array_at(&values, 1);
     assert(int_array_append(&values, alias) == 0);
-    assert(int_array_data(&values) != old_data || int_array_capacity(&values) > 4);
+    assert(int_array_data(&values) != old_data ||
+           int_array_capacity(&values) > 4);
     assert(int_array_count(&values) == 5);
     assert(*int_array_at(&values, 4) == 2);
     assert(int_array_resize(&values, 8) == 0);
@@ -96,6 +97,30 @@ static void test_invalid_and_overflow(void)
     assert(errno == EOVERFLOW);
     assert(raw.data == NULL && raw.count == 0 && raw.capacity == 0);
     dynamic_array_destroy(&raw);
+
+    /* A malformed metadata state must not let failed byte-size calculations
+     * feed uninitialized offsets into memory operations. */
+    dynamic_array_t resize_overflow = {
+        .data = NULL,
+        .count = 0,
+        .capacity = 2,
+        .element_size = SIZE_MAX,
+    };
+    errno = 0;
+    assert(dynamic_array_resize(&resize_overflow, 2) == -1);
+    assert(errno == EOVERFLOW);
+    assert(resize_overflow.count == 0);
+
+    dynamic_array_t append_overflow = {
+        .data = NULL,
+        .count = SIZE_MAX / 2 + 1,
+        .capacity = SIZE_MAX,
+        .element_size = 2,
+    };
+    errno = 0;
+    assert(dynamic_array_append(&append_overflow, &value) == -1);
+    assert(errno == EOVERFLOW);
+    assert(append_overflow.count == SIZE_MAX / 2 + 1);
 }
 
 int main(void)

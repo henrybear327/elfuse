@@ -116,7 +116,7 @@ static void test_growth_preserves_content(void)
     assert(string_builder_init(&builder, 1) == 0);
 
     for (size_t i = 0; i < COUNT; i++) {
-        expected[i] = (char)('A' + (i % 26));
+        expected[i] = (char) ('A' + (i % 26));
         char chunk[2] = {expected[i], '\0'};
         assert(string_builder_append(&builder, chunk) == 0);
     }
@@ -147,7 +147,8 @@ static void test_overflow_preserves_content(void)
 
     char snapshot[32];
     assert(string_builder_length(&builder) < sizeof(snapshot));
-    memcpy(snapshot, string_builder_data_const(&builder), string_builder_length(&builder));
+    memcpy(snapshot, string_builder_data_const(&builder),
+           string_builder_length(&builder));
     size_t old_length = string_builder_length(&builder);
     size_t old_capacity = string_builder_capacity(&builder);
 
@@ -156,7 +157,8 @@ static void test_overflow_preserves_content(void)
     assert(errno == EOVERFLOW);
     assert(string_builder_length(&builder) == old_length);
     assert(string_builder_capacity(&builder) == old_capacity);
-    assert(memcmp(string_builder_data_const(&builder), snapshot, old_length) == 0);
+    assert(memcmp(string_builder_data_const(&builder), snapshot, old_length) ==
+           0);
     assert(string_builder_data_const(&builder)[old_length] == '\0');
 
     errno = 0;
@@ -164,7 +166,8 @@ static void test_overflow_preserves_content(void)
     assert(errno == EILSEQ);
     assert(string_builder_length(&builder) == old_length);
     assert(string_builder_capacity(&builder) == old_capacity);
-    assert(memcmp(string_builder_data_const(&builder), snapshot, old_length) == 0);
+    assert(memcmp(string_builder_data_const(&builder), snapshot, old_length) ==
+           0);
     assert(string_builder_data_const(&builder)[old_length] == '\0');
     string_builder_destroy(&builder);
 }

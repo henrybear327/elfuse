@@ -30,7 +30,7 @@ int string_builder_init(string_builder_t *builder, size_t initial_capacity)
         return 0;
     }
     if (string_builder_storage_init_with_capacity(&builder->storage,
-                                                   initial_capacity) < 0)
+                                                  initial_capacity) < 0)
         return -1;
     string_builder_data(builder)[0] = '\0';
     return 0;
@@ -61,15 +61,16 @@ int string_builder_reserve(string_builder_t *builder, size_t extra)
     }
     if (string_builder_storage_reserve(&builder->storage, extra + 1) < 0)
         return -1;
-    string_builder_data(builder)[string_builder_storage_count(&builder->storage)] =
-        '\0';
+    string_builder_data(
+        builder)[string_builder_storage_count(&builder->storage)] = '\0';
     return 0;
 }
 
 /* Locate a source span that aliases the builder allocation. The offset must be
  * captured before reserve because reserve may move the allocation. */
 static int string_builder_source_offset(const string_builder_t *builder,
-                                        const void *source, size_t length,
+                                        const void *source,
+                                        size_t length,
                                         size_t *offset)
 {
     const char *base_ptr = string_builder_data_const(builder);
@@ -92,12 +93,13 @@ static int string_builder_source_offset(const string_builder_t *builder,
 
 /* Commit string bytes through the generic array and restore the terminator. */
 static int string_builder_commit_append(string_builder_t *builder,
-                                        const char *data, size_t len)
+                                        const char *data,
+                                        size_t len)
 {
     if (string_builder_storage_append_n(&builder->storage, data, len) < 0)
         return -1;
-    string_builder_data(builder)[string_builder_storage_count(&builder->storage)] =
-        '\0';
+    string_builder_data(
+        builder)[string_builder_storage_count(&builder->storage)] = '\0';
     return 0;
 }
 
@@ -112,8 +114,8 @@ int string_builder_append(string_builder_t *builder, const char *text)
         return 0;
 
     size_t source_offset = 0;
-    int aliases = string_builder_source_offset(builder, text, len,
-                                               &source_offset);
+    int aliases =
+        string_builder_source_offset(builder, text, len, &source_offset);
     if (string_builder_reserve(builder, len) < 0)
         return -1;
     if (aliases)
@@ -130,8 +132,10 @@ static int string_builder_format_failure(void)
 }
 
 /* Call vsnprintf with a copied argument list for the current sizing pass. */
-static int string_builder_vsnprintf(char *destination, size_t available,
-                                    const char *format, va_list arguments)
+static int string_builder_vsnprintf(char *destination,
+                                    size_t available,
+                                    const char *format,
+                                    va_list arguments)
 {
     va_list pass;
     va_copy(pass, arguments);
@@ -167,15 +171,17 @@ static int string_builder_prepare_appendf(string_builder_t *builder,
 }
 
 /* Format into the current tail and report whether the result was truncated. */
-static string_builder_format_status_t
-string_builder_try_format(string_builder_t *builder, size_t old_len,
-                          const char *format, va_list arguments,
-                          size_t *written)
+static string_builder_format_status_t string_builder_try_format(
+    string_builder_t *builder,
+    size_t old_len,
+    const char *format,
+    va_list arguments,
+    size_t *written)
 {
     char *data = string_builder_data(builder);
     size_t available = string_builder_capacity(builder) - old_len;
-    int formatted = string_builder_vsnprintf(data + old_len, available, format,
-                                             arguments);
+    int formatted =
+        string_builder_vsnprintf(data + old_len, available, format, arguments);
     if (formatted < 0)
         return STRING_BUILDER_FORMAT_ERROR;
 
@@ -260,24 +266,28 @@ out:
 /* Return mutable storage for the builder, if it has been allocated. */
 char *string_builder_data(string_builder_t *builder)
 {
-    return builder != NULL ? string_builder_storage_data(&builder->storage) : NULL;
+    return builder != NULL ? string_builder_storage_data(&builder->storage)
+                           : NULL;
 }
 
 /* Return const storage for the builder, if it has been allocated. */
 const char *string_builder_data_const(const string_builder_t *builder)
 {
-    return builder != NULL ? string_builder_storage_data_const(&builder->storage)
-                          : NULL;
+    return builder != NULL
+               ? string_builder_storage_data_const(&builder->storage)
+               : NULL;
 }
 
 /* Return the number of data bytes currently stored. */
 size_t string_builder_length(const string_builder_t *builder)
 {
-    return builder != NULL ? string_builder_storage_count(&builder->storage) : 0;
+    return builder != NULL ? string_builder_storage_count(&builder->storage)
+                           : 0;
 }
 
 /* Return allocated capacity in bytes, including the terminating NUL. */
 size_t string_builder_capacity(const string_builder_t *builder)
 {
-    return builder != NULL ? string_builder_storage_capacity(&builder->storage) : 0;
+    return builder != NULL ? string_builder_storage_capacity(&builder->storage)
+                           : 0;
 }

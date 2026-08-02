@@ -68,7 +68,8 @@ static inline ssize_t read_file_nul(const char *path, char *buf, size_t bufsz)
 
 /* Read a file whose size is not available from st_size (for example a proc
  * file) until EOF, growing the buffer and appending a NUL terminator. */
-static inline ssize_t read_file_dynamic_nul(const char *path, char **buf_out,
+static inline ssize_t read_file_dynamic_nul(const char *path,
+                                            char **buf_out,
                                             size_t *len_out)
 {
     if (!path || !buf_out || !len_out) {

@@ -168,7 +168,7 @@ static void maps_entries_merge_adjacent(maps_entries_t *entries)
         if (out != i)
             *maps_entries_at(entries, out) = *current;
     }
-    (void)maps_entries_resize(entries, out + 1);
+    (void) maps_entries_resize(entries, out + 1);
 }
 
 /* Synthetic /sys/devices/system/cpu directory backing store. Populated lazily
@@ -468,8 +468,8 @@ static void proc_tmpdir_cleanup(void)
 
     /* Remove known files inside <tmpdir>/<pid>/ and <tmpdir>/ */
     char path[256];
-    const char *files[] = {"stat", "status", "cmdline", "maps", "smaps",
-                           "exe", NULL};
+    const char *files[] = {"stat",  "status", "cmdline", "maps",
+                           "smaps", "exe",    NULL};
     char piddir[160];
 
     /* Reconstruct pid subdir by scanning for the first numeric entry */
@@ -2411,7 +2411,7 @@ static int pty_open_master(int linux_flags)
  * record and output generation does not block page-table mutations.
  */
 static int proc_build_maps_entries(const guest_t *g,
-                                  maps_entries_t *entries_out)
+                                   maps_entries_t *entries_out)
 {
     if (!g || !entries_out) {
         errno = EINVAL;
@@ -2485,13 +2485,12 @@ static int proc_build_maps_entries(const guest_t *g,
             continue;
 
         if (maps_entries_insert_sorted(&entries, r->start & ~0xFFFULL,
-                                       (r->end + 0xFFFULL) & ~0xFFFULL,
-                                       r->prot, r->flags, r->offset,
-                                       r->name) < 0)
+                                       (r->end + 0xFFFULL) & ~0xFFFULL, r->prot,
+                                       r->flags, r->offset, r->name) < 0)
             goto out_unlock;
     }
     maps_entries_merge_adjacent(&entries);
-    result = (int)maps_entries_count(&entries);
+    result = (int) maps_entries_count(&entries);
 
 out_unlock:
     pthread_mutex_unlock(&mmap_lock);
@@ -2501,7 +2500,7 @@ out_unlock:
         return -1;
     }
     *entries_out = entries;
-    return (int)maps_entries_count(&entries);
+    return (int) maps_entries_count(&entries);
 }
 
 /* Format the common VMA header. The maps and smaps header must stay byte-for-
@@ -2518,10 +2517,10 @@ static int proc_format_maps_header(const maps_entry_t *e,
     perms[3] = (e->flags & LINUX_MAP_SHARED) ? 's' : 'p';
     perms[4] = '\0';
 
-    int header_len = snprintf(
-        header, headersz, "%llx-%llx %s %08llx 00:00 0",
-        (unsigned long long) e->start, (unsigned long long) e->end, perms,
-        (unsigned long long) e->offset);
+    int header_len =
+        snprintf(header, headersz, "%llx-%llx %s %08llx 00:00 0",
+                 (unsigned long long) e->start, (unsigned long long) e->end,
+                 perms, (unsigned long long) e->offset);
     if (header_len < 0)
         return -1;
     if ((size_t) header_len >= headersz)
@@ -2577,7 +2576,7 @@ static int proc_open_self_maps(const guest_t *g)
 
     /* Emit lines after merging so buffer accounting is centralized. */
     for (int i = 0; i < nentries; i++) {
-        const maps_entry_t *e = maps_entries_at_const(&entries, (size_t)i);
+        const maps_entry_t *e = maps_entries_at_const(&entries, (size_t) i);
         char line[256];
         int line_len = proc_format_maps_header(e, line, sizeof(line));
         if (line_len < 0 ||
@@ -2585,10 +2584,12 @@ static int proc_open_self_maps(const guest_t *g)
             goto out;
     }
 
-    log_debug("/proc/self/maps (%zu bytes):\n%.*s", string_builder_length(&builder),
-              (int)string_builder_length(&builder),
-              string_builder_data_const(&builder) ? string_builder_data_const(&builder)
-                                             : "");
+    log_debug("/proc/self/maps (%zu bytes):\n%.*s",
+              string_builder_length(&builder),
+              (int) string_builder_length(&builder),
+              string_builder_data_const(&builder)
+                  ? string_builder_data_const(&builder)
+                  : "");
     result = proc_synthetic_fd(string_builder_data_const(&builder)
                                    ? string_builder_data_const(&builder)
                                    : "",
@@ -2619,7 +2620,7 @@ static int proc_open_self_smaps(const guest_t *g)
 
     bool fork_child = proc_get_ppid() != 0;
     for (int i = 0; i < nentries; i++) {
-        const maps_entry_t *e = maps_entries_at_const(&entries, (size_t)i);
+        const maps_entry_t *e = maps_entries_at_const(&entries, (size_t) i);
         char header[256];
         int header_len = proc_format_maps_header(e, header, sizeof(header));
         if (header_len < 0)
@@ -2629,23 +2630,23 @@ static int proc_open_self_smaps(const guest_t *g)
         bool anonymous = (e->flags & LINUX_MAP_ANONYMOUS) != 0;
         bool shared = (e->flags & LINUX_MAP_SHARED) != 0;
         bool noreserve = (e->flags & LINUX_MAP_NORESERVE) != 0;
-        bool private_anon = (e->flags & LINUX_MAP_PRIVATE) &&
-                            anonymous && !shared;
-        bool logical_shared_dirty = fork_child && private_anon &&
-                                    (e->prot & LINUX_PROT_WRITE);
+        bool private_anon =
+            (e->flags & LINUX_MAP_PRIVATE) && anonymous && !shared;
+        bool logical_shared_dirty =
+            fork_child && private_anon && (e->prot & LINUX_PROT_WRITE);
         uint64_t shared_dirty_kb = logical_shared_dirty ? size_kb : 0;
 
         char vmflags[64];
         size_t vmflags_len = 0;
-#define APPEND_VMFLAG(flag)                                                   \
-    do {                                                                      \
-        const char *token = (flag);                                           \
-        size_t token_len = strlen(token);                                     \
-        if (vmflags_len + token_len + 1 < sizeof(vmflags)) {                  \
-            vmflags[vmflags_len++] = ' ';                                     \
-            memcpy(vmflags + vmflags_len, token, token_len);                  \
-            vmflags_len += token_len;                                         \
-        }                                                                     \
+#define APPEND_VMFLAG(flag)                                  \
+    do {                                                     \
+        const char *token = (flag);                          \
+        size_t token_len = strlen(token);                    \
+        if (vmflags_len + token_len + 1 < sizeof(vmflags)) { \
+            vmflags[vmflags_len++] = ' ';                    \
+            memcpy(vmflags + vmflags_len, token, token_len); \
+            vmflags_len += token_len;                        \
+        }                                                    \
     } while (0)
         /* Only flags directly evidenced by the tracked VMA are reported. In
          * particular, do not invent Linux max-permission/accounting flags

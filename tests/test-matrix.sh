@@ -243,10 +243,10 @@ unstage_sysroot_fixtures()
 
 # Generic test helpers.
 
-# The qemu reference lane now runs every matrix test against the real Alpine
-# linux-virt kernel, so QEMU_SKIP is empty. Add a test's name here only if it
-# asserts elfuse-specific behavior a real kernel does not honor; it still runs
-# in elfuse-aarch64 mode and in 'make check'.
+# The qemu reference lane runs the portable matrix tests against the real
+# Alpine linux-virt kernel. Add a test's name here only if it asserts
+# elfuse-specific behavior a real kernel does not honor; it still runs in
+# elfuse-aarch64 mode and in 'make check'.
 #
 # The two oom_adj/oom_score_adj sendfile-and-copy_file_range-interception
 # subtests that used to make test-io-opt diverge here were split out into
@@ -286,6 +286,7 @@ QEMU_SKIP="
     test-fd-family
     test-scm-creds
     test-proc-fidelity
+    test-proc-smap
 "
 # test-session: getpgid/getsid/setsid assume the test is its own session and
 #   process-group leader, true when elfuse launches it directly but not when
@@ -362,6 +363,10 @@ QEMU_SKIP="
 #   under elfuse, while a real kernel allows the open and only rejects the
 #   write -- a genuine behavioral difference worth reviewing on its own,
 #   not just an environment artifact.
+# test-proc-smap: validates elfuse's synthetic smaps VMA snapshot, including a
+#   coarse Shared_Dirty compatibility signal for untouched writable VMAs. Real
+#   Linux smaps exposes kernel-owned VMA/page accounting instead, so this is
+#   intentionally not a reference-kernel invariant.
 
 # Tests that only run under qemu. A test belongs here when it needs a writable,
 # byte-exact root: the elfuse lane runs without a sysroot, and the macOS root is
@@ -1316,7 +1321,7 @@ run_suite()
 # detector does not recognize yet.
 EXPECTED_BASELINES=(
     "elfuse-aarch64|242|0"
-    "qemu-aarch64|225|0"
+    "qemu-aarch64|224|0"
     "elfuse-x86_64:apple-m1-m2|71|0"
     "elfuse-x86_64:apple-m3-plus|71|0"
     "elfuse-x86_64:apple-unknown|71|0"

@@ -39,15 +39,13 @@ typedef struct {
 } smaps_vma_t;
 
 static const char *const smaps_fields[] = {
-    "Size:",          "KernelPageSize:", "MMUPageSize:",
-    "Rss:",           "Pss:",            "Pss_Dirty:",
-    "Shared_Clean:",  "Shared_Dirty:",   "Private_Clean:",
-    "Private_Dirty:", "Referenced:",     "Anonymous:",
-    "KSM:",           "LazyFree:",       "AnonHugePages:",
-    "ShmemPmdMapped:",
-    "FilePmdMapped:", "Shared_Hugetlb:", "Private_Hugetlb:",
-    "Swap:",          "SwapPss:",        "Locked:",
-    "THPeligible:",   "ProtectionKey:",  "VmFlags:",
+    "Size:",          "KernelPageSize:", "MMUPageSize:",     "Rss:",
+    "Pss:",           "Pss_Dirty:",      "Shared_Clean:",    "Shared_Dirty:",
+    "Private_Clean:", "Private_Dirty:",  "Referenced:",      "Anonymous:",
+    "KSM:",           "LazyFree:",       "AnonHugePages:",   "ShmemPmdMapped:",
+    "FilePmdMapped:", "Shared_Hugetlb:", "Private_Hugetlb:", "Swap:",
+    "SwapPss:",       "Locked:",         "THPeligible:",     "ProtectionKey:",
+    "VmFlags:",
 };
 
 #define SMAPS_FIELD_COUNT (sizeof(smaps_fields) / sizeof(smaps_fields[0]))
@@ -80,7 +78,8 @@ static bool parse_token(const char **cursor, char *token, size_t token_size)
     return true;
 }
 
-static bool parse_unsigned_token(const char *token, int base,
+static bool parse_unsigned_token(const char *token,
+                                 int base,
                                  unsigned long long *value)
 {
     if (!token[0])
@@ -179,7 +178,8 @@ static bool parse_header(const char *line, smaps_vma_t *vma)
  * Both smaps field families share the same label/whitespace/overflow rules;
  * only the trailing unit differs ("kB" for the first group, none for the
  * remaining numeric fields). */
-static bool parse_numeric_field(const char *line, const char *label,
+static bool parse_numeric_field(const char *line,
+                                const char *label,
                                 const char *suffix,
                                 unsigned long long *value)
 {
@@ -247,15 +247,14 @@ static void skip_optional_fields(const char *line, size_t *field_index)
         (!strncmp(line, "ProtectionKey:", strlen("ProtectionKey:")) ||
          !strncmp(line, "VmFlags:", 8)))
         (*field_index)++;
-    if (*field_index == SMAPS_FIELD_COUNT - 2 &&
-        !strncmp(line, "VmFlags:", 8))
+    if (*field_index == SMAPS_FIELD_COUNT - 2 && !strncmp(line, "VmFlags:", 8))
         (*field_index)++;
 }
 
 static bool append_vma(smaps_info_t *info, const smaps_vma_t *vma)
 {
-    smaps_vma_t *vmas = realloc(info->vmas,
-                                (info->count + 1) * sizeof(*info->vmas));
+    smaps_vma_t *vmas =
+        realloc(info->vmas, (info->count + 1) * sizeof(*info->vmas));
     if (!vmas)
         return false;
     vmas[info->count++] = *vma;
@@ -298,8 +297,8 @@ static bool parse_smaps(char *buf, size_t len, smaps_info_t *info)
                     goto fail;
             }
             if (info->count > 0 &&
-                (header.start < previous_end || header.start <=
-                 info->vmas[info->count - 1].start))
+                (header.start < previous_end ||
+                 header.start <= info->vmas[info->count - 1].start))
                 goto fail;
             current = header;
             have_current = true;
@@ -347,8 +346,7 @@ static bool parse_smaps(char *buf, size_t len, smaps_info_t *info)
     }
 
     if (!have_current || !finish_vma(&current, field_index) ||
-        !append_vma(info, &current) ||
-        info->count == 0)
+        !append_vma(info, &current) || info->count == 0)
         goto fail;
     return true;
 
@@ -386,7 +384,8 @@ static const smaps_vma_t *find_vma(const smaps_info_t *info, uintptr_t address)
     return NULL;
 }
 
-static size_t count_vmas_in_range(const smaps_info_t *info, uintptr_t start,
+static size_t count_vmas_in_range(const smaps_info_t *info,
+                                  uintptr_t start,
                                   uintptr_t end)
 {
     size_t count = 0;
@@ -397,8 +396,10 @@ static size_t count_vmas_in_range(const smaps_info_t *info, uintptr_t start,
     return count;
 }
 
-static bool validate_layout(const smaps_info_t *info, uintptr_t target,
-                            uintptr_t stress, size_t page_size,
+static bool validate_layout(const smaps_info_t *info,
+                            uintptr_t target,
+                            uintptr_t stress,
+                            size_t page_size,
                             size_t stress_size)
 {
     if (info->count <= 256)
@@ -421,11 +422,11 @@ static bool validate_layout(const smaps_info_t *info, uintptr_t target,
         strcmp(last->perms, "rw-p"))
         return false;
     if (first->size_kb != page_kb || middle->size_kb != page_kb ||
-        last->size_kb != page_kb || !first->vmflags_wr ||
-        middle->vmflags_wr || !last->vmflags_wr ||
-        first->kernel_page_kb != 4 || first->mmu_page_kb != 4 ||
-        middle->kernel_page_kb != 4 || middle->mmu_page_kb != 4 ||
-        last->kernel_page_kb != 4 || last->mmu_page_kb != 4)
+        last->size_kb != page_kb || !first->vmflags_wr || middle->vmflags_wr ||
+        !last->vmflags_wr || first->kernel_page_kb != 4 ||
+        first->mmu_page_kb != 4 || middle->kernel_page_kb != 4 ||
+        middle->mmu_page_kb != 4 || last->kernel_page_kb != 4 ||
+        last->mmu_page_kb != 4)
         return false;
 
     /* Every stress-map page alternates permissions, so each page must remain
@@ -461,7 +462,9 @@ static bool read_exact(int fd, void *data, size_t len)
     return true;
 }
 
-static int child_probe(uintptr_t target, uintptr_t stress, size_t page_size,
+static int child_probe(uintptr_t target,
+                       uintptr_t stress,
+                       size_t page_size,
                        size_t stress_size)
 {
     char pid_path[64];
@@ -472,8 +475,8 @@ static int child_probe(uintptr_t target, uintptr_t stress, size_t page_size,
         smaps_info_t info;
         if (!load_smaps(paths[i], &info))
             return 1;
-        bool ok = validate_layout(&info, target, stress, page_size,
-                                  stress_size);
+        bool ok =
+            validate_layout(&info, target, stress, page_size, stress_size);
         const smaps_vma_t *first = find_vma(&info, target);
         const smaps_vma_t *middle = find_vma(&info, target + page_size);
         const smaps_vma_t *last = find_vma(&info, target + 2 * page_size);
@@ -536,7 +539,8 @@ int main(void)
         FAIL("mmap/mprotect fixture");
     } else {
         char pid_path[64];
-        snprintf(pid_path, sizeof(pid_path), "/proc/%ld/smaps", (long) getpid());
+        snprintf(pid_path, sizeof(pid_path), "/proc/%ld/smaps",
+                 (long) getpid());
         const char *paths[] = {"/proc/self/smaps", pid_path};
         bool ok = true;
         size_t expected_count = 0;
@@ -544,8 +548,8 @@ int main(void)
             smaps_info_t info;
             bool parsed = load_smaps(paths[i], &info);
             if (!parsed ||
-                !validate_layout(&info, (uintptr_t) target,
-                                  (uintptr_t) stress, page_size, stress_size)) {
+                !validate_layout(&info, (uintptr_t) target, (uintptr_t) stress,
+                                 page_size, stress_size)) {
                 ok = false;
             } else if (i == 0) {
                 expected_count = info.count;
@@ -584,8 +588,8 @@ int main(void)
             close(pipefd[0]);
             int status = 0;
             bool waited = waitpid(pid, &status, 0) == pid;
-            EXPECT_TRUE(received && waited && result == 0 && WIFEXITED(status) &&
-                            WEXITSTATUS(status) == 0,
+            EXPECT_TRUE(received && waited && result == 0 &&
+                            WIFEXITED(status) && WEXITSTATUS(status) == 0,
                         "fork Shared_Dirty accounting");
         }
     }

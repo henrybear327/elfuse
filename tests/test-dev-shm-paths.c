@@ -78,8 +78,7 @@ static int name_fixtures(void)
              fixture_suffix);
     snprintf(shm_evil, sizeof(shm_evil), SHM_DIR "elfuse_evil_%s",
              fixture_suffix);
-    snprintf(shm_dir, sizeof(shm_dir), SHM_DIR "elfuse_dir_%s",
-             fixture_suffix);
+    snprintf(shm_dir, sizeof(shm_dir), SHM_DIR "elfuse_dir_%s", fixture_suffix);
     snprintf(shm_fifo, sizeof(shm_fifo), SHM_DIR "elfuse_fifo_%s",
              fixture_suffix);
     snprintf(shm_exec, sizeof(shm_exec), SHM_DIR "elfuse_exec_%s",

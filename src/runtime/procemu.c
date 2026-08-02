@@ -238,9 +238,8 @@ static int maps_entries_append_shadow_gaps(maps_entries_t *entries,
         uint64_t delta = cursor - shadow_start;
         if (delta <= UINT64_MAX - offset)
             offset += delta;
-        if (maps_entries_append_entry(entries, cursor, shadow_end,
-                                      shadow->prot, shadow->flags, offset,
-                                      shadow->name) < 0)
+        if (maps_entries_append_entry(entries, cursor, shadow_end, shadow->prot,
+                                      shadow->flags, offset, shadow->name) < 0)
             return -1;
     }
     return 0;
@@ -2537,8 +2536,8 @@ static int proc_build_maps_entries(const guest_t *g,
         npreannounced = GUEST_MAX_PREANNOUNCED;
     for (int i = 0; i < npreannounced; i++) {
         const guest_region_t *r = &g->preannounced[i];
-        if (maps_entries_append_shadow_gaps(&entries, r, g->regions,
-                                            nregions) < 0)
+        if (maps_entries_append_shadow_gaps(&entries, r, g->regions, nregions) <
+            0)
             goto out_unlock;
     }
     if (maps_entries_count(&entries) > 1)

@@ -477,6 +477,11 @@ endif
 
 endif
 
+## Build the libc-based file-backed mremap EMFILE regression probe
+$(BUILD_DIR)/test-mremap-tail-emfile: tests/test-mremap-tail-emfile.c | $(BUILD_DIR)
+	@echo "  CROSS   $<"
+	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $<
+
 include mk/tests.mk
 include mk/analysis.mk
 include mk/help.mk

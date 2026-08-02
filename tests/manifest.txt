@@ -110,6 +110,7 @@ test-mmap-hint
 [section] mremap tests
 test-mremap
 test-mremap-infra
+test-mremap-fork-tracking
 test-shim-cred-race
 
 [section] msync MAP_SHARED tests

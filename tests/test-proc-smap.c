@@ -19,7 +19,6 @@
 #include <unistd.h>
 
 #include "test-harness.h"
-#include "test-util.h"
 
 int passes = 0, fails = 0;
 
@@ -367,11 +366,16 @@ static void free_smaps(smaps_info_t *info)
  * on both success and failure. */
 static bool load_smaps(const char *path, smaps_info_t *info)
 {
+    FILE *file = fopen(path, "r");
+    if (!file)
+        return false;
+
     char *buf = NULL;
-    size_t len = 0;
-    bool ok = read_file_dynamic_nul(path, &buf, &len) >= 0 &&
-              parse_smaps(buf, len, info);
+    size_t capacity = 0;
+    ssize_t length = getdelim(&buf, &capacity, '\0', file);
+    bool ok = length >= 0 && parse_smaps(buf, (size_t) length, info);
     free(buf);
+    (void) fclose(file);
     return ok;
 }
 
@@ -462,13 +466,69 @@ static bool read_exact(int fd, void *data, size_t len)
     return true;
 }
 
+static bool write_exact(int fd, const void *data, size_t len)
+{
+    const char *p = data;
+    size_t done = 0;
+    while (done < len) {
+        ssize_t n = write(fd, p + done, len - done);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            return false;
+        done += (size_t) n;
+    }
+    return true;
+}
+
 static int child_probe(uintptr_t target,
                        uintptr_t stress,
                        size_t page_size,
                        size_t stress_size)
 {
-    void *postfork = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
-                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *postfork = MAP_FAILED;
+    uintptr_t target_end = target + 3 * page_size;
+    uintptr_t stress_end = stress + stress_size;
+
+#ifdef MAP_FIXED_NOREPLACE
+    /* Keep the probe in a known gap so the synthetic smaps builder cannot
+     * merge it with the target's final rw page or the stress fixture. */
+    uintptr_t fixed_hint = 0x700000000000ULL;
+    for (int attempt = 0; attempt < 32; attempt++) {
+        void *candidate =
+            mmap((void *) fixed_hint, page_size, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (candidate != MAP_FAILED) {
+            uintptr_t p = (uintptr_t) candidate;
+            if (p != target_end && p + page_size != target && p != stress_end &&
+                p + page_size != stress) {
+                postfork = candidate;
+                break;
+            }
+            munmap(candidate, page_size);
+        }
+        fixed_hint += 16 * page_size;
+    }
+#endif
+
+    if (postfork == MAP_FAILED) {
+        uintptr_t hint = stress_end + 64 * page_size;
+        for (int attempt = 0; attempt < 32; attempt++) {
+            void *candidate =
+                mmap((void *) hint, page_size, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (candidate == MAP_FAILED)
+                break;
+            uintptr_t p = (uintptr_t) candidate;
+            if (p != target_end && p + page_size != target && p != stress_end &&
+                p + page_size != stress) {
+                postfork = candidate;
+                break;
+            }
+            munmap(candidate, page_size);
+            hint += 64 * page_size;
+        }
+    }
     if (postfork == MAP_FAILED)
         return 1;
 
@@ -590,7 +650,7 @@ int main(void)
             close(pipefd[0]);
             int result = child_probe((uintptr_t) target, (uintptr_t) stress,
                                      page_size, stress_size);
-            (void) write_fd_all(pipefd[1], &result, sizeof(result));
+            (void) write_exact(pipefd[1], &result, sizeof(result));
             close(pipefd[1]);
             _exit(result);
         } else {

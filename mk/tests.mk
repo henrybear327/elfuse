@@ -16,6 +16,7 @@
         test-vcpu-run-hooks-host test-identity-override-host \
         test-dynamic-array-host \
         test-string-builder-host \
+        test-mremap-tail-emfile \
         test-proctitle-host test-proctitle-low-stack \
         test-sysroot-procfs-exec test-timeout-disable test-launch-flags \
         test-fuse-alpine \
@@ -42,6 +43,11 @@
 test-hello: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
 	@printf "$(BLUE)▸ Running$(RESET) test-hello\n"
 	$(ELFUSE_BIN) $(TEST_DIR)/test-hello
+
+## Run the libc-based file-backed region removal EMFILE regression probe
+test-mremap-tail-emfile: $(ELFUSE_BIN) $(BUILD_DIR)/test-mremap-tail-emfile
+	@printf "$(BLUE)▸ Running$(RESET) test-mremap-tail-emfile\n"
+	$(ELFUSE_BIN) $(BUILD_DIR)/test-mremap-tail-emfile
 
 ## Verify dispatch.tbl coverage of the kernel-supported syscall set
 check-syscall-coverage:

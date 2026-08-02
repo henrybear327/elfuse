@@ -126,7 +126,8 @@ What they do:
   - the unit suite from `tests/manifest.txt` -- deliberately narrow: only
     tests that assert elfuse-internal implementation details with no real
     Linux counterpart (the EL1 shim fast-path suite, `test-mremap-infra`,
-    `test-oom-proc`), plus whatever `mk/tests.mk`'s `SANITIZER_SECTIONS`
+    `test-mremap-fork-tracking`, `test-oom-proc`), plus whatever
+    `mk/tests.mk`'s `SANITIZER_SECTIONS`
     needs for the `check-{asan,ubsan,tsan}` lanes. Everything that is
     meaningful to cross-check against a real Linux kernel lives exclusively
     in `tests/test-matrix.sh`'s `run_unit_tests` instead (see Test Matrix
@@ -327,8 +328,9 @@ surface -- every binary that is meaningful to run against a real kernel, which
 is almost everything. It deliberately excludes only the handful of tests that
 assert elfuse-internal implementation details with no meaningful counterpart
 on a real kernel (the EL1 shim fast-path suite, `test-mremap-infra`,
-`test-oom-proc` -- these live solely in `tests/manifest.txt` / `make check`,
-see that file's header for the full split rationale). There is no separate
+`test-mremap-fork-tracking`, `test-oom-proc` -- these live solely in
+`tests/manifest.txt` / `make check`, see that file's header for the full split
+rationale). There is no separate
 "core" vs "extended" test set inside the matrix; a test that has a real,
 understood divergence from the qemu reference kernel is listed in
 `QEMU_SKIP` with a comment explaining why instead -- see that variable in

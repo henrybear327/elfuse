@@ -75,6 +75,7 @@ typedef struct {
     uint64_t start;
     uint64_t end;
     uint64_t gpa_base;
+    uint64_t vma_id;
     int prot;
     int flags;
     uint64_t offset;
@@ -230,6 +231,168 @@ static void mark_region_backing_ro(guest_t *g, uint64_t start, uint64_t end)
  * remain unmarked. Keep the two portions as separate VMAs even when all other
  * metadata matches so the synthetic smaps view can distinguish them.
  */
+static bool mremap_backings_match(const guest_region_t *a,
+                                  const guest_region_t *b)
+{
+    if (a->backing_fd < 0 || b->backing_fd < 0)
+        return a->backing_fd < 0 && b->backing_fd < 0;
+    if (a->backing_fd == b->backing_fd)
+        return true;
+
+    struct stat sa, sb;
+    if (fstat(a->backing_fd, &sa) < 0 || fstat(b->backing_fd, &sb) < 0)
+        return false;
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
+typedef struct {
+    uint64_t start;
+    uint64_t end;
+    uint64_t gpa_base;
+    uint64_t offset;
+    int backing_fd; /* borrowed from the region tracker */
+    bool overlay_active;
+    uint64_t overlay_start;
+    uint64_t overlay_end;
+} mremap_source_segment_t;
+
+typedef struct {
+    const guest_region_t *first;
+    uint64_t inherited_prefix;
+    int nsegments;
+    mremap_source_segment_t *segments;
+} mremap_source_t;
+
+static void dispose_mremap_source(mremap_source_t *source)
+{
+    if (!source)
+        return;
+    free(source->segments);
+    memset(source, 0, sizeof(*source));
+}
+
+static int64_t finish_mremap(mremap_source_t *source, int64_t result)
+{
+    dispose_mremap_source(source);
+    return result;
+}
+
+/* Resolve a logical mremap source. Fork-aware growth intentionally leaves an
+ * inherited prefix and a child-private tail as separate records; those two
+ * records are still one VMA for mremap purposes. The stable vma_id proves that
+ * provenance even after another fork changes inherited_at_fork on both
+ * records. Reject any boundary with a different lineage so unrelated adjacent
+ * mappings cannot be copied as one source.
+ */
+static int find_mremap_source(const guest_t *g,
+                              uint64_t start,
+                              uint64_t size,
+                              bool collect_segments,
+                              mremap_source_t *source)
+{
+    uint64_t end = start + size;
+    const guest_region_t *first = guest_region_find(g, start);
+    if (!first)
+        return -LINUX_EFAULT;
+
+    memset(source, 0, sizeof(*source));
+    source->first = first;
+
+    int index = (int) (first - g->regions);
+    if (index < 0 || index >= g->nregions)
+        goto invalid;
+
+    uint64_t cursor = start;
+    uint64_t expected_gpa = first->gpa_base + (start - first->start);
+    uint64_t expected_offset = first->offset + (start - first->start);
+    uint64_t inherited_prefix = 0;
+    bool prefix_inherited = true;
+    int nsegments = 0;
+    for (int scan = index; scan < g->nregions && cursor < end; scan++) {
+        const guest_region_t *r = &g->regions[scan];
+        if (r->start > cursor || r->end <= cursor)
+            goto invalid;
+        if (r != first) {
+            const guest_region_t *previous = &g->regions[scan - 1];
+            if (previous->end != r->start || previous->prot != r->prot ||
+                previous->flags != r->flags || previous->shared != r->shared ||
+                previous->noreserve != r->noreserve ||
+                previous->backing_ro != r->backing_ro ||
+                strcmp(previous->name, r->name) != 0 ||
+                !mremap_backings_match(previous, r))
+                goto invalid;
+            if (!previous->vma_id || previous->vma_id != r->vma_id)
+                goto invalid;
+        }
+
+        uint64_t segment_end = r->end < end ? r->end : end;
+        uint64_t segment_len = segment_end - cursor;
+        if (r->gpa_base + (cursor - r->start) != expected_gpa)
+            goto invalid;
+        if (!(r->flags & LINUX_MAP_ANONYMOUS) &&
+            r->offset + (cursor - r->start) != expected_offset)
+            goto invalid;
+
+        if (nsegments >= GUEST_MAX_REGIONS)
+            goto invalid;
+        nsegments++;
+
+        if (prefix_inherited && r->inherited_at_fork)
+            inherited_prefix += segment_len;
+        else
+            prefix_inherited = false;
+        cursor = segment_end;
+        expected_gpa += segment_len;
+        expected_offset += segment_len;
+    }
+    if (cursor != end)
+        goto invalid;
+
+    /* Validation also gives the exact allocation size. Same-size non-fixed
+     * mremap stops here, so its no-op success cannot be turned into ENOMEM by
+     * segment bookkeeping.
+     */
+    source->inherited_prefix = inherited_prefix;
+    source->nsegments = nsegments;
+    if (!collect_segments)
+        return 0;
+
+    source->segments =
+        malloc((size_t) nsegments * sizeof(*source->segments));
+    if (!source->segments) {
+        dispose_mremap_source(source);
+        return -LINUX_ENOMEM;
+    }
+
+    cursor = start;
+    expected_gpa = first->gpa_base + (start - first->start);
+    expected_offset = first->offset + (start - first->start);
+    for (int segment_index = 0; segment_index < nsegments; segment_index++) {
+        const guest_region_t *r = &g->regions[index + segment_index];
+        uint64_t segment_end = r->end < end ? r->end : end;
+        uint64_t segment_len = segment_end - cursor;
+        mremap_source_segment_t *segment =
+            &source->segments[segment_index];
+        segment->start = cursor;
+        segment->end = segment_end;
+        segment->gpa_base = expected_gpa;
+        segment->offset = expected_offset;
+        segment->backing_fd = r->backing_fd;
+        segment->overlay_active = region_has_live_overlay(r);
+        segment->overlay_start = r->overlay_start;
+        segment->overlay_end = r->overlay_end;
+
+        cursor = segment_end;
+        expected_gpa += segment_len;
+        expected_offset += segment_len;
+    }
+    return 0;
+
+invalid:
+    dispose_mremap_source(source);
+    return -LINUX_EFAULT;
+}
+
 static int add_mremap_region(guest_t *g,
                              uint64_t start,
                              uint64_t old_size,
@@ -239,36 +402,45 @@ static int add_mremap_region(guest_t *g,
                              uint64_t offset,
                              const char *name,
                              int backing_fd,
-                             bool inherited_at_fork)
+                             bool inherited_at_fork,
+                             uint64_t inherited_size,
+                             int tail_backing_fd,
+                             uint64_t vma_id)
 {
-    if (inherited_at_fork && old_size > 0 && old_size < new_size) {
-        int tail_backing_fd = -1;
-        if (backing_fd >= 0) {
-            tail_backing_fd = dup(backing_fd);
-            if (tail_backing_fd < 0) {
-                close(backing_fd);
-                return -1;
-            }
+    if (!inherited_at_fork)
+        inherited_size = 0;
+    if (inherited_size > old_size)
+        inherited_size = old_size;
+    if (inherited_size > new_size)
+        inherited_size = new_size;
+
+    if (inherited_size > 0 && inherited_size < new_size) {
+        if (backing_fd >= 0 && tail_backing_fd < 0) {
+            close(backing_fd);
+            return -1;
         }
-        if (guest_region_add_ex_owned(g, start, start + old_size, prot, flags,
-                                      offset, name, backing_fd, true) < 0) {
+        if (guest_region_add_ex_owned(g, start, start + inherited_size, prot,
+                                      flags, offset, name, backing_fd, true,
+                                      vma_id) < 0) {
             if (tail_backing_fd >= 0)
                 close(tail_backing_fd);
             return -1;
         }
-
-        if (guest_region_add_ex_owned(g, start + old_size, start + new_size,
-                                      prot, flags, offset + old_size, name,
-                                      tail_backing_fd, false) < 0) {
-            guest_region_remove(g, start, start + old_size);
+        if (guest_region_add_ex_owned(g, start + inherited_size,
+                                      start + new_size, prot, flags,
+                                      offset + inherited_size, name,
+                                      tail_backing_fd, false, vma_id) < 0) {
+            guest_region_remove(g, start, start + inherited_size);
             return -1;
         }
         return 0;
     }
 
-    return guest_region_add_ex_owned(g, start, start + new_size, prot, flags,
-                                     offset, name, backing_fd,
-                                     inherited_at_fork && old_size > 0);
+    if (tail_backing_fd >= 0)
+        close(tail_backing_fd);
+    return guest_region_add_ex_owned(
+        g, start, start + new_size, prot, flags, offset, name, backing_fd,
+        inherited_size == new_size && inherited_size > 0, vma_id);
 }
 
 static void region_clip_overlay(guest_region_t *r)
@@ -290,43 +462,51 @@ static void region_clip_overlay(guest_region_t *r)
         region_clear_overlay(r);
 }
 
-static void split_regions_at_boundary(guest_t *g, uint64_t boundary)
+static int split_regions_at_boundary(guest_t *g, uint64_t boundary)
 {
     if (boundary == 0)
-        return;
+        return 0;
 
     for (int i = 0; i < g->nregions; i++) {
-        guest_region_t *r = &g->regions[i];
+        const guest_region_t *r = &g->regions[i];
         if (boundary <= r->start)
             break;
         if (boundary >= r->end)
             continue;
         if (g->nregions >= GUEST_MAX_REGIONS) {
             log_error(
-                "guest: region table full, cleanup split skipped at "
+                "guest: region table full, region split skipped at "
                 "0x%llx",
                 (unsigned long long) boundary);
-            return;
+            return -LINUX_ENOMEM;
         }
+
+        guest_region_t left = *r;
+        guest_region_t right = *r;
+        if (right.backing_fd >= 0) {
+            right.backing_fd = dup(right.backing_fd);
+            if (right.backing_fd < 0) {
+                log_error("guest: dup() failed for region split: %s",
+                          strerror(errno));
+                return -LINUX_ENOMEM;
+            }
+        }
+
+        left.end = boundary;
+        right.offset += boundary - right.start;
+        right.gpa_base += boundary - right.start;
+        right.start = boundary;
+        region_clip_overlay(&left);
+        region_clip_overlay(&right);
 
         memmove(&g->regions[i + 1], &g->regions[i],
                 (g->nregions - i) * sizeof(guest_region_t));
+        g->regions[i] = left;
+        g->regions[i + 1] = right;
         g->nregions++;
-
-        g->regions[i].end = boundary;
-        g->regions[i + 1].offset += (boundary - g->regions[i + 1].start);
-        g->regions[i + 1].gpa_base += (boundary - g->regions[i + 1].start);
-        g->regions[i + 1].start = boundary;
-        if (g->regions[i + 1].backing_fd >= 0) {
-            g->regions[i + 1].backing_fd = dup(g->regions[i + 1].backing_fd);
-            if (g->regions[i + 1].backing_fd < 0)
-                log_error("guest: dup() failed for cleanup split: %s",
-                          strerror(errno));
-        }
-        region_clip_overlay(&g->regions[i]);
-        region_clip_overlay(&g->regions[i + 1]);
-        return;
+        return 0;
     }
+    return 0;
 }
 
 static uint64_t find_free_gap_inner(const guest_t *g,
@@ -901,7 +1081,7 @@ populate_existing:
     }
     if (guest_region_add_ex_owned_gpa(g, addr, addr + length, gpa_base, prot,
                                       flags, offset, NULL, track_backing_fd,
-                                      false) < 0)
+                                      false, 0) < 0)
         goto fail;
     /* Ownership of track_backing_fd is now held by the new region. The fail
      * handler below skips closing when track_backing_fd < 0, so subsequent
@@ -1101,6 +1281,167 @@ static int restore_file_overlay_range(guest_t *g,
     return 0;
 }
 
+static bool mremap_source_has_overlay(const mremap_source_t *source)
+{
+    for (int i = 0; i < source->nsegments; i++) {
+        if (source->segments[i].overlay_active)
+            return true;
+    }
+    return false;
+}
+
+typedef struct {
+    uint64_t start;
+    uint64_t end;
+    uint64_t offset;
+    int backing_fd;
+    bool active;
+    uint64_t overlay_start;
+    uint64_t overlay_end;
+} saved_overlay_t;
+
+typedef void (*saved_overlay_getter_t)(const void *saved,
+                                       int index,
+                                       saved_overlay_t *overlay);
+
+static uint64_t saved_overlay_file_offset(const saved_overlay_t *overlay)
+{
+    if (overlay->overlay_start >= overlay->start)
+        return overlay->offset + (overlay->overlay_start - overlay->start);
+    return overlay->offset - (overlay->start - overlay->overlay_start);
+}
+
+/* Reinstall each distinct host overlay once, then restore metadata on every
+ * tracker fragment that shared it. cleanup_overlays_in_range() can fail after
+ * removing only a subset, so replaying the complete saved set is rollback-safe.
+ */
+static int restore_saved_overlays_in_place(guest_t *g,
+                                           const void *saved,
+                                           int n,
+                                           saved_overlay_getter_t get)
+{
+    for (int i = 0; i < n; i++) {
+        saved_overlay_t overlay;
+        get(saved, i, &overlay);
+        if (!overlay.active || overlay.backing_fd < 0)
+            continue;
+
+        uint64_t file_off = saved_overlay_file_offset(&overlay);
+        bool first = true;
+        for (int j = 0; j < i; j++) {
+            saved_overlay_t previous;
+            get(saved, j, &previous);
+            if (previous.active && previous.backing_fd >= 0 &&
+                previous.overlay_start == overlay.overlay_start &&
+                previous.overlay_end == overlay.overlay_end &&
+                saved_overlay_file_offset(&previous) == file_off) {
+                first = false;
+                break;
+            }
+        }
+
+        if (first) {
+            int err = restore_file_overlay_range(
+                g, overlay.start, overlay.end, overlay.overlay_start,
+                overlay.overlay_end, overlay.backing_fd, file_off);
+            if (err < 0)
+                return err;
+        } else {
+            mark_overlay_metadata_range(g, overlay.start, overlay.end,
+                                        overlay.overlay_start,
+                                        overlay.overlay_end);
+        }
+    }
+    return 0;
+}
+
+static void get_mremap_source_overlay(const void *saved,
+                                      int index,
+                                      saved_overlay_t *overlay)
+{
+    const mremap_source_t *source = saved;
+    const mremap_source_segment_t *segment = &source->segments[index];
+    *overlay = (saved_overlay_t) {
+        .start = segment->start,
+        .end = segment->end,
+        .offset = segment->offset,
+        .backing_fd = segment->backing_fd,
+        .active = segment->overlay_active,
+        .overlay_start = segment->overlay_start,
+        .overlay_end = segment->overlay_end,
+    };
+}
+
+static int restore_mremap_source_overlays_in_place(
+    guest_t *g,
+    const mremap_source_t *source)
+{
+    return restore_saved_overlays_in_place(g, source, source->nsegments,
+                                           get_mremap_source_overlay);
+}
+
+/* The host overlay stays installed during an in-place growth; only the region
+ * records are replaced. Reapply the saved metadata to the corresponding new
+ * records without remapping the host VA.
+ */
+static void mark_mremap_source_overlay_metadata(guest_t *g,
+                                                const mremap_source_t *source)
+{
+    for (int i = 0; i < source->nsegments; i++) {
+        const mremap_source_segment_t *segment = &source->segments[i];
+        if (segment->overlay_active)
+            mark_overlay_metadata_range(g, segment->start, segment->end,
+                                        segment->overlay_start,
+                                        segment->overlay_end);
+    }
+}
+
+/* Copy each source segment according to its own backing state. Live-overlay
+ * bytes must be refreshed from the file after the overlay is removed; private
+ * fork-grown bytes remain in the slab and must be copied from their GPA.
+ */
+static int copy_mremap_source(guest_t *g,
+                              uint64_t dest_gpa,
+                              uint64_t source_start,
+                              uint64_t length,
+                              const mremap_source_t *source)
+{
+    uint64_t source_end = source_start + length;
+    uint64_t cursor = source_start;
+
+    for (int i = 0; i < source->nsegments && cursor < source_end; i++) {
+        const mremap_source_segment_t *segment = &source->segments[i];
+        uint64_t start = segment->start > cursor ? segment->start : cursor;
+        uint64_t end = segment->end < source_end ? segment->end : source_end;
+        if (end <= start)
+            continue;
+        if (start != cursor)
+            return -LINUX_EFAULT;
+
+        uint64_t len = end - start;
+        uint64_t dest = dest_gpa + (start - source_start);
+        if (segment->overlay_active) {
+            if (segment->backing_fd < 0)
+                return -LINUX_EFAULT;
+            int err = read_file_range_to_guest(
+                g, dest, segment->backing_fd,
+                segment->offset + (start - segment->start), len);
+            if (err < 0)
+                return err;
+        } else {
+            uint8_t *dest_ptr = host_ptr_for_gpa(g, dest);
+            uint8_t *source_ptr = host_ptr_for_gpa(
+                g, segment->gpa_base + (start - segment->start));
+            if (!dest_ptr || !source_ptr)
+                return -LINUX_EFAULT;
+            memmove(dest_ptr, source_ptr, len);
+        }
+        cursor = end;
+    }
+
+    return cursor == source_end ? 0 : -LINUX_EFAULT;
+}
+
 typedef struct {
     uint64_t overlay_start;
     uint64_t overlay_len;
@@ -1148,8 +1489,12 @@ static int capture_region_snapshots(guest_t *g,
                                     region_snapshot_t *snaps,
                                     int max_snaps)
 {
-    split_regions_at_boundary(g, start);
-    split_regions_at_boundary(g, end);
+    int split_err = split_regions_at_boundary(g, start);
+    if (split_err < 0)
+        return split_err;
+    split_err = split_regions_at_boundary(g, end);
+    if (split_err < 0)
+        return split_err;
 
     int n = 0;
     for (int i = 0; i < g->nregions; i++) {
@@ -1167,6 +1512,7 @@ static int capture_region_snapshots(guest_t *g,
         snap->start = r->start;
         snap->end = r->end;
         snap->gpa_base = r->gpa_base;
+        snap->vma_id = r->vma_id;
         snap->prot = r->prot;
         snap->flags = r->flags;
         snap->offset = r->offset;
@@ -1189,46 +1535,56 @@ static int capture_region_snapshots(guest_t *g,
     return n;
 }
 
+/* MREMAP_FIXED may remove a destination fragment that used to share the same
+ * tracker backing fd as a source fragment. Rebind file-backed source segments
+ * to the owned source snapshots before destination removal, so later overlay
+ * restore and pread-based copies cannot observe a closed borrowed fd. */
+static int rebind_mremap_source_backings(mremap_source_t *source,
+                                         const region_snapshot_t *snaps,
+                                         int n)
+{
+    for (int i = 0; i < source->nsegments; i++) {
+        mremap_source_segment_t *segment = &source->segments[i];
+        if (segment->backing_fd < 0)
+            continue;
+
+        int stable_fd = -1;
+        for (int j = 0; j < n; j++) {
+            if (snaps[j].start <= segment->start &&
+                segment->start < snaps[j].end && snaps[j].backing_fd >= 0) {
+                stable_fd = snaps[j].backing_fd;
+                break;
+            }
+        }
+        if (stable_fd < 0)
+            return -LINUX_EFAULT;
+        segment->backing_fd = stable_fd;
+    }
+    return 0;
+}
+
+static void get_region_snapshot_overlay(const void *saved,
+                                        int index,
+                                        saved_overlay_t *overlay)
+{
+    const region_snapshot_t *snap = &((const region_snapshot_t *) saved)[index];
+    *overlay = (saved_overlay_t) {
+        .start = snap->start,
+        .end = snap->end,
+        .offset = snap->offset,
+        .backing_fd = snap->backing_fd,
+        .active = snap->overlay_active,
+        .overlay_start = snap->overlay_start,
+        .overlay_end = snap->overlay_end,
+    };
+}
+
 static int restore_snapshot_overlays_in_place(guest_t *g,
                                               const region_snapshot_t *snaps,
                                               int n)
 {
-    for (int i = 0; i < n; i++) {
-        const region_snapshot_t *snap = &snaps[i];
-        if (!snap->overlay_active || snap->backing_fd < 0)
-            continue;
-
-        bool first = true;
-        uint64_t snap_file_off =
-            snap->offset + (snap->overlay_start - snap->start);
-        for (int j = 0; j < i; j++) {
-            const region_snapshot_t *prev = &snaps[j];
-            if (!prev->overlay_active || prev->backing_fd < 0)
-                continue;
-            uint64_t prev_file_off =
-                prev->offset + (prev->overlay_start - prev->start);
-            if (prev->overlay_start == snap->overlay_start &&
-                prev->overlay_end == snap->overlay_end &&
-                prev_file_off == snap_file_off) {
-                first = false;
-                break;
-            }
-        }
-
-        if (first) {
-            int err = restore_file_overlay_range(
-                g, snap->start, snap->end, snap->overlay_start,
-                snap->overlay_end, snap->backing_fd, snap_file_off);
-            if (err < 0)
-                return err;
-            continue;
-        }
-
-        mark_overlay_metadata_range(g, snap->start, snap->end,
-                                    snap->overlay_start, snap->overlay_end);
-    }
-
-    return 0;
+    return restore_saved_overlays_in_place(g, snaps, n,
+                                           get_region_snapshot_overlay);
 }
 
 static bool snapshot_has_materialized_ptes(const region_snapshot_t *snap)
@@ -1289,7 +1645,7 @@ static int restore_region_snapshots(guest_t *g, region_snapshot_t *snaps, int n)
         if (guest_region_add_ex_owned_gpa(
                 g, snap->start, snap->end, snap->gpa_base, snap->prot,
                 snap->flags, snap->offset, snap->name[0] ? snap->name : NULL,
-                snap->backing_fd, snap->inherited_at_fork) < 0) {
+                snap->backing_fd, snap->inherited_at_fork, snap->vma_id) < 0) {
             snap->backing_fd = -1;
             close_region_snapshots(snaps, n);
             return -LINUX_ENOMEM;
@@ -1768,8 +2124,12 @@ static int cleanup_overlays_in_range(guest_t *g, uint64_t start, uint64_t end)
     uint64_t host_start = ALIGN_DOWN(start, hps);
     uint64_t host_end = ALIGN_UP(end, hps);
 
-    split_regions_at_boundary(g, host_start);
-    split_regions_at_boundary(g, host_end);
+    int split_err = split_regions_at_boundary(g, host_start);
+    if (split_err < 0)
+        return split_err;
+    split_err = split_regions_at_boundary(g, host_end);
+    if (split_err < 0)
+        return split_err;
 
     /* Snapshot affected ranges first; the host-side mmap calls below do not
      * touch the region array, but a future caller invariant is to allow this
@@ -1826,6 +2186,22 @@ static int cleanup_overlays_in_range(guest_t *g, uint64_t start, uint64_t end)
 
 /* Memory syscalls (tightly coupled to guest.h). */
 
+static bool heap_tail_can_extend(const guest_region_t *tail,
+                                 const guest_region_t *heap,
+                                 uint64_t old_brk)
+{
+    const int heap_flags = LINUX_MAP_PRIVATE | LINUX_MAP_ANONYMOUS;
+
+    return tail->start == heap->end && tail->end == old_brk &&
+           tail->end > tail->start && tail->gpa_base == tail->start &&
+           tail->vma_id == heap->vma_id &&
+           tail->prot == (LINUX_PROT_READ | LINUX_PROT_WRITE) &&
+           tail->flags == heap_flags && tail->offset == 0 &&
+           tail->backing_fd < 0 && !tail->shared && !tail->noreserve &&
+           !tail->backing_ro && !tail->inherited_at_fork &&
+           !region_has_live_overlay(tail) && !strcmp(tail->name, "[heap]");
+}
+
 int64_t sys_brk(guest_t *g, uint64_t addr)
 {
     /* brk addresses as seen by the guest are IPA-based */
@@ -1846,6 +2222,16 @@ int64_t sys_brk(guest_t *g, uint64_t addr)
     if (new_off >= g->guest_size) {
         return (int64_t) ipa_brk;
     }
+
+    /* Shrinking can split a file-backed semantic region when a fork child has
+     * grown and reshaped its heap metadata. Reserve the right-hand region's
+     * backing fd before publishing the new break, so EMFILE leaves both the
+     * break and region table unchanged.
+     */
+    int shrink_remove_fd = -1;
+    if (new_off < old_brk &&
+        guest_region_remove_prepare(g, new_off, old_brk, &shrink_remove_fd) < 0)
+        return (int64_t) ipa_brk;
 
     /* Materialize any newly exposed heap pages. This must handle both:
      * 1. growth into brand-new 2 MiB blocks, and
@@ -1874,7 +2260,15 @@ int64_t sys_brk(guest_t *g, uint64_t addr)
      * avoids the remove+add gap where a concurrent /proc/self/maps reader could
      * see no heap region.
      */
-    if (new_off > g->brk_base) {
+    if (new_off < old_brk) {
+        /* Trim every semantic heap segment covered by the released suffix.
+         * In a fork child this may shorten or remove the private tail while
+         * leaving the inherited prefix intact. Keeping the tracker end equal
+         * to brk_current prevents a later regrowth from overlapping stale
+         * tail metadata.
+         */
+        guest_region_remove_reserved(g, new_off, old_brk, shrink_remove_fd);
+    } else if (new_off > g->brk_base) {
         bool found = false;
         for (int i = 0; i < g->nregions; i++) {
             if (g->regions[i].start == g->brk_base &&
@@ -1883,17 +2277,31 @@ int64_t sys_brk(guest_t *g, uint64_t addr)
                 uint64_t old_heap_end = heap->end;
                 if (new_off > old_heap_end && heap->inherited_at_fork) {
                     /* Keep the fork-snapshot portion separate from pages
-                     * materialized by this post-fork brk growth. If the
-                     * semantic table is full, retain the historical
-                     * conservative range and mark it stale rather than
-                     * failing an otherwise successful brk syscall.
+                     * materialized by post-fork brk growth. On later growths,
+                     * extend the existing child-private tail rather than
+                     * adding an overlapping range from the old boundary.
                      */
-                    if (guest_region_add(
-                            g, old_heap_end, new_off,
-                            LINUX_PROT_READ | LINUX_PROT_WRITE,
-                            LINUX_MAP_PRIVATE | LINUX_MAP_ANONYMOUS, 0,
-                            "[heap]") < 0) {
-                        heap->end = new_off;
+                    guest_region_t *right =
+                        i + 1 < g->nregions ? &g->regions[i + 1] : NULL;
+                    guest_region_t *tail =
+                        right && heap_tail_can_extend(right, heap, old_brk)
+                            ? right
+                            : NULL;
+                    if (tail) {
+                        if (new_off > tail->end)
+                            tail->end = new_off;
+                    } else if (new_off > old_brk &&
+                               guest_region_add_ex_owned(
+                                   g, old_brk, new_off,
+                                   LINUX_PROT_READ | LINUX_PROT_WRITE,
+                                   LINUX_MAP_PRIVATE | LINUX_MAP_ANONYMOUS, 0,
+                                   "[heap]", -1, false, heap->vma_id) < 0) {
+                        /* Widening the inherited prefix would either overlap
+                         * an incompatible child-private tail or mislabel new
+                         * pages as inherited. Keep the original boundary; brk
+                         * memory already grew successfully, so only the
+                         * semantic tracker becomes stale.
+                         */
                         g->regions_tracker_stale = true;
                     }
                 } else {
@@ -2628,7 +3036,7 @@ int64_t sys_mmap(guest_t *g,
      */
     if (guest_region_add_ex_owned(g, result_off, result_off + length, prot,
                                   track_flags, is_anon ? 0 : (uint64_t) offset,
-                                  NULL, track_backing_fd, false) < 0) {
+                                  NULL, track_backing_fd, false, 0) < 0) {
         /* Region table was full: undo any host overlay we just installed so the
          * file is not left mmap'd at host_base+ipa with no tracking. Without
          * this, a later operation in that range would memset zeros directly
@@ -2758,12 +3166,20 @@ int64_t sys_mremap(guest_t *g,
     if (guest_range_hits_infra(g, old_off, old_off + old_size))
         return -LINUX_EINVAL;
 
-    /* Verify the whole source range is covered by one tracked VMA. mremap()
-     * must not copy holes or unrelated adjacent mappings.
+    /* Verify the whole source range is covered by one logical VMA. A
+     * fork-aware growth can split that VMA at the inherited/private boundary,
+     * but no unrelated adjacent mapping may be included.
      */
-    const guest_region_t *src_reg = guest_region_find(g, old_off);
-    if (!src_reg || src_reg->end - old_off < old_size)
-        return -LINUX_EFAULT;
+    mremap_source_t source;
+    bool collect_source_segments =
+        old_size != new_size || (flags & LINUX_MREMAP_FIXED);
+    int source_err = find_mremap_source(g, old_off, old_size,
+                                        collect_source_segments, &source);
+    if (source_err < 0)
+        return source_err;
+    const guest_region_t *src_reg = source.first;
+    uint64_t source_inherited_size = source.inherited_prefix;
+    uint64_t source_vma_id = src_reg->vma_id;
 
     /* Capture the source region's GPA layout before any region mutation below
      * invalidates src_reg. src_gpa_base + (va_off - src_start) is the backing
@@ -2776,41 +3192,48 @@ int64_t sys_mremap(guest_t *g,
 
     /* Same size: nothing to do */
     if (old_size == new_size && !(flags & LINUX_MREMAP_FIXED))
-        return (int64_t) old_addr;
+        return finish_mremap(&source, (int64_t) old_addr);
 
     /* Shrinking mremap keeps the base address and releases only the tail. */
     if (new_size < old_size && !(flags & LINUX_MREMAP_FIXED)) {
         uint64_t tail_off = old_off + new_size, tail_end = old_off + old_size;
+        int tail_remove_fd = -1;
+        if (guest_region_remove_prepare(g, tail_off, tail_end,
+                                        &tail_remove_fd) < 0)
+            return finish_mremap(&source, -LINUX_ENOMEM);
         /* Restore slab backing under any tail overlay before zeroing so the
          * memset does not write zeros into a file.
          */
         int cleanup_err = cleanup_overlays_in_range(g, tail_off, tail_end);
-        if (cleanup_err < 0)
-            return cleanup_err;
+        if (cleanup_err < 0) {
+            if (tail_remove_fd >= 0)
+                close(tail_remove_fd);
+            return finish_mremap(&source, cleanup_err);
+        }
         /* Zero the trimmed region on its real backing (high-VA tails live at
          * gpa_base, not host_base + tail_off).
          */
         memset(host_ptr_for_gpa(g, src_gpa_base + (tail_off - src_start)), 0,
                tail_end - tail_off);
-        guest_region_remove(g, tail_off, tail_end);
+        guest_region_remove_reserved(g, tail_off, tail_end, tail_remove_fd);
         guest_invalidate_ptes(g, tail_off, tail_end);
         if (tail_off < g->mmap_rw_gap_hint)
             g->mmap_rw_gap_hint = tail_off;
         if (tail_off < g->mmap_rx_gap_hint)
             g->mmap_rx_gap_hint = tail_off;
-        return (int64_t) old_addr;
+        return finish_mremap(&source, (int64_t) old_addr);
     }
 
     /* MREMAP_FIXED: move to a specific new address */
     if (flags & LINUX_MREMAP_FIXED) {
         if (new_addr & 4095)
-            return -LINUX_EINVAL;
+            return finish_mremap(&source, -LINUX_EINVAL);
         uint64_t new_off = new_addr - g->ipa_base;
         /* MREMAP_FIXED dest stays primary-only for the same reason as the
          * source check above.
          */
         if (new_off > g->guest_size || new_size > g->guest_size - new_off)
-            return -LINUX_ENOMEM;
+            return finish_mremap(&source, -LINUX_ENOMEM);
 
         /* Same infrastructure protection as the source range: the move tail
          * removes any existing dest region and rewrites PTEs, which would
@@ -2818,12 +3241,12 @@ int64_t sys_mremap(guest_t *g,
          * infra.
          */
         if (guest_range_hits_infra(g, new_off, new_off + new_size))
-            return -LINUX_EINVAL;
+            return finish_mremap(&source, -LINUX_EINVAL);
 
         /* Linux rejects MREMAP_FIXED when old and new ranges overlap */
         uint64_t old_end = old_off + old_size, new_end = new_off + new_size;
         if (old_off < new_end && new_off < old_end)
-            return -LINUX_EINVAL;
+            return finish_mremap(&source, -LINUX_EINVAL);
 
         remove_range_t removed[] = {
             {old_off, old_end},
@@ -2835,27 +3258,38 @@ int64_t sys_mremap(guest_t *g,
          * metadata. The overlap check above prevents this case, but capturing
          * first is still the safe ordering.
          */
-        const guest_region_t *old_reg = guest_region_find(g, old_off);
+        const guest_region_t *old_reg = src_reg;
         int prot =
             old_reg ? old_reg->prot : (LINUX_PROT_READ | LINUX_PROT_WRITE);
         int track_flags = old_reg ? old_reg->flags
                                   : (LINUX_MAP_PRIVATE | LINUX_MAP_ANONYMOUS);
-        uint64_t track_offset = old_reg ? old_reg->offset : 0;
+        uint64_t track_offset =
+            old_reg ? old_reg->offset + (old_off - old_reg->start) : 0;
         int track_backing_fd = dup_region_backing_fd(old_reg);
         if (old_reg && old_reg->backing_fd >= 0 && track_backing_fd < 0)
-            return -LINUX_ENOMEM;
-        bool source_overlay = old_reg && region_has_live_overlay(old_reg);
+            return finish_mremap(&source, -LINUX_ENOMEM);
+        int tail_backing_fd = -1;
+        if (source_inherited_size > 0 && source_inherited_size < new_size &&
+            track_backing_fd >= 0) {
+            tail_backing_fd = dup(track_backing_fd);
+            if (tail_backing_fd < 0) {
+                close(track_backing_fd);
+                return finish_mremap(&source, -LINUX_ENOMEM);
+            }
+        }
+        bool source_overlay = mremap_source_has_overlay(&source);
         bool source_backing_ro = old_reg && old_reg->backing_ro;
         bool source_inherited_at_fork = old_reg && old_reg->inherited_at_fork;
         int added_regions =
-            source_inherited_at_fork && old_size < new_size ? 2 : 1;
+            source_inherited_size > 0 && source_inherited_size < new_size ? 2
+                                                                          : 1;
         if (!region_has_capacity_after_removes(g, removed, 2, added_regions)) {
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return -LINUX_ENOMEM;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, -LINUX_ENOMEM);
         }
-        uint64_t source_file_off =
-            old_reg ? old_reg->offset + (old_off - old_reg->start) : 0;
         char track_name[sizeof(old_reg->name)] = {0};
         /* Heap-allocated to avoid blowing the ~512 KiB default macOS thread
          * stack: each region_snapshot_t array is GUEST_MAX_REGIONS *
@@ -2876,7 +3310,9 @@ int64_t sys_mremap(guest_t *g,
             free(dest_snaps);
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return -LINUX_ENOMEM;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, -LINUX_ENOMEM);
         }
 
         source_nsnaps = capture_region_snapshots(
@@ -2886,7 +3322,20 @@ int64_t sys_mremap(guest_t *g,
             free(dest_snaps);
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return source_nsnaps;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, source_nsnaps);
+        }
+        int rebind_err =
+            rebind_mremap_source_backings(&source, source_snaps, source_nsnaps);
+        if (rebind_err < 0) {
+            dispose_region_snapshots(&source_snaps, &source_nsnaps);
+            free(dest_snaps);
+            if (track_backing_fd >= 0)
+                close(track_backing_fd);
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, rebind_err);
         }
         dest_nsnaps = capture_region_snapshots(g, new_off, new_off + new_size,
                                                dest_snaps, GUEST_MAX_REGIONS);
@@ -2895,7 +3344,9 @@ int64_t sys_mremap(guest_t *g,
             free(dest_snaps);
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return dest_nsnaps;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, dest_nsnaps);
         }
 
         if (source_overlay) {
@@ -2908,7 +3359,9 @@ int64_t sys_mremap(guest_t *g,
                 dispose_region_snapshots(&source_snaps, &source_nsnaps);
                 if (track_backing_fd >= 0)
                     close(track_backing_fd);
-                return cleanup_err;
+                if (tail_backing_fd >= 0)
+                    close(tail_backing_fd);
+                return finish_mremap(&source, cleanup_err);
             }
         }
 
@@ -2922,7 +3375,9 @@ int64_t sys_mremap(guest_t *g,
                 dispose_region_snapshots(&source_snaps, &source_nsnaps);
                 if (track_backing_fd >= 0)
                     close(track_backing_fd);
-                return restore_err;
+                if (tail_backing_fd >= 0)
+                    close(tail_backing_fd);
+                return finish_mremap(&source, restore_err);
             }
             (void) restore_snapshot_overlays_in_place(g, dest_snaps,
                                                       dest_nsnaps);
@@ -2930,7 +3385,9 @@ int64_t sys_mremap(guest_t *g,
             dispose_region_snapshots(&source_snaps, &source_nsnaps);
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return cleanup_err;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, cleanup_err);
         }
 
         if (mremap_extend_range(g, new_off, new_size, prot) < 0) {
@@ -2941,7 +3398,9 @@ int64_t sys_mremap(guest_t *g,
                 dispose_region_snapshots(&source_snaps, &source_nsnaps);
                 if (track_backing_fd >= 0)
                     close(track_backing_fd);
-                return restore_err;
+                if (tail_backing_fd >= 0)
+                    close(tail_backing_fd);
+                return finish_mremap(&source, restore_err);
             }
             (void) restore_snapshot_overlays_in_place(g, dest_snaps,
                                                       dest_nsnaps);
@@ -2949,7 +3408,9 @@ int64_t sys_mremap(guest_t *g,
             dispose_region_snapshots(&source_snaps, &source_nsnaps);
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return -LINUX_ENOMEM;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, -LINUX_ENOMEM);
         }
 
         /* Remove existing mappings at the destination after all fallible
@@ -2957,19 +3418,19 @@ int64_t sys_mremap(guest_t *g,
          */
         guest_region_remove(g, new_off, new_off + new_size);
 
-        /* Copy data (use memmove for potential overlap). If the source has a
-         * live overlay, the read side of the memmove pulls live file content;
-         * the destination receives a private snapshot at mremap time (no
+        /* Copy each logical source segment according to its own backing state.
+         * The destination receives a private snapshot at mremap time (no
          * overlay reapplied), and msync's emulated pwrite-the-diff path keeps
          * subsequent writes consistent.
          */
         uint64_t copy_len = old_size < new_size ? old_size : new_size;
         if (prot == LINUX_PROT_NONE) {
             memset((uint8_t *) g->host_base + new_off, 0, new_size);
-        } else if (source_overlay) {
-            memset((uint8_t *) g->host_base + new_off, 0, new_size);
-            int copy_err = read_file_range_to_guest(
-                g, new_off, track_backing_fd, source_file_off, copy_len);
+        } else {
+            if (source_overlay)
+                memset((uint8_t *) g->host_base + new_off, 0, new_size);
+            int copy_err =
+                copy_mremap_source(g, new_off, old_off, copy_len, &source);
             if (copy_err < 0) {
                 int restore_err = restore_snapshot_overlays_in_place(
                     g, source_snaps, source_nsnaps);
@@ -2990,21 +3451,14 @@ int64_t sys_mremap(guest_t *g,
                     restore_err = pt_err;
                 if (track_backing_fd >= 0)
                     close(track_backing_fd);
+                if (tail_backing_fd >= 0)
+                    close(tail_backing_fd);
                 dispose_region_snapshots(&source_snaps, &source_nsnaps);
                 dispose_region_snapshots(&dest_snaps, &dest_nsnaps);
                 if (restore_err < 0)
-                    return restore_err;
-                return copy_err;
+                    return finish_mremap(&source, restore_err);
+                return finish_mremap(&source, copy_err);
             }
-        } else {
-            /* Read the source through its GPA (identity for primary sources,
-             * overflow/mapping backing for high-VA). The destination is always
-             * a fresh primary-window range, so it never overlaps the source and
-             * the copy direction does not matter.
-             */
-            memmove((uint8_t *) g->host_base + new_off,
-                    host_ptr_for_gpa(g, src_gpa_base + (old_off - src_start)),
-                    copy_len);
         }
         /* Zero any extension beyond old data */
         if (new_size > old_size)
@@ -3025,17 +3479,19 @@ int64_t sys_mremap(guest_t *g,
 
         if (add_mremap_region(g, new_off, old_size, new_size, prot, track_flags,
                               track_offset, track_name[0] ? track_name : NULL,
-                              track_backing_fd, source_inherited_at_fork) < 0) {
+                              track_backing_fd, source_inherited_at_fork,
+                              source_inherited_size, tail_backing_fd,
+                              source_vma_id) < 0) {
             (void) restore_region_snapshots(g, dest_snaps, dest_nsnaps);
             dispose_region_snapshots(&source_snaps, &source_nsnaps);
             dispose_region_snapshots(&dest_snaps, &dest_nsnaps);
-            return -LINUX_ENOMEM;
+            return finish_mremap(&source, -LINUX_ENOMEM);
         }
         if (source_backing_ro)
             mark_region_backing_ro(g, new_off, new_off + new_size);
         dispose_region_snapshots(&source_snaps, &source_nsnaps);
         dispose_region_snapshots(&dest_snaps, &dest_nsnaps);
-        return (int64_t) guest_ipa(g, new_off);
+        return finish_mremap(&source, (int64_t) guest_ipa(g, new_off));
     }
 
     /* Grow in place: try to extend without moving */
@@ -3048,7 +3504,7 @@ int64_t sys_mremap(guest_t *g,
          * it.
          */
         if (guest_range_hits_infra(g, grow_off, grow_off + grow_len))
-            return -LINUX_EINVAL;
+            return finish_mremap(&source, -LINUX_EINVAL);
 
         /* Check if the space after the old region is free (overflow-safe) */
         if (grow_off <= g->guest_size && grow_len <= g->guest_size - grow_off) {
@@ -3069,31 +3525,54 @@ int64_t sys_mremap(guest_t *g,
             if (can_grow) {
                 remove_range_t removed = {old_off, old_off + old_size};
                 /* Extend in place */
-                const guest_region_t *old_reg = guest_region_find(g, old_off);
+                const guest_region_t *old_reg = src_reg;
                 int prot = old_reg ? old_reg->prot
                                    : (LINUX_PROT_READ | LINUX_PROT_WRITE);
                 int track_flags =
                     old_reg ? old_reg->flags
                             : (LINUX_MAP_PRIVATE | LINUX_MAP_ANONYMOUS);
-                uint64_t track_offset = old_reg ? old_reg->offset : 0;
+                uint64_t track_offset =
+                    old_reg ? old_reg->offset + (old_off - old_reg->start) : 0;
                 int track_backing_fd = dup_region_backing_fd(old_reg);
-                bool old_overlay = old_reg && region_has_live_overlay(old_reg);
-                uint64_t old_overlay_start =
-                    old_overlay ? old_reg->overlay_start : 0;
-                uint64_t old_overlay_end =
-                    old_overlay ? old_reg->overlay_end : 0;
+                int tail_backing_fd = -1;
+                if (source_inherited_size > 0 &&
+                    source_inherited_size < new_size && track_backing_fd >= 0) {
+                    tail_backing_fd = dup(track_backing_fd);
+                    if (tail_backing_fd < 0) {
+                        close(track_backing_fd);
+                        return finish_mremap(&source, -LINUX_ENOMEM);
+                    }
+                }
                 bool old_backing_ro = old_reg && old_reg->backing_ro;
                 bool old_inherited_at_fork =
                     old_reg && old_reg->inherited_at_fork;
-                int added_regions = old_inherited_at_fork ? 2 : 1;
+                int added_regions = source_inherited_size > 0 &&
+                                            source_inherited_size < new_size
+                                        ? 2
+                                        : 1;
                 if (!region_has_capacity_after_removes(g, &removed, 1,
                                                        added_regions)) {
                     if (track_backing_fd >= 0)
                         close(track_backing_fd);
-                    return -LINUX_ENOMEM;
+                    if (tail_backing_fd >= 0)
+                        close(tail_backing_fd);
+                    return finish_mremap(&source, -LINUX_ENOMEM);
                 }
-                if (old_reg && old_reg->backing_fd >= 0 && track_backing_fd < 0)
-                    return -LINUX_ENOMEM;
+                if (old_reg && old_reg->backing_fd >= 0 &&
+                    track_backing_fd < 0) {
+                    if (tail_backing_fd >= 0)
+                        close(tail_backing_fd);
+                    return finish_mremap(&source, -LINUX_ENOMEM);
+                }
+                int source_remove_fd = -1;
+                if (guest_region_remove_prepare(g, old_off, old_off + old_size,
+                                                &source_remove_fd) < 0) {
+                    if (track_backing_fd >= 0)
+                        close(track_backing_fd);
+                    if (tail_backing_fd >= 0)
+                        close(tail_backing_fd);
+                    return finish_mremap(&source, -LINUX_ENOMEM);
+                }
                 char track_name[sizeof(old_reg->name)] = {0};
                 if (old_reg)
                     str_copy_trunc(track_name, old_reg->name,
@@ -3102,22 +3581,26 @@ int64_t sys_mremap(guest_t *g,
                 if (mremap_extend_range(g, grow_off, grow_len, prot) < 0) {
                     if (track_backing_fd >= 0)
                         close(track_backing_fd);
-                    return -LINUX_ENOMEM;
+                    if (tail_backing_fd >= 0)
+                        close(tail_backing_fd);
+                    if (source_remove_fd >= 0)
+                        close(source_remove_fd);
+                    return finish_mremap(&source, -LINUX_ENOMEM);
                 }
 
                 memset((uint8_t *) g->host_base + grow_off, 0, grow_len);
 
                 /* Update region tracking: remove old, add extended */
-                guest_region_remove(g, old_off, old_off + old_size);
-                if (add_mremap_region(
-                        g, old_off, old_size, new_size, prot, track_flags,
-                        track_offset, track_name[0] ? track_name : NULL,
-                        track_backing_fd, old_inherited_at_fork) < 0)
-                    return -LINUX_ENOMEM;
-                if (old_overlay)
-                    mark_overlay_metadata_range(g, old_off, old_off + old_size,
-                                                old_overlay_start,
-                                                old_overlay_end);
+                guest_region_remove_reserved(g, old_off, old_off + old_size,
+                                             source_remove_fd);
+                if (add_mremap_region(g, old_off, old_size, new_size, prot,
+                                      track_flags, track_offset,
+                                      track_name[0] ? track_name : NULL,
+                                      track_backing_fd, old_inherited_at_fork,
+                                      source_inherited_size, tail_backing_fd,
+                                      source_vma_id) < 0)
+                    return finish_mremap(&source, -LINUX_ENOMEM);
+                mark_mremap_source_overlay_metadata(g, &source);
                 if (old_backing_ro)
                     mark_region_backing_ro(g, old_off, old_off + new_size);
 
@@ -3131,36 +3614,37 @@ int64_t sys_mremap(guest_t *g,
                         g->mmap_next = hwm;
                 }
 
-                return (int64_t) old_addr;
+                return finish_mremap(&source, (int64_t) old_addr);
             }
         }
 
         /* Growth in place failed; MREMAP_MAYMOVE is required */
         if (!(flags & LINUX_MREMAP_MAYMOVE))
-            return -LINUX_ENOMEM;
+            return finish_mremap(&source, -LINUX_ENOMEM);
 
         /* Allocate a new region and move */
-        const guest_region_t *old_reg = guest_region_find(g, old_off);
+        const guest_region_t *old_reg = src_reg;
         int prot =
             old_reg ? old_reg->prot : (LINUX_PROT_READ | LINUX_PROT_WRITE);
         int track_flags = old_reg ? old_reg->flags
                                   : (LINUX_MAP_PRIVATE | LINUX_MAP_ANONYMOUS);
-        uint64_t track_offset = old_reg ? old_reg->offset : 0;
+        uint64_t track_offset =
+            old_reg ? old_reg->offset + (old_off - old_reg->start) : 0;
         int track_backing_fd = dup_region_backing_fd(old_reg);
         if (old_reg && old_reg->backing_fd >= 0 && track_backing_fd < 0)
-            return -LINUX_ENOMEM;
-        bool source_overlay = old_reg && region_has_live_overlay(old_reg);
-        uint64_t source_overlay_start =
-            source_overlay ? old_reg->overlay_start : 0;
-        uint64_t source_overlay_end = source_overlay ? old_reg->overlay_end : 0;
+            return finish_mremap(&source, -LINUX_ENOMEM);
+        int tail_backing_fd = -1;
+        if (source_inherited_size > 0 && source_inherited_size < new_size &&
+            track_backing_fd >= 0) {
+            tail_backing_fd = dup(track_backing_fd);
+            if (tail_backing_fd < 0) {
+                close(track_backing_fd);
+                return finish_mremap(&source, -LINUX_ENOMEM);
+            }
+        }
+        bool source_overlay = mremap_source_has_overlay(&source);
         bool source_backing_ro = old_reg && old_reg->backing_ro;
         bool source_inherited_at_fork = old_reg && old_reg->inherited_at_fork;
-        uint64_t source_file_off =
-            old_reg ? old_reg->offset + (old_off - old_reg->start) : 0;
-        uint64_t source_overlay_file_off =
-            source_overlay
-                ? old_reg->offset + (source_overlay_start - old_reg->start)
-                : 0;
         char track_name[sizeof(old_reg->name)] = {0};
         if (old_reg)
             str_copy_trunc(track_name, old_reg->name, sizeof(track_name));
@@ -3182,56 +3666,85 @@ int64_t sys_mremap(guest_t *g,
         if (new_off == UINT64_MAX) {
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return -LINUX_ENOMEM;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, -LINUX_ENOMEM);
         }
 
         remove_range_t removed = {old_off, old_off + old_size};
         int added_regions =
-            source_inherited_at_fork && old_size < new_size ? 2 : 1;
+            source_inherited_size > 0 && source_inherited_size < new_size ? 2
+                                                                          : 1;
         if (!region_has_capacity_after_removes(g, &removed, 1, added_regions)) {
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return -LINUX_ENOMEM;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, -LINUX_ENOMEM);
+        }
+
+        int source_remove_fd = -1;
+        if (guest_region_remove_prepare(g, old_off, old_off + old_size,
+                                        &source_remove_fd) < 0) {
+            if (track_backing_fd >= 0)
+                close(track_backing_fd);
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, -LINUX_ENOMEM);
         }
 
         if (source_overlay) {
             int cleanup_err =
                 cleanup_overlays_in_range(g, old_off, old_off + old_size);
             if (cleanup_err < 0) {
+                int restore_err =
+                    restore_mremap_source_overlays_in_place(g, &source);
                 if (track_backing_fd >= 0)
                     close(track_backing_fd);
-                return cleanup_err;
+                if (tail_backing_fd >= 0)
+                    close(tail_backing_fd);
+                if (source_remove_fd >= 0)
+                    close(source_remove_fd);
+                if (restore_err < 0)
+                    return finish_mremap(&source, restore_err);
+                return finish_mremap(&source, cleanup_err);
             }
         }
 
         if (mremap_extend_range(g, new_off, new_size, prot) < 0) {
             if (source_overlay) {
-                int restore_err = restore_file_overlay_range(
-                    g, old_off, old_off + old_size, source_overlay_start,
-                    source_overlay_end, track_backing_fd,
-                    source_overlay_file_off);
+                int restore_err =
+                    restore_mremap_source_overlays_in_place(g, &source);
                 if (restore_err < 0) {
                     if (track_backing_fd >= 0)
                         close(track_backing_fd);
-                    return restore_err;
+                    if (tail_backing_fd >= 0)
+                        close(tail_backing_fd);
+                    if (source_remove_fd >= 0)
+                        close(source_remove_fd);
+                    return finish_mremap(&source, restore_err);
                 }
             }
             if (track_backing_fd >= 0)
                 close(track_backing_fd);
-            return -LINUX_ENOMEM;
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            if (source_remove_fd >= 0)
+                close(source_remove_fd);
+            return finish_mremap(&source, -LINUX_ENOMEM);
         }
 
-        /* Copy old data, zero extension. The new range was just allocated from
-         * a free gap so it has no overlays to clean up; the source may have an
-         * overlay, which is read transparently by the memcpy before its
-         * underlying slab is restored below.
+        /* Copy each source segment according to its own backing state, then
+         * zero the extension. The new range is a fresh gap and receives no
+         * live overlay.
          */
         if (prot == LINUX_PROT_NONE) {
             memset((uint8_t *) g->host_base + new_off, 0, new_size);
-        } else if (source_overlay) {
-            memset((uint8_t *) g->host_base + new_off, 0, new_size);
-            int copy_err = read_file_range_to_guest(
-                g, new_off, track_backing_fd, source_file_off, old_size);
+        } else {
+            if (source_overlay)
+                memset((uint8_t *) g->host_base + new_off, 0, new_size);
+            int copy_err =
+                copy_mremap_source(g, new_off, old_off, old_size, &source);
             if (copy_err < 0) {
                 /* Roll back both sides: re-apply the source overlay so the
                  * caller's MAP_SHARED is not silently demoted to a slab
@@ -3239,23 +3752,16 @@ int64_t sys_mremap(guest_t *g,
                  * allocated via mremap_extend_range so the guest does not see
                  * phantom zero pages where the failed mremap landed.
                  */
-                (void) restore_file_overlay_range(
-                    g, old_off, old_off + old_size, source_overlay_start,
-                    source_overlay_end, track_backing_fd,
-                    source_overlay_file_off);
+                (void) restore_mremap_source_overlays_in_place(g, &source);
                 guest_invalidate_ptes(g, new_off, new_off + new_size);
                 if (track_backing_fd >= 0)
                     close(track_backing_fd);
-                return copy_err;
+                if (tail_backing_fd >= 0)
+                    close(tail_backing_fd);
+                if (source_remove_fd >= 0)
+                    close(source_remove_fd);
+                return finish_mremap(&source, copy_err);
             }
-        } else {
-            /* Read the source through its GPA so high-VA sources copy from
-             * their real backing (identity for primary: == host_base +
-             * old_off). The destination is a fresh primary-window gap.
-             */
-            memcpy((uint8_t *) g->host_base + new_off,
-                   host_ptr_for_gpa(g, src_gpa_base + (old_off - src_start)),
-                   old_size);
         }
         memset((uint8_t *) g->host_base + new_off + old_size, 0,
                new_size - old_size);
@@ -3265,7 +3771,8 @@ int64_t sys_mremap(guest_t *g,
          */
         memset(host_ptr_for_gpa(g, src_gpa_base + (old_off - src_start)), 0,
                old_size);
-        guest_region_remove(g, old_off, old_off + old_size);
+        guest_region_remove_reserved(g, old_off, old_off + old_size,
+                                     source_remove_fd);
         guest_invalidate_ptes(g, old_off, old_off + old_size);
         if (old_off < g->mmap_rw_gap_hint)
             g->mmap_rw_gap_hint = old_off;
@@ -3275,8 +3782,10 @@ int64_t sys_mremap(guest_t *g,
         /* Track new region */
         if (add_mremap_region(g, new_off, old_size, new_size, prot, track_flags,
                               track_offset, track_name[0] ? track_name : NULL,
-                              track_backing_fd, source_inherited_at_fork) < 0)
-            return -LINUX_ENOMEM;
+                              track_backing_fd, source_inherited_at_fork,
+                              source_inherited_size, tail_backing_fd,
+                              source_vma_id) < 0)
+            return finish_mremap(&source, -LINUX_ENOMEM);
         if (source_backing_ro)
             mark_region_backing_ro(g, new_off, new_off + new_size);
 
@@ -3290,11 +3799,11 @@ int64_t sys_mremap(guest_t *g,
                 g->mmap_next = hwm;
         }
 
-        return (int64_t) guest_ipa(g, new_off);
+        return finish_mremap(&source, (int64_t) guest_ipa(g, new_off));
     }
 
     /* Should not reach here */
-    return -LINUX_EINVAL;
+    return finish_mremap(&source, -LINUX_EINVAL);
 }
 
 /* sys_madvise. */
@@ -3496,20 +4005,34 @@ static int munmap_guest_range(guest_t *g, uint64_t unmap_off, uint64_t end)
     if (guest_range_hits_infra(g, unmap_off, end))
         return -LINUX_EINVAL;
 
+    /* An interior removal from a file-backed region needs a second owned fd
+     * for the surviving right half. Reserve it before changing overlays,
+     * page tables, or host memory so descriptor exhaustion is failure-atomic.
+     */
+    int remove_fd = -1;
+    if (guest_region_remove_prepare(g, unmap_off, end, &remove_fd) < 0)
+        return -LINUX_ENOMEM;
+
     /* Restore slab backing under any active MAP_SHARED file overlay before
      * zeroing the host VA. Without this, the memset below would write zeros
      * directly into the file.
      */
     int cleanup_err = cleanup_overlays_in_range(g, unmap_off, end);
-    if (cleanup_err < 0)
+    if (cleanup_err < 0) {
+        if (remove_fd >= 0)
+            close(remove_fd);
         return cleanup_err;
+    }
 
     /* Invalidate PTEs first. This may need to split a 2MiB block which can fail
      * if the page table pool is exhausted. Failing before region removal keeps
      * metadata consistent.
      */
-    if (guest_invalidate_ptes(g, unmap_off, end) < 0)
+    if (guest_invalidate_ptes(g, unmap_off, end) < 0) {
+        if (remove_fd >= 0)
+            close(remove_fd);
         return -LINUX_ENOMEM;
+    }
     for (int i = 0; i < g->nregions; i++) {
         guest_region_t *r = &g->regions[i];
         if (r->start >= end)
@@ -3522,7 +4045,7 @@ static int munmap_guest_range(guest_t *g, uint64_t unmap_off, uint64_t end)
         uint64_t zend = (r->end < end) ? r->end : end;
         memset((uint8_t *) g->host_base + zstart, 0, zend - zstart);
     }
-    guest_region_remove(g, unmap_off, end);
+    guest_region_remove_reserved(g, unmap_off, end, remove_fd);
     if (unmap_off < g->mmap_rw_gap_hint)
         g->mmap_rw_gap_hint = unmap_off;
     if (unmap_off < g->mmap_rx_gap_hint)
@@ -3576,9 +4099,17 @@ int64_t sys_munmap(guest_t *g, uint64_t addr, uint64_t length)
     if (addr <= 0x0000FFFFFFFFFFFFULL) {
         if (addr >= g->guest_size) {
             if (region_range_overlaps(g, addr, addr + length)) {
-                if (guest_invalidate_ptes(g, addr, addr + length) < 0)
+                int remove_fd = -1;
+                if (guest_region_remove_prepare(g, addr, addr + length,
+                                                &remove_fd) < 0)
                     return -LINUX_ENOMEM;
-                guest_region_remove(g, addr, addr + length);
+                if (guest_invalidate_ptes(g, addr, addr + length) < 0) {
+                    if (remove_fd >= 0)
+                        close(remove_fd);
+                    return -LINUX_ENOMEM;
+                }
+                guest_region_remove_reserved(g, addr, addr + length,
+                                             remove_fd);
             }
             return 0;
         }

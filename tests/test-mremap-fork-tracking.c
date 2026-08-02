@@ -1,0 +1,842 @@
+/*
+ * elfuse-internal mremap fork-tracking tests
+ *
+ * Copyright 2026 elfuse contributors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * These cases exercise elfuse's inherited-at-fork region bookkeeping, not a
+ * portable Linux ABI contract. Do not add this binary to test-matrix.sh:
+ * Linux can merge the adjacent file mappings below, and extends MAP_SHARED
+ * mappings directly from the backing file rather than creating elfuse's
+ * child-private tracking tail.
+ */
+
+#include <errno.h>
+#include <fcntl.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "test-harness.h"
+
+int passes = 0, fails = 0;
+
+#ifndef MREMAP_MAYMOVE
+#define MREMAP_MAYMOVE 1
+#endif
+#ifndef MREMAP_FIXED
+#define MREMAP_FIXED 2
+#endif
+
+static bool set_program_break(uintptr_t address)
+{
+    return brk((void *) address) == 0 && sbrk(0) == (void *) address;
+}
+
+static ssize_t read_file_nul(const char *path, char *buf, size_t bufsz)
+{
+    if (bufsz == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return -1;
+
+    ssize_t total = 0;
+    while ((size_t) total < bufsz - 1) {
+        ssize_t n = read(fd, buf + total, bufsz - 1 - (size_t) total);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0) {
+            int saved_errno = errno;
+            (void) close(fd);
+            errno = saved_errno;
+            return -1;
+        }
+        if (n == 0)
+            break;
+        total += n;
+    }
+    buf[total] = '\0';
+    (void) close(fd);
+    return total;
+}
+
+static void *reserve_then_map_fixed(size_t reserve_length,
+                                    size_t mapping_length,
+                                    int prot,
+                                    int flags,
+                                    int fd,
+                                    off_t offset)
+{
+    void *base = mmap(NULL, reserve_length, PROT_NONE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED)
+        return MAP_FAILED;
+    if (munmap(base, reserve_length) != 0) {
+        int saved_errno = errno;
+        (void) munmap(base, reserve_length);
+        errno = saved_errno;
+        return MAP_FAILED;
+    }
+    return mmap(base, mapping_length, prot, flags | MAP_FIXED, fd, offset);
+}
+
+static bool parse_maps_hex(const char **cursor,
+                           const char *end,
+                           char delimiter,
+                           uintptr_t *value)
+{
+    const char *start = *cursor;
+    uintptr_t parsed = 0;
+    while (*cursor < end && **cursor != delimiter) {
+        unsigned int digit;
+        char c = **cursor;
+        if (c >= '0' && c <= '9')
+            digit = (unsigned int) (c - '0');
+        else if (c >= 'a' && c <= 'f')
+            digit = (unsigned int) (c - 'a' + 10);
+        else
+            return false;
+        parsed = parsed * 16 + digit;
+        (*cursor)++;
+    }
+    if (*cursor == start || *cursor >= end)
+        return false;
+    *value = parsed;
+    return true;
+}
+
+static bool mapping_is_rw_private(uintptr_t address)
+{
+    char maps[64 * 1024];
+    ssize_t length = read_file_nul("/proc/self/maps", maps, sizeof(maps));
+    if (length <= 0)
+        return false;
+
+    const char *cursor = maps;
+    const char *end = maps + length;
+    while (cursor < end) {
+        uintptr_t start = 0, limit = 0;
+        if (!parse_maps_hex(&cursor, end, '-', &start))
+            return false;
+        cursor++;
+        if (!parse_maps_hex(&cursor, end, ' ', &limit))
+            return false;
+        cursor++;
+        if (cursor + 4 > end)
+            return false;
+        if (start <= address && address < limit) {
+            return cursor[0] == 'r' && cursor[1] == 'w' && cursor[2] == '-' &&
+                   cursor[3] == 'p';
+        }
+        while (cursor < end && *cursor != '\n')
+            cursor++;
+        if (cursor < end)
+            cursor++;
+    }
+    return false;
+}
+
+static char maps_buffer[1024 * 1024];
+
+static bool read_maps_snapshot(ssize_t *length_out)
+{
+    ssize_t length =
+        read_file_nul("/proc/self/maps", maps_buffer, sizeof(maps_buffer));
+    if (length <= 0 || (size_t) length == sizeof(maps_buffer) - 1)
+        return false;
+    *length_out = length;
+    return true;
+}
+
+static bool count_maps_entries(int *count_out)
+{
+    ssize_t length = 0;
+    if (!read_maps_snapshot(&length))
+        return false;
+
+    int count = 0;
+    for (ssize_t i = 0; i < length; i++) {
+        if (maps_buffer[i] == '\n')
+            count++;
+    }
+    *count_out = count;
+    return true;
+}
+
+static bool heap_headers_do_not_overlap(int *heap_count)
+{
+    ssize_t length = 0;
+    if (!read_maps_snapshot(&length))
+        return false;
+
+    const char heap_name[] = "[heap]";
+    const char *cursor = maps_buffer;
+    const char *end = maps_buffer + length;
+    uintptr_t previous_end = 0;
+    int count = 0;
+
+    while (cursor < end) {
+        const char *line = cursor;
+        while (cursor < end && *cursor != '\n')
+            cursor++;
+        const char *line_end = cursor;
+        if (cursor < end)
+            cursor++;
+
+        bool is_heap = false;
+        for (const char *p = line; p + sizeof(heap_name) - 1 <= line_end; p++) {
+            if (memcmp(p, heap_name, sizeof(heap_name) - 1) == 0) {
+                is_heap = true;
+                break;
+            }
+        }
+        if (!is_heap)
+            continue;
+
+        const char *field = line;
+        uintptr_t start = 0, limit = 0;
+        if (!parse_maps_hex(&field, line_end, '-', &start))
+            return false;
+        field++;
+        if (!parse_maps_hex(&field, line_end, ' ', &limit))
+            return false;
+        if (count > 0 && start < previous_end)
+            return false;
+        previous_end = limit;
+        count++;
+    }
+
+    *heap_count = count;
+    return true;
+}
+
+static void test_postfork_adjacent_anon_rejected(void)
+{
+    TEST("mremap rejects unrelated post-fork tail");
+
+    const size_t span = 64 * 1024;
+    void *first = reserve_then_map_fixed(2 * span, span, PROT_READ | PROT_WRITE,
+                                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (first == MAP_FAILED) {
+        FAIL("inherited anonymous mmap failed");
+        return;
+    }
+    void *base = first;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        FAIL("fork failed");
+        munmap(first, span);
+        return;
+    }
+    if (pid == 0) {
+        void *second = mmap((char *) base + span, span, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (second != (char *) base + span)
+            _exit(30);
+
+        errno = 0;
+        void *shrunk = mremap(base, 2 * span, span, 0);
+        if (shrunk == MAP_FAILED && errno == EFAULT)
+            _exit(0);
+        _exit(31);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) >= 0 && WIFEXITED(status) &&
+        WEXITSTATUS(status) == 0)
+        PASS();
+    else
+        FAIL("mremap accepted unrelated post-fork mapping");
+
+    munmap(first, span);
+}
+
+static void test_adjacent_file_vmas_rejected(void)
+{
+    TEST("mremap rejects adjacent independent file VMAs");
+
+    const size_t span = 64 * 1024;
+    char tmpl[] = "/tmp/elfuse-mremap-adjacent-XXXXXX";
+    int fd1 = mkstemp(tmpl);
+    if (fd1 < 0) {
+        FAIL("mkstemp failed");
+        return;
+    }
+    int fd2 = open(tmpl, O_RDWR);
+    unlink(tmpl);
+    if (fd2 < 0 || ftruncate(fd1, (off_t) (2 * span)) != 0) {
+        FAIL("file setup failed");
+        if (fd2 >= 0)
+            close(fd2);
+        close(fd1);
+        return;
+    }
+
+    void *first = reserve_then_map_fixed(2 * span, span, PROT_READ | PROT_WRITE,
+                                         MAP_SHARED, fd1, 0);
+    void *base = first;
+    if (first == MAP_FAILED) {
+        FAIL("address reservation or first file mmap failed");
+        close(fd2);
+        close(fd1);
+        return;
+    }
+    void *second = mmap((char *) base + span, span, PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_FIXED, fd2, (off_t) span);
+    if (first != base || second != (char *) base + span) {
+        FAIL("adjacent file mmap failed");
+        if (first == base)
+            munmap(first, span);
+        if (second == (char *) base + span)
+            munmap(second, span);
+        close(fd2);
+        close(fd1);
+        return;
+    }
+
+    errno = 0;
+    void *q = mremap(base, 2 * span, 2 * span, 0);
+    if (q == MAP_FAILED && errno == EFAULT)
+        PASS();
+    else
+        FAIL("mremap accepted two independent tracker records");
+
+    munmap(first, span);
+    munmap(second, span);
+    close(fd2);
+    close(fd1);
+}
+
+static void test_file_backed_fork_split_move(void)
+{
+    TEST("MAP_SHARED file: mremap across fork-split source");
+
+    const size_t span = 64 * 1024;
+    char tmpl[] = "/tmp/elfuse-cf-mremap-XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) {
+        FAIL("mkstemp");
+        return;
+    }
+    unlink(tmpl);
+    if (ftruncate(fd, (off_t) (4 * span)) != 0 || pwrite(fd, "F", 1, 0) != 1 ||
+        pwrite(fd, "X", 1, (off_t) span) != 1) {
+        FAIL("file setup");
+        close(fd);
+        return;
+    }
+
+    char *p = reserve_then_map_fixed(4 * span, span, PROT_READ | PROT_WRITE,
+                                     MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        FAIL("file mmap");
+        close(fd);
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        FAIL("fork");
+        munmap(p, span);
+        close(fd);
+        return;
+    }
+
+    if (pid == 0) {
+        char *grown = mremap(p, span, 2 * span, 0);
+        if (grown != p)
+            _exit(40);
+        if (grown[0] != 'F' || grown[span] != 0)
+            _exit(41);
+
+        void *blocker = mmap(grown + 2 * span, span, PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (blocker != grown + 2 * span)
+            _exit(42);
+
+        /* A second fork marks both tracker records inherited. Their stable
+         * logical-VMA lineage must still allow the grandchild to mremap the
+         * complete source.
+         */
+        pid_t grandchild = fork();
+        if (grandchild < 0)
+            _exit(43);
+        if (grandchild == 0) {
+            char *moved = mremap(grown, 2 * span, 3 * span, MREMAP_MAYMOVE);
+            if (moved == MAP_FAILED)
+                _exit(44);
+            if (moved == grown)
+                _exit(45);
+            if (moved[0] != 'F' || moved[span] != 0 || moved[2 * span] != 0)
+                _exit(46);
+
+            munmap(moved, 3 * span);
+            munmap(blocker, span);
+            _exit(0);
+        }
+
+        int grandchild_status = 0;
+        if (waitpid(grandchild, &grandchild_status, 0) < 0 ||
+            !WIFEXITED(grandchild_status))
+            _exit(47);
+        if (WEXITSTATUS(grandchild_status) != 0)
+            _exit(WEXITSTATUS(grandchild_status));
+        munmap(grown, 2 * span);
+        munmap(blocker, span);
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        FAIL("waitpid");
+    } else if (!WIFEXITED(status)) {
+        FAIL("child terminated abnormally");
+    } else if (WEXITSTATUS(status) != 0) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "child mremap failed at step %d",
+                 WEXITSTATUS(status));
+        FAIL(buf);
+    } else {
+        PASS();
+    }
+
+    munmap(p, span);
+    close(fd);
+}
+
+static void test_file_backed_mprotect_fragments_move(void)
+{
+    TEST("MAP_SHARED file: mremap across restored mprotect fragments");
+
+    const size_t span = 64 * 1024;
+    const size_t old_size = 3 * span;
+    const size_t new_size = 4 * span;
+    char tmpl[] = "/tmp/elfuse-mremap-fragments-XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) {
+        FAIL("mkstemp failed");
+        return;
+    }
+    unlink(tmpl);
+    if (ftruncate(fd, (off_t) new_size) != 0) {
+        FAIL("file setup failed");
+        close(fd);
+        return;
+    }
+
+    char *p = reserve_then_map_fixed(5 * span, old_size, PROT_READ | PROT_WRITE,
+                                     MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        FAIL("file mmap failed");
+        close(fd);
+        return;
+    }
+    p[0] = 'A';
+    p[span] = 'B';
+    p[2 * span] = 'C';
+
+    if (mprotect(p + span, span, PROT_READ) != 0 ||
+        mprotect(p + span, span, PROT_READ | PROT_WRITE) != 0) {
+        FAIL("mprotect split and restore failed");
+        munmap(p, old_size);
+        close(fd);
+        return;
+    }
+
+    void *blocker = mmap(p + old_size, span, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (blocker != p + old_size) {
+        FAIL("move blocker mmap failed");
+        munmap(p, old_size);
+        close(fd);
+        return;
+    }
+
+    char *moved = mremap(p, old_size, new_size, MREMAP_MAYMOVE);
+    if (moved == MAP_FAILED || moved == p || moved[0] != 'A' ||
+        moved[span] != 'B' || moved[2 * span] != 'C' || moved[3 * span] != 0) {
+        FAIL("fragmented logical VMA did not move intact");
+        if (moved == MAP_FAILED)
+            munmap(p, old_size);
+        else
+            munmap(moved, new_size);
+    } else {
+        moved[3 * span] = 'D';
+        PASS();
+        munmap(moved, new_size);
+    }
+
+    munmap(blocker, span);
+    close(fd);
+}
+
+static void test_file_backed_fixed_move_from_same_vma(void)
+{
+    TEST("MAP_SHARED file: fixed subrange move keeps source fd live");
+
+    const size_t span = 64 * 1024;
+    char tmpl[] = "/tmp/elfuse-mremap-fixed-source-fd-XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) {
+        FAIL("mkstemp failed");
+        return;
+    }
+    unlink(tmpl);
+    if (ftruncate(fd, (off_t) (3 * span)) != 0) {
+        FAIL("file setup failed");
+        close(fd);
+        return;
+    }
+
+    char *p = reserve_then_map_fixed(4 * span, 3 * span, PROT_READ | PROT_WRITE,
+                                     MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        FAIL("file mmap failed");
+        close(fd);
+        return;
+    }
+    p[0] = 'D';
+    p[span] = 'M';
+    p[2 * span] = 'S';
+
+    char *moved =
+        mremap(p + 2 * span, span, span, MREMAP_MAYMOVE | MREMAP_FIXED, p);
+    if (moved != p || moved[0] != 'S' || moved[span] != 'M')
+        FAIL("fixed subrange move lost its source backing fd");
+    else
+        PASS();
+
+    munmap(p, 3 * span);
+    close(fd);
+}
+
+static void test_file_backed_mremap_emfile_atomic(void)
+{
+    TEST("MAP_SHARED fork growth: mremap EMFILE preserves source");
+
+    const size_t span = 64 * 1024;
+    const size_t page_size = 4096;
+    const int fill_limit = 4096;
+    char tmpl[] = "/tmp/elfuse-mremap-emfile-XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) {
+        FAIL("mkstemp failed");
+        return;
+    }
+    unlink(tmpl);
+    if (ftruncate(fd, (off_t) (4 * span)) != 0) {
+        FAIL("file setup failed");
+        close(fd);
+        return;
+    }
+
+    char *p = reserve_then_map_fixed(4 * span, span, PROT_READ | PROT_WRITE,
+                                     MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        FAIL("file mmap failed");
+        close(fd);
+        return;
+    }
+    p[0] = 'I';
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        FAIL("fork failed");
+        munmap(p, span);
+        close(fd);
+        return;
+    }
+    if (pid == 0) {
+        const size_t filler_reservation_size =
+            (size_t) fill_limit * 2 * page_size;
+        char *grown = mremap(p, span, 2 * span, 0);
+        if (grown != p)
+            _exit(60);
+        grown[span] = 'T';
+        grown[2 * span - 1] = 'Z';
+
+        void *blocker = mmap(grown + 2 * span, span, PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (blocker != grown + 2 * span)
+            _exit(61);
+
+        char *fixed_probe =
+            reserve_then_map_fixed(4 * span, 3 * span, PROT_READ | PROT_WRITE,
+                                   MAP_SHARED, fd, (off_t) span);
+        if (fixed_probe == MAP_FAILED)
+            _exit(72);
+        fixed_probe[0] = 'D';
+        fixed_probe[2 * span] = 'S';
+
+        int last_dup = -1;
+        for (;;) {
+            int duplicated = dup(fd);
+            if (duplicated < 0)
+                break;
+            last_dup = duplicated;
+        }
+        if (errno != EMFILE || last_dup < 0)
+            _exit(62);
+        /* Keep one guest slot available for the /proc/self/maps proof below.
+         * The close also releases one host descriptor; the file-backed filler
+         * loop consumes it again before finding the actual host/table limit. */
+        if (close(last_dup) != 0)
+            _exit(69);
+
+        void *filler_base = mmap(NULL, filler_reservation_size, PROT_NONE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (filler_base == MAP_FAILED ||
+            munmap(filler_base, filler_reservation_size) != 0)
+            _exit(70);
+
+        void *last_filler = MAP_FAILED;
+        int filler_count = 0;
+        for (; filler_count < fill_limit; filler_count++) {
+            void *filler = mmap(
+                (char *) filler_base + (size_t) filler_count * 2 * page_size,
+                page_size, PROT_NONE, MAP_PRIVATE | MAP_FIXED, fd, 0);
+            if (filler == MAP_FAILED)
+                break;
+            last_filler = filler;
+        }
+        if (filler_count == 0 || filler_count == fill_limit || errno != ENOMEM)
+            _exit(63);
+
+        /* The first failed filler proves no host descriptor remains. Freeing
+         * one owned tracker fd lets mremap's prefix dup succeed and forces the
+         * second, tail-owned dup to hit EMFILE.
+         */
+        if (munmap(last_filler, page_size) != 0)
+            _exit(64);
+
+        /* With one host and one guest descriptor available, maps must be
+         * readable. Near the fixed tracker capacity, VMA count alone cannot
+         * prove whether tracker pressure or host descriptors ended the filler
+         * loop, so skip instead of attributing an ambiguous ENOMEM to the
+         * second mremap dup. */
+        int maps_count = 0;
+        if (!count_maps_entries(&maps_count) || maps_count >= 4000)
+            _exit(77);
+
+        errno = 0;
+        char *moved = mremap(grown, 2 * span, 3 * span, MREMAP_MAYMOVE);
+        if (moved != MAP_FAILED || errno != ENOMEM)
+            _exit(65);
+
+        volatile char *source = grown;
+        if (source[0] != 'I' || source[span] != 'T' ||
+            source[2 * span - 1] != 'Z')
+            _exit(66);
+        if (mprotect(grown, 2 * span, PROT_READ) != 0 || source[0] != 'I' ||
+            source[span] != 'T' ||
+            mprotect(grown, 2 * span, PROT_READ | PROT_WRITE) != 0)
+            _exit(67);
+        source[1] = 'J';
+        source[span + 1] = 'U';
+        if (source[1] != 'J' || source[span + 1] != 'U')
+            _exit(68);
+
+        /* Exactly one host descriptor is free again. A fixed subrange move
+         * consumes it for target tracking, then must fail atomically when the
+         * source-boundary snapshot cannot duplicate its backing fd. */
+        errno = 0;
+        char *fixed = mremap(fixed_probe + 2 * span, span, span,
+                             MREMAP_MAYMOVE | MREMAP_FIXED, fixed_probe);
+        if (fixed != MAP_FAILED || errno != ENOMEM || fixed_probe[0] != 'D' ||
+            fixed_probe[2 * span] != 'S')
+            _exit(73);
+
+        /* Release guest dup slots and filler tracker descriptors, then retry.
+         * A failed split that published backing_fd=-1 would make this retry
+         * fail even though descriptor capacity is now available. */
+        for (int guest_fd = 0; guest_fd < 4096; guest_fd++) {
+            if (guest_fd != fd)
+                (void) close(guest_fd);
+        }
+        if (munmap(filler_base, filler_reservation_size) != 0)
+            _exit(74);
+
+        fixed = mremap(fixed_probe + 2 * span, span, span,
+                       MREMAP_MAYMOVE | MREMAP_FIXED, fixed_probe);
+        if (fixed != fixed_probe || fixed[0] != 'S')
+            _exit(75);
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        FAIL("waitpid failed");
+    } else if (!WIFEXITED(status)) {
+        FAIL("EMFILE child terminated abnormally");
+    } else if (WEXITSTATUS(status) == 77) {
+        printf("SKIP: fd exhaustion and region-table pressure are ambiguous\n");
+    } else if (WEXITSTATUS(status) != 0) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "EMFILE child failed at step %d",
+                 WEXITSTATUS(status));
+        FAIL(buf);
+    } else {
+        PASS();
+    }
+
+    munmap(p, span);
+    close(fd);
+}
+
+static void test_heap_tail_mprotect_then_grow(void)
+{
+    TEST("brk growth does not reuse protected heap tail");
+
+    const uintptr_t page_size = 4096;
+    void *current_break = sbrk(0);
+    if (current_break == (void *) -1) {
+        FAIL("read parent brk failed");
+        return;
+    }
+    uintptr_t original = (uintptr_t) current_break;
+    uintptr_t inherited_end =
+        (original + page_size - 1) / page_size * page_size + page_size;
+    if (!set_program_break(inherited_end)) {
+        FAIL("parent brk growth failed");
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        FAIL("fork failed");
+        (void) set_program_break(original);
+        return;
+    }
+    if (pid == 0) {
+        uintptr_t protected_end = inherited_end + page_size;
+        uintptr_t final_end = protected_end + page_size;
+        if (!set_program_break(protected_end))
+            _exit(50);
+        if (mprotect((void *) inherited_end, page_size, PROT_READ) != 0)
+            _exit(51);
+        if (!set_program_break(final_end))
+            _exit(52);
+
+        if (!mapping_is_rw_private(protected_end))
+            _exit(54);
+
+        if (!set_program_break(protected_end))
+            _exit(55);
+        if (!set_program_break(final_end))
+            _exit(56);
+        if (!mapping_is_rw_private(protected_end))
+            _exit(57);
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) >= 0 && WIFEXITED(status) &&
+        WEXITSTATUS(status) == 0)
+        PASS();
+    else
+        FAIL("new brk page inherited stale tail protection");
+
+    (void) set_program_break(original);
+}
+
+static void test_heap_growth_with_full_region_table(void)
+{
+    TEST("brk growth with full region table has no overlapping heap headers");
+
+    const uintptr_t page_size = 4096;
+    const int fill_limit = 8192;
+    const int minimum_fill = 2048;
+    void *current_break = sbrk(0);
+    if (current_break == (void *) -1) {
+        FAIL("read parent brk failed");
+        return;
+    }
+    uintptr_t original = (uintptr_t) current_break;
+    uintptr_t inherited_end =
+        (original + page_size - 1) / page_size * page_size + page_size;
+    if (!set_program_break(inherited_end)) {
+        FAIL("parent brk growth failed");
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        FAIL("fork failed");
+        (void) set_program_break(original);
+        return;
+    }
+    if (pid == 0) {
+        uintptr_t protected_end = inherited_end + page_size;
+        uintptr_t final_end = protected_end + page_size;
+        if (!set_program_break(protected_end))
+            _exit(80);
+        if (mprotect((void *) inherited_end, page_size, PROT_READ) != 0)
+            _exit(81);
+
+        int filled = 0;
+        for (; filled < fill_limit; filled++) {
+            int prot = (filled & 1) ? PROT_NONE : PROT_READ;
+            void *q =
+                mmap(NULL, page_size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (q == MAP_FAILED)
+                break;
+        }
+        if (filled < minimum_fill || filled == fill_limit || errno != ENOMEM)
+            _exit(82);
+
+        if (!set_program_break(final_end))
+            _exit(83);
+        volatile char *new_page = (char *) protected_end;
+        new_page[0] = 'H';
+        if (new_page[0] != 'H')
+            _exit(84);
+
+        int heap_count = 0;
+        if (!heap_headers_do_not_overlap(&heap_count) || heap_count < 2)
+            _exit(85);
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        FAIL("waitpid failed");
+    } else if (!WIFEXITED(status)) {
+        FAIL("region-table child terminated abnormally");
+    } else if (WEXITSTATUS(status) != 0) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "region-table child failed at step %d",
+                 WEXITSTATUS(status));
+        FAIL(buf);
+    } else {
+        PASS();
+    }
+
+    (void) set_program_break(original);
+}
+
+int main(void)
+{
+    printf("test-mremap-fork-tracking: elfuse mremap tracker tests\n");
+
+    test_postfork_adjacent_anon_rejected();
+    test_adjacent_file_vmas_rejected();
+    test_file_backed_fork_split_move();
+    test_file_backed_mprotect_fragments_move();
+    test_file_backed_fixed_move_from_same_vma();
+    test_file_backed_mremap_emfile_atomic();
+    test_heap_tail_mprotect_then_grow();
+    test_heap_growth_with_full_region_table();
+
+    SUMMARY("test-mremap-fork-tracking");
+    return fails > 0 ? 1 : 0;
+}

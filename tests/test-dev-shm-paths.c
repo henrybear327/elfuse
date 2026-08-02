@@ -51,19 +51,42 @@ static char shm_dir[128];
 static char shm_fifo[128];
 static char shm_exec[128];
 static char victim_path[128];
+static char fixture_suffix[16];
 
-static void name_fixtures(void)
+/* Guest PIDs restart from the same value in each independent elfuse process.
+ * Reserve a host-unique suffix so concurrent runtime jobs cannot unlink or
+ * replace one another's /dev/shm fixtures. */
+static int name_fixtures(void)
 {
-    int pid = (int) getpid();
-    snprintf(shm_path, sizeof(shm_path), SHM_DIR "elfuse_paths_%d", pid);
-    snprintf(shm_path2, sizeof(shm_path2), SHM_DIR "elfuse_paths2_%d", pid);
-    snprintf(shm_link, sizeof(shm_link), SHM_DIR "elfuse_link_%d", pid);
-    snprintf(shm_evil, sizeof(shm_evil), SHM_DIR "elfuse_evil_%d", pid);
-    snprintf(shm_dir, sizeof(shm_dir), SHM_DIR "elfuse_dir_%d", pid);
-    snprintf(shm_fifo, sizeof(shm_fifo), SHM_DIR "elfuse_fifo_%d", pid);
-    snprintf(shm_exec, sizeof(shm_exec), SHM_DIR "elfuse_exec_%d", pid);
-    snprintf(victim_path, sizeof(victim_path), "/tmp/elfuse-shm-victim-%d",
-             pid);
+    char seed[] = "/tmp/elfuse-shm-seed-XXXXXX";
+    int fd = mkstemp(seed);
+    if (fd < 0)
+        return -1;
+    close(fd);
+    (void) unlink(seed);
+
+    const char *suffix = strrchr(seed, '-');
+    if (suffix == NULL || suffix[1] == '\0')
+        return -1;
+    snprintf(fixture_suffix, sizeof(fixture_suffix), "%s", suffix + 1);
+
+    snprintf(shm_path, sizeof(shm_path), SHM_DIR "elfuse_paths_%s",
+             fixture_suffix);
+    snprintf(shm_path2, sizeof(shm_path2), SHM_DIR "elfuse_paths2_%s",
+             fixture_suffix);
+    snprintf(shm_link, sizeof(shm_link), SHM_DIR "elfuse_link_%s",
+             fixture_suffix);
+    snprintf(shm_evil, sizeof(shm_evil), SHM_DIR "elfuse_evil_%s",
+             fixture_suffix);
+    snprintf(shm_dir, sizeof(shm_dir), SHM_DIR "elfuse_dir_%s",
+             fixture_suffix);
+    snprintf(shm_fifo, sizeof(shm_fifo), SHM_DIR "elfuse_fifo_%s",
+             fixture_suffix);
+    snprintf(shm_exec, sizeof(shm_exec), SHM_DIR "elfuse_exec_%s",
+             fixture_suffix);
+    snprintf(victim_path, sizeof(victim_path), "/tmp/elfuse-shm-victim-%s",
+             fixture_suffix);
+    return 0;
 }
 
 static void cleanup_fixtures(void)
@@ -724,7 +747,7 @@ static void test_dotdot_bearing_names_allowed(void)
     static const char *names[] = {"a..b", "..a", "a..", "..."};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         char p[128];
-        snprintf(p, sizeof(p), SHM_DIR "elfuse_%d_%s", (int) getpid(),
+        snprintf(p, sizeof(p), SHM_DIR "elfuse_%s_%s", fixture_suffix,
                  names[i]);
         int fd = open(p, O_CREAT | O_EXCL | O_RDWR, 0600);
         if (fd < 0) {
@@ -775,7 +798,11 @@ int main(int argc, char **argv)
 
     printf("test-dev-shm-paths: /dev/shm path-syscall consistency\n");
 
-    name_fixtures();
+    if (name_fixtures() < 0) {
+        FAIL("reserve unique fixture suffix");
+        SUMMARY("test-dev-shm-paths");
+        return 1;
+    }
     cleanup_fixtures();
 
     if (test_open_then_chmod() == 0) {

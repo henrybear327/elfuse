@@ -32,10 +32,12 @@ typedef struct {
     unsigned long long mmu_page_kb;
     unsigned long long rss_kb;
     unsigned long long pss_kb;
+    unsigned long long pss_dirty_kb;
     unsigned long long shared_dirty_kb;
     bool have_size;
     bool have_rss;
     bool have_pss;
+    bool have_pss_dirty;
     bool have_shared_dirty;
     bool have_vmflags;
     bool vmflags_wr;
@@ -170,10 +172,12 @@ static bool parse_header(const char *line, smaps_vma_t *vma)
     vma->mmu_page_kb = 0;
     vma->rss_kb = 0;
     vma->pss_kb = 0;
+    vma->pss_dirty_kb = 0;
     vma->shared_dirty_kb = 0;
     vma->have_size = false;
     vma->have_rss = false;
     vma->have_pss = false;
+    vma->have_pss_dirty = false;
     vma->have_shared_dirty = false;
     vma->have_vmflags = false;
     vma->vmflags_wr = false;
@@ -246,8 +250,8 @@ static bool parse_vmflags(const char *line, bool *writable)
 static bool finish_vma(smaps_vma_t *vma, size_t field_index)
 {
     return field_index == SMAPS_FIELD_COUNT && vma->have_size &&
-           vma->have_rss && vma->have_pss && vma->have_shared_dirty &&
-           vma->have_vmflags;
+           vma->have_rss && vma->have_pss && vma->have_pss_dirty &&
+           vma->have_shared_dirty && vma->have_vmflags;
 }
 
 static bool append_vma(smaps_info_t *info, const smaps_vma_t *vma)
@@ -319,6 +323,8 @@ static bool parse_smaps(char *buf, size_t len, smaps_info_t *info)
                     current.rss_kb = value;
                 if (field_index == 4)
                     current.pss_kb = value;
+                if (field_index == 5)
+                    current.pss_dirty_kb = value;
                 if (field_index == 7)
                     current.shared_dirty_kb = value;
                 if (field_index == 0)
@@ -327,6 +333,8 @@ static bool parse_smaps(char *buf, size_t len, smaps_info_t *info)
                     current.have_rss = true;
                 if (field_index == 4)
                     current.have_pss = true;
+                if (field_index == 5)
+                    current.have_pss_dirty = true;
                 if (field_index == 7)
                     current.have_shared_dirty = true;
                 field_index++;
@@ -436,9 +444,12 @@ static bool validate_layout(const smaps_info_t *info,
         last->mmu_page_kb != 4)
         return false;
     if (first->rss_kb != first->shared_dirty_kb ||
-        first->pss_kb != first->shared_dirty_kb || middle->rss_kb != 0 ||
-        middle->pss_kb != 0 || last->rss_kb != last->shared_dirty_kb ||
-        last->pss_kb != last->shared_dirty_kb)
+        first->pss_kb != first->shared_dirty_kb ||
+        first->pss_dirty_kb != first->shared_dirty_kb || middle->rss_kb != 0 ||
+        middle->pss_kb != 0 || middle->pss_dirty_kb != 0 ||
+        last->rss_kb != last->shared_dirty_kb ||
+        last->pss_kb != last->shared_dirty_kb ||
+        last->pss_dirty_kb != last->shared_dirty_kb)
         return false;
 
     /* Every stress-map page has deliberately distinct permissions (with one
@@ -460,7 +471,8 @@ static bool validate_layout(const smaps_info_t *info,
     const smaps_vma_t *stress_none = find_vma(info, stress + 2 * page_size);
     if (!stress_none || strcmp(stress_none->perms, "---p") ||
         stress_none->vmflags_wr || stress_none->shared_dirty_kb != 0 ||
-        stress_none->rss_kb != 0 || stress_none->pss_kb != 0)
+        stress_none->rss_kb != 0 || stress_none->pss_kb != 0 ||
+        stress_none->pss_dirty_kb != 0)
         return false;
     return true;
 }
@@ -568,11 +580,16 @@ static int child_probe(uintptr_t target,
         const smaps_vma_t *postfork_vma = find_vma(&info, (uintptr_t) postfork);
         if (!ok || !first || !middle || !last || !stress_ro || !stress_rw ||
             !stress_none || !postfork_vma || first->shared_dirty_kb == 0 ||
+            first->pss_dirty_kb != first->shared_dirty_kb ||
             middle->shared_dirty_kb != 0 || last->shared_dirty_kb == 0 ||
+            last->pss_dirty_kb != last->shared_dirty_kb ||
             stress_ro->shared_dirty_kb != 0 ||
             stress_rw->shared_dirty_kb == 0 ||
+            stress_rw->pss_dirty_kb != stress_rw->shared_dirty_kb ||
             stress_none->shared_dirty_kb != 0 || stress_none->rss_kb != 0 ||
-            stress_none->pss_kb != 0 || postfork_vma->shared_dirty_kb != 0) {
+            stress_none->pss_kb != 0 || stress_none->pss_dirty_kb != 0 ||
+            postfork_vma->shared_dirty_kb != 0 ||
+            postfork_vma->pss_dirty_kb != 0) {
             free_smaps(&info);
             munmap(postfork, page_size);
             return 1;

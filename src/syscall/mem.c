@@ -255,6 +255,7 @@ typedef struct {
     uint64_t gpa_base;
     uint64_t offset;
     int backing_fd; /* borrowed from the region tracker */
+    /* Snapshot-style MAP_SHARED source that may contain guest writes. */
     bool shared_non_overlay;
     bool overlay_active;
     uint64_t overlay_start;
@@ -382,7 +383,8 @@ static int find_mremap_source(const guest_t *g,
         segment->offset = expected_offset;
         segment->backing_fd = r->backing_fd;
         segment->shared_non_overlay =
-            r->shared && r->backing_fd >= 0 && !region_has_live_overlay(r);
+            r->shared && (r->prot & LINUX_PROT_WRITE) && r->backing_fd >= 0 &&
+            !region_has_live_overlay(r);
         segment->overlay_active = region_has_live_overlay(r);
         segment->overlay_start = r->overlay_start;
         segment->overlay_end = r->overlay_end;
@@ -1360,12 +1362,13 @@ static bool mremap_source_has_overlay(const mremap_source_t *source)
     return false;
 }
 
-/* A snapshot-style MAP_SHARED source may contain guest writes that have not
- * reached its backing file yet. mremap destroys the source VMA (and may zero
- * its slab backing) after copying, so publish those dirty bytes before any
- * source cleanup. Live file overlays are excluded: the host page cache already
- * owns their coherence and cleanup restores the slab before the source is
- * removed.
+/* A writable snapshot-style MAP_SHARED source may contain guest writes that
+ * have not reached its backing file yet. mremap destroys the source VMA (and
+ * may zero its slab backing) after copying, so publish those dirty bytes before
+ * any source cleanup. Read-only sources cannot contain writes and therefore do
+ * not trigger this alias scan. Live file overlays are excluded: the host page
+ * cache already owns their coherence and cleanup restores the slab before the
+ * source is removed.
  */
 static int64_t flush_mremap_source_shared(guest_t *g,
                                           const mremap_source_t *source)

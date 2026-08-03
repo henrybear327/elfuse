@@ -2695,8 +2695,8 @@ out:
  * guest VMAs and logical fork snapshots, but it cannot observe kernel page
  * residency or dirty bits on the host. Writable private anonymous VMAs that
  * were present in the most recent fork snapshot report their full VMA size as
- * Shared_Dirty, Rss, and Pss; keeping those counters aligned avoids a
- * self-contradictory snapshot while retaining a coarse fork-compatibility
+ * Shared_Dirty, Rss, Pss, and Pss_Dirty; keeping those counters aligned avoids
+ * a self-contradictory snapshot while retaining a coarse fork-compatibility
  * signal. Newly-created VMAs are excluded. All other fields that require
  * kernel page accounting are stable zeroes.
  */
@@ -2731,6 +2731,7 @@ static int proc_open_self_smaps(const guest_t *g)
         uint64_t shared_dirty_kb = logical_shared_dirty ? size_kb : 0;
         uint64_t rss_kb = shared_dirty_kb;
         uint64_t pss_kb = shared_dirty_kb;
+        uint64_t pss_dirty_kb = shared_dirty_kb;
 
         /* Linux writes a separating space after VmFlags:, even when no
          * evidence-based flags are available (for example a PROT_NONE VMA).
@@ -2774,7 +2775,7 @@ static int proc_open_self_smaps(const guest_t *g)
                 "MMUPageSize: 4 kB\n"
                 "Rss: %llu kB\n"
                 "Pss: %llu kB\n"
-                "Pss_Dirty: 0 kB\n"
+                "Pss_Dirty: %llu kB\n"
                 "Shared_Clean: 0 kB\n"
                 "Shared_Dirty: %llu kB\n"
                 "Private_Clean: 0 kB\n"
@@ -2795,6 +2796,7 @@ static int proc_open_self_smaps(const guest_t *g)
                 "VmFlags:%s\n",
                 header_len, header, (unsigned long long) size_kb,
                 (unsigned long long) rss_kb, (unsigned long long) pss_kb,
+                (unsigned long long) pss_dirty_kb,
                 (unsigned long long) shared_dirty_kb, vmflags) < 0)
             goto out;
     }
@@ -3409,7 +3411,7 @@ int proc_intercept_open(const guest_t *g,
         return proc_open_self_maps(g);
 
     /* /proc/self/smaps -> Linux-shaped VMA blocks with tracked VMA metadata
-     * and the coarse fork Shared_Dirty/Rss/Pss compatibility signal.
+     * and the coarse fork Shared_Dirty/Rss/Pss/Pss_Dirty compatibility signal.
      */
     if (!strcmp(path, "/proc/self/smaps"))
         return proc_open_self_smaps(g);

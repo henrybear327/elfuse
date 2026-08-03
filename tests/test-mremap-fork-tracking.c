@@ -462,6 +462,87 @@ static void test_misaligned_shared_mremap_writeback(void)
     close(fd);
 }
 
+/* Force the snapshot-style MAP_SHARED path by placing a guest-page mapping
+ * one page into an otherwise unused reservation. Apple hosts use larger host
+ * pages than the guest's 4 KiB pages, so this address cannot receive a live
+ * file overlay. */
+static void *map_misaligned_shared_fixed(size_t length,
+                                         int prot,
+                                         int fd,
+                                         off_t offset)
+{
+    const size_t page = 4096;
+    void *reservation = mmap(NULL, length + page, PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (reservation == MAP_FAILED)
+        return MAP_FAILED;
+
+    void *address = (char *) reservation + page;
+    if (munmap(reservation, length + page) != 0)
+        return MAP_FAILED;
+    return mmap(address, length, prot, MAP_SHARED | MAP_FIXED, fd, offset);
+}
+
+static void test_readonly_shared_mremap_does_not_flush_alias(void)
+{
+    TEST("read-only MAP_SHARED mremap does not flush writable alias");
+
+    const size_t span = 64 * 1024;
+    char tmpl[] = "/tmp/elfuse-mremap-readonly-alias-XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) {
+        FAIL("mkstemp failed");
+        return;
+    }
+    unlink(tmpl);
+    if (ftruncate(fd, (off_t) (2 * span)) != 0 || pwrite(fd, "F", 1, 0) != 1) {
+        FAIL("file setup failed");
+        close(fd);
+        return;
+    }
+
+    char *writer =
+        map_misaligned_shared_fixed(span, PROT_READ | PROT_WRITE, fd, 0);
+    char *source = map_misaligned_shared_fixed(span, PROT_READ, fd, 0);
+    if (writer == MAP_FAILED || source == MAP_FAILED) {
+        FAIL("snapshot MAP_SHARED mappings failed");
+        if (writer != MAP_FAILED)
+            munmap(writer, span);
+        if (source != MAP_FAILED)
+            munmap(source, span);
+        close(fd);
+        return;
+    }
+    writer[0] = 'W';
+
+    void *blocker = mmap(source + span, span, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (blocker != source + span) {
+        FAIL("mremap blocker mmap failed");
+        munmap(writer, span);
+        munmap(source, span);
+        close(fd);
+        return;
+    }
+
+    char *moved = mremap(source, span, 2 * span, MREMAP_MAYMOVE);
+    unsigned char file_byte = 0;
+    bool unchanged = moved != MAP_FAILED && moved != source &&
+                     pread(fd, &file_byte, 1, 0) == 1 && file_byte == 'F';
+    if (unchanged)
+        PASS();
+    else
+        FAIL("read-only source mremap flushed writable alias");
+
+    if (moved != MAP_FAILED)
+        munmap(moved, 2 * span);
+    else
+        munmap(source, span);
+    munmap(writer, span);
+    munmap(blocker, span);
+    close(fd);
+}
+
 static void test_file_backed_fork_split_move(void)
 {
     TEST("MAP_SHARED file: mremap across fork-split source");
@@ -977,6 +1058,7 @@ int main(void)
     test_postfork_repeated_allocations_keep_lineage();
     test_adjacent_file_vmas_rejected();
     test_misaligned_shared_mremap_writeback();
+    test_readonly_shared_mremap_does_not_flush_alias();
     test_file_backed_fork_split_move();
     test_file_backed_mprotect_fragments_move();
     test_file_backed_fixed_move_from_same_vma();

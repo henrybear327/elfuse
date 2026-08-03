@@ -30,8 +30,12 @@ typedef struct {
     unsigned long long size_kb;
     unsigned long long kernel_page_kb;
     unsigned long long mmu_page_kb;
+    unsigned long long rss_kb;
+    unsigned long long pss_kb;
     unsigned long long shared_dirty_kb;
     bool have_size;
+    bool have_rss;
+    bool have_pss;
     bool have_shared_dirty;
     bool have_vmflags;
     bool vmflags_wr;
@@ -43,8 +47,7 @@ static const char *const smaps_fields[] = {
     "Private_Clean:", "Private_Dirty:",  "Referenced:",      "Anonymous:",
     "KSM:",           "LazyFree:",       "AnonHugePages:",   "ShmemPmdMapped:",
     "FilePmdMapped:", "Shared_Hugetlb:", "Private_Hugetlb:", "Swap:",
-    "SwapPss:",       "Locked:",         "THPeligible:",     "ProtectionKey:",
-    "VmFlags:",
+    "SwapPss:",       "Locked:",         "THPeligible:",     "VmFlags:",
 };
 
 #define SMAPS_FIELD_COUNT (sizeof(smaps_fields) / sizeof(smaps_fields[0]))
@@ -165,8 +168,12 @@ static bool parse_header(const char *line, smaps_vma_t *vma)
     vma->size_kb = 0;
     vma->kernel_page_kb = 0;
     vma->mmu_page_kb = 0;
+    vma->rss_kb = 0;
+    vma->pss_kb = 0;
     vma->shared_dirty_kb = 0;
     vma->have_size = false;
+    vma->have_rss = false;
+    vma->have_pss = false;
     vma->have_shared_dirty = false;
     vma->have_vmflags = false;
     vma->vmflags_wr = false;
@@ -211,6 +218,12 @@ static bool parse_vmflags(const char *line, bool *writable)
         return false;
 
     const char *p = line + label_len;
+    if (*p && !isspace((unsigned char) *p))
+        return false;
+    /* Keep the provider's stable spelling for an empty flag set: the Linux
+     * field always has a separating space, even when no token follows. */
+    if (!*p)
+        return false;
     bool has_wr = false;
     while (*(p = skip_space(p))) {
         const char *start = p;
@@ -233,21 +246,8 @@ static bool parse_vmflags(const char *line, bool *writable)
 static bool finish_vma(smaps_vma_t *vma, size_t field_index)
 {
     return field_index == SMAPS_FIELD_COUNT && vma->have_size &&
-           vma->have_shared_dirty && vma->have_vmflags;
-}
-
-/* THPeligible and ProtectionKey are conditional in real Linux kernels. The
- * elfuse provider always emits both, but qemu may legitimately omit either;
- * when the parser reaches one of those labels, advance over any missing
- * optional fields before parsing VmFlags. */
-static void skip_optional_fields(const char *line, size_t *field_index)
-{
-    if (*field_index == SMAPS_FIELD_COUNT - 3 &&
-        (!strncmp(line, "ProtectionKey:", strlen("ProtectionKey:")) ||
-         !strncmp(line, "VmFlags:", 8)))
-        (*field_index)++;
-    if (*field_index == SMAPS_FIELD_COUNT - 2 && !strncmp(line, "VmFlags:", 8))
-        (*field_index)++;
+           vma->have_rss && vma->have_pss && vma->have_shared_dirty &&
+           vma->have_vmflags;
 }
 
 static bool append_vma(smaps_info_t *info, const smaps_vma_t *vma)
@@ -278,14 +278,10 @@ static bool parse_smaps(char *buf, size_t len, smaps_info_t *info)
             goto fail;
         *next = '\0';
 
-        /* Linux normally places headers back-to-back; the synthetic proc
-         * provider separates records with one blank line. Accept that
-         * separator only after a complete record. */
+        /* smaps records are contiguous: a blank line is not a field and is
+         * rejected so malformed snapshots cannot hide an out-of-order VMA. */
         if (!*line) {
-            if (!have_current || field_index != SMAPS_FIELD_COUNT)
-                goto fail;
-            line = next + 1;
-            continue;
+            goto fail;
         }
 
         smaps_vma_t header;
@@ -306,7 +302,6 @@ static bool parse_smaps(char *buf, size_t len, smaps_info_t *info)
         } else {
             if (!have_current)
                 goto fail;
-            skip_optional_fields(line, &field_index);
             if (field_index >= SMAPS_FIELD_COUNT)
                 goto fail;
             unsigned long long value;
@@ -320,10 +315,18 @@ static bool parse_smaps(char *buf, size_t len, smaps_info_t *info)
                     current.kernel_page_kb = value;
                 if (field_index == 2)
                     current.mmu_page_kb = value;
+                if (field_index == 3)
+                    current.rss_kb = value;
+                if (field_index == 4)
+                    current.pss_kb = value;
                 if (field_index == 7)
                     current.shared_dirty_kb = value;
                 if (field_index == 0)
                     current.have_size = true;
+                if (field_index == 3)
+                    current.have_rss = true;
+                if (field_index == 4)
+                    current.have_pss = true;
                 if (field_index == 7)
                     current.have_shared_dirty = true;
                 field_index++;
@@ -432,10 +435,16 @@ static bool validate_layout(const smaps_info_t *info,
         middle->mmu_page_kb != 4 || last->kernel_page_kb != 4 ||
         last->mmu_page_kb != 4)
         return false;
+    if (first->rss_kb != first->shared_dirty_kb ||
+        first->pss_kb != first->shared_dirty_kb || middle->rss_kb != 0 ||
+        middle->pss_kb != 0 || last->rss_kb != last->shared_dirty_kb ||
+        last->pss_kb != last->shared_dirty_kb)
+        return false;
 
-    /* Every stress-map page alternates permissions, so each page must remain
-     * its own VMA. Requiring the full count makes a short read or a producer
-     * cap observable instead of merely checking that some blocks exceed 256.
+    /* Every stress-map page has deliberately distinct permissions (with one
+     * PROT_NONE probe), so each page must remain its own VMA. Requiring the
+     * full count makes a short read or a producer cap observable instead of
+     * merely checking that some blocks exceed 256.
      */
     size_t expected_stress_vmas = stress_size / page_size;
     if (expected_stress_vmas <= 256 ||
@@ -448,6 +457,11 @@ static bool validate_layout(const smaps_info_t *info,
             page->end != stress + (i + 1) * page_size)
             return false;
     }
+    const smaps_vma_t *stress_none = find_vma(info, stress + 2 * page_size);
+    if (!stress_none || strcmp(stress_none->perms, "---p") ||
+        stress_none->vmflags_wr || stress_none->shared_dirty_kb != 0 ||
+        stress_none->rss_kb != 0 || stress_none->pss_kb != 0)
+        return false;
     return true;
 }
 
@@ -549,13 +563,16 @@ static int child_probe(uintptr_t target,
         const smaps_vma_t *last = find_vma(&info, target + 2 * page_size);
         const smaps_vma_t *stress_ro = find_vma(&info, stress);
         const smaps_vma_t *stress_rw = find_vma(&info, stress + page_size);
+        const smaps_vma_t *stress_none =
+            find_vma(&info, stress + 2 * page_size);
         const smaps_vma_t *postfork_vma = find_vma(&info, (uintptr_t) postfork);
         if (!ok || !first || !middle || !last || !stress_ro || !stress_rw ||
-            !postfork_vma || first->shared_dirty_kb == 0 ||
+            !stress_none || !postfork_vma || first->shared_dirty_kb == 0 ||
             middle->shared_dirty_kb != 0 || last->shared_dirty_kb == 0 ||
             stress_ro->shared_dirty_kb != 0 ||
             stress_rw->shared_dirty_kb == 0 ||
-            postfork_vma->shared_dirty_kb != 0) {
+            stress_none->shared_dirty_kb != 0 || stress_none->rss_kb != 0 ||
+            stress_none->pss_kb != 0 || postfork_vma->shared_dirty_kb != 0) {
             free_smaps(&info);
             munmap(postfork, page_size);
             return 1;
@@ -604,6 +621,11 @@ int main(void)
                 break;
             }
         }
+        /* Keep one page inaccessible so the parser and formatter exercise
+         * PROT_NONE coverage and the required empty VmFlags spelling. */
+        if (fixture_ok &&
+            mprotect(stress + 2 * page_size, page_size, PROT_NONE) < 0)
+            fixture_ok = false;
     }
 
     TEST("smaps headers, order, fields, and completeness");

@@ -2040,6 +2040,16 @@ static uint64_t allocate_vma_id(guest_t *g)
     }
 }
 
+void guest_reseed_next_vma_id(guest_t *g)
+{
+    uint64_t max_id = g->next_vma_id;
+    for (int i = 0; i < g->nregions; i++) {
+        if (g->regions[i].vma_id > max_id)
+            max_id = g->regions[i].vma_id;
+    }
+    g->next_vma_id = max_id;
+}
+
 int guest_region_add_ex_owned(guest_t *g,
                               uint64_t start,
                               uint64_t end,

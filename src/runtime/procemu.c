@@ -2695,8 +2695,10 @@ out:
  * guest VMAs and logical fork snapshots, but it cannot observe kernel page
  * residency or dirty bits on the host. Writable private anonymous VMAs that
  * were present in the most recent fork snapshot report their full VMA size as
- * Shared_Dirty; newly-created VMAs are excluded. All other fields that
- * require kernel page accounting are stable zeroes.
+ * Shared_Dirty, Rss, and Pss; keeping those counters aligned avoids a
+ * self-contradictory snapshot while retaining a coarse fork-compatibility
+ * signal. Newly-created VMAs are excluded. All other fields that require
+ * kernel page accounting are stable zeroes.
  */
 static int proc_open_self_smaps(const guest_t *g)
 {
@@ -2727,15 +2729,22 @@ static int proc_open_self_smaps(const guest_t *g)
         bool logical_shared_dirty = e->inherited_at_fork && private_anon &&
                                     (e->prot & LINUX_PROT_WRITE);
         uint64_t shared_dirty_kb = logical_shared_dirty ? size_kb : 0;
+        uint64_t rss_kb = shared_dirty_kb;
+        uint64_t pss_kb = shared_dirty_kb;
 
-        char vmflags[64];
-        size_t vmflags_len = 0;
+        /* Linux writes a separating space after VmFlags:, even when no
+         * evidence-based flags are available (for example a PROT_NONE VMA).
+         * Start with that space so the empty form is exactly "VmFlags: \n".
+         */
+        char vmflags[64] = {' '};
+        size_t vmflags_len = 1;
 #define APPEND_VMFLAG(flag)                                  \
     do {                                                     \
         const char *token = (flag);                          \
         size_t token_len = strlen(token);                    \
         if (vmflags_len + token_len + 1 < sizeof(vmflags)) { \
-            vmflags[vmflags_len++] = ' ';                    \
+            if (vmflags_len > 1)                             \
+                vmflags[vmflags_len++] = ' ';                \
             memcpy(vmflags + vmflags_len, token, token_len); \
             vmflags_len += token_len;                        \
         }                                                    \
@@ -2763,8 +2772,8 @@ static int proc_open_self_smaps(const guest_t *g)
                 "Size: %llu kB\n"
                 "KernelPageSize: 4 kB\n"
                 "MMUPageSize: 4 kB\n"
-                "Rss: 0 kB\n"
-                "Pss: 0 kB\n"
+                "Rss: %llu kB\n"
+                "Pss: %llu kB\n"
                 "Pss_Dirty: 0 kB\n"
                 "Shared_Clean: 0 kB\n"
                 "Shared_Dirty: %llu kB\n"
@@ -2783,9 +2792,9 @@ static int proc_open_self_smaps(const guest_t *g)
                 "SwapPss: 0 kB\n"
                 "Locked: 0 kB\n"
                 "THPeligible: 0\n"
-                "ProtectionKey: 0\n"
                 "VmFlags:%s\n",
                 header_len, header, (unsigned long long) size_kb,
+                (unsigned long long) rss_kb, (unsigned long long) pss_kb,
                 (unsigned long long) shared_dirty_kb, vmflags) < 0)
             goto out;
     }
@@ -3400,7 +3409,7 @@ int proc_intercept_open(const guest_t *g,
         return proc_open_self_maps(g);
 
     /* /proc/self/smaps -> Linux-shaped VMA blocks with tracked VMA metadata
-     * and the coarse fork Shared_Dirty compatibility signal.
+     * and the coarse fork Shared_Dirty/Rss/Pss compatibility signal.
      */
     if (!strcmp(path, "/proc/self/smaps"))
         return proc_open_self_smaps(g);

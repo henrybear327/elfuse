@@ -933,6 +933,7 @@ int fork_ipc_recv_process_state(int ipc_fd, guest_t *g, signal_state_t *sig)
      */
     for (int i = 0; i < g->nregions; i++)
         g->regions[i].inherited_at_fork = true;
+    guest_reseed_next_vma_id(g);
     g->regions_tracker_stale =
         (regions_tracker_stale != 0) || (num_guest_regions > recv_regions);
 

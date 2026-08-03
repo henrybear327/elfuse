@@ -1214,6 +1214,11 @@ int guest_region_add_ex_owned_gpa(guest_t *g,
                                   bool inherited_at_fork,
                                   uint64_t vma_id);
 
+/* Re-seed the logical-VMA allocator from a restored region snapshot. Fork IPC
+ * restores regions by value, so next_vma_id must be advanced past every
+ * serialized lineage before child-private mappings are added. */
+void guest_reseed_next_vma_id(guest_t *g);
+
 /* Add a preannounced region that appears in /proc/self/maps only. These entries
  * are kept separate from regions[] so they do not cause -EEXIST on guest
  * MAP_FIXED_NOREPLACE reservations.

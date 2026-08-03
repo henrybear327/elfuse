@@ -797,28 +797,29 @@ under `/proc`, `/dev`, and a few Linux-expected compatibility files:
 
 `/proc/self/smaps` and `/proc/<pid>/smaps` are generated from the same tracked
 VMA list as `/proc/self/maps`. The complete field set currently emitted for
-each VMA is the maps header followed by these 25 fields, in this order:
+each VMA is the maps header followed by these 24 fields, in this order:
 
 ```text
 Size, KernelPageSize, MMUPageSize, Rss, Pss, Pss_Dirty,
 Shared_Clean, Shared_Dirty, Private_Clean, Private_Dirty, Referenced,
 Anonymous, KSM, LazyFree, AnonHugePages, ShmemPmdMapped, FilePmdMapped,
 Shared_Hugetlb, Private_Hugetlb, Swap, SwapPss, Locked, THPeligible,
-ProtectionKey, VmFlags
+VmFlags
 ```
 
 `Size` is the VMA length in KiB. `KernelPageSize` and `MMUPageSize` are
-reported as 4 KiB. `Shared_Dirty` is the one page-accounting field with a
-non-zero value: in a fork child, writable private anonymous VMAs that existed
-in the parent's CoW snapshot report their full VMA size because they are
-logically shared with that snapshot. Every other numeric counter, including
-`THPeligible` and `ProtectionKey`, is emitted as zero. `VmFlags` is
-evidence-based and contains only the permission/sharing flags represented by
-the tracked VMA (`rd`, `wr`,
-`ex`, `sh`, and `nr` when applicable); no untracked kernel flags are invented.
-elfuse always emits `THPeligible` and `ProtectionKey`; consumers comparing
-against a real Linux kernel should tolerate either conditional field being
-absent.
+reported as 4 KiB. In a fork child, writable private anonymous VMAs that
+existed in the parent's CoW snapshot report their full VMA size for
+`Shared_Dirty`, `Rss`, and `Pss`, keeping those coarse counters internally
+consistent. Newly-created VMAs are excluded from that signal. Every other
+numeric counter, including `THPeligible`, is emitted as a stable zero.
+`ProtectionKey` (a Linux pkeys field added in Linux 4.9) is intentionally
+omitted because the macOS host has no equivalent; consumers comparing against a
+real Linux kernel should treat it as optional. `VmFlags` is evidence-based and
+contains only the permission/sharing flags represented by the tracked VMA
+(`rd`, `wr`, `ex`, `sh`, and `nr` when applicable); no untracked kernel flags
+are invented. A VMA with no such evidence (for example `PROT_NONE`) still
+prints the field's separating space as `VmFlags: `.
 These are coarse VMA-level values, not host page-residency, dirty-bit, or
 proportional-sharing accounting, so they are suitable for fork-safety checks
 but not precise memory profiling. The fork-child marker is tracked per VMA, so

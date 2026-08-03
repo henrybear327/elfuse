@@ -105,6 +105,10 @@ static int restore_snapshot_page_tables(guest_t *g,
 static int restore_region_snapshots(guest_t *g,
                                     region_snapshot_t *snaps,
                                     int n);
+static int64_t sync_shared_aliases_range(guest_t *g,
+                                         int backing_fd,
+                                         uint64_t file_start,
+                                         uint64_t file_end);
 
 static int region_count_after_removes(const guest_t *g,
                                       const remove_range_t *ranges,
@@ -251,6 +255,7 @@ typedef struct {
     uint64_t gpa_base;
     uint64_t offset;
     int backing_fd; /* borrowed from the region tracker */
+    bool shared_non_overlay;
     bool overlay_active;
     uint64_t overlay_start;
     uint64_t overlay_end;
@@ -376,6 +381,8 @@ static int find_mremap_source(const guest_t *g,
         segment->gpa_base = expected_gpa;
         segment->offset = expected_offset;
         segment->backing_fd = r->backing_fd;
+        segment->shared_non_overlay =
+            r->shared && r->backing_fd >= 0 && !region_has_live_overlay(r);
         segment->overlay_active = region_has_live_overlay(r);
         segment->overlay_start = r->overlay_start;
         segment->overlay_end = r->overlay_end;
@@ -458,6 +465,71 @@ static void region_clip_overlay(guest_region_t *r)
         r->overlay_end = page_end;
     if (r->overlay_end <= r->overlay_start)
         region_clear_overlay(r);
+}
+
+/* Region-boundary edits are a prepare step for metadata snapshots. Keep a
+ * private copy of the tracker while the boundaries are split so an allocation
+ * failure (table capacity or backing-fd dup) cannot publish a half-split
+ * tracker. Split-created fds are closed on rollback; the original region fds
+ * remain owned by the original array and are restored verbatim.
+ */
+typedef struct {
+    guest_region_t *regions;
+    int nregions;
+} region_array_txn_t;
+
+static int begin_region_array_txn(const guest_t *g, region_array_txn_t *txn)
+{
+    memset(txn, 0, sizeof(*txn));
+    txn->nregions = g->nregions;
+    if (txn->nregions == 0)
+        return 0;
+
+    txn->regions = malloc((size_t) txn->nregions * sizeof(*txn->regions));
+    if (!txn->regions) {
+        txn->nregions = 0;
+        return -LINUX_ENOMEM;
+    }
+    memcpy(txn->regions, g->regions,
+           (size_t) txn->nregions * sizeof(*txn->regions));
+    return 0;
+}
+
+static bool txn_original_fd_present(const region_array_txn_t *txn, int fd)
+{
+    if (fd < 0)
+        return true;
+    for (int i = 0; i < txn->nregions; i++) {
+        if (txn->regions[i].backing_fd == fd)
+            return true;
+    }
+    return false;
+}
+
+static void rollback_region_array_txn(guest_t *g, region_array_txn_t *txn)
+{
+    if (!txn || !txn->regions)
+        return;
+
+    /* split_regions_at_boundary() only creates new fds; it never closes an
+     * original one. Close those new descriptors before restoring the copy.
+     */
+    for (int i = 0; i < g->nregions; i++) {
+        int fd = g->regions[i].backing_fd;
+        if (fd >= 0 && !txn_original_fd_present(txn, fd))
+            close(fd);
+    }
+    memcpy(g->regions, txn->regions,
+           (size_t) txn->nregions * sizeof(*txn->regions));
+    g->nregions = txn->nregions;
+}
+
+static void finish_region_array_txn(region_array_txn_t *txn)
+{
+    if (!txn)
+        return;
+    free(txn->regions);
+    memset(txn, 0, sizeof(*txn));
 }
 
 static int split_regions_at_boundary(guest_t *g, uint64_t boundary)
@@ -1288,6 +1360,34 @@ static bool mremap_source_has_overlay(const mremap_source_t *source)
     return false;
 }
 
+/* A snapshot-style MAP_SHARED source may contain guest writes that have not
+ * reached its backing file yet. mremap destroys the source VMA (and may zero
+ * its slab backing) after copying, so publish those dirty bytes before any
+ * source cleanup. Live file overlays are excluded: the host page cache already
+ * owns their coherence and cleanup restores the slab before the source is
+ * removed.
+ */
+static int64_t flush_mremap_source_shared(guest_t *g,
+                                          const mremap_source_t *source)
+{
+    for (int i = 0; i < source->nsegments; i++) {
+        const mremap_source_segment_t *segment = &source->segments[i];
+        if (!segment->shared_non_overlay || segment->backing_fd < 0)
+            continue;
+
+        uint64_t len = segment->end - segment->start;
+        uint64_t file_end = segment->offset + len;
+        if (file_end < segment->offset)
+            return -LINUX_EFAULT;
+
+        int64_t err = sync_shared_aliases_range(g, segment->backing_fd,
+                                                segment->offset, file_end);
+        if (err < 0)
+            return err;
+    }
+    return 0;
+}
+
 typedef struct {
     uint64_t start;
     uint64_t end;
@@ -1487,12 +1587,26 @@ static int capture_region_snapshots(guest_t *g,
                                     region_snapshot_t *snaps,
                                     int max_snaps)
 {
+    /* Split and snapshot as one metadata transaction. A failed boundary split,
+     * descriptor dup, or snapshot-capacity check must leave regions[] and its
+     * owned fds exactly as they were on entry. */
+    region_array_txn_t txn;
+    int txn_err = begin_region_array_txn(g, &txn);
+    if (txn_err < 0)
+        return txn_err;
+
     int split_err = split_regions_at_boundary(g, start);
-    if (split_err < 0)
+    if (split_err < 0) {
+        rollback_region_array_txn(g, &txn);
+        finish_region_array_txn(&txn);
         return split_err;
+    }
     split_err = split_regions_at_boundary(g, end);
-    if (split_err < 0)
+    if (split_err < 0) {
+        rollback_region_array_txn(g, &txn);
+        finish_region_array_txn(&txn);
         return split_err;
+    }
 
     int n = 0;
     for (int i = 0; i < g->nregions; i++) {
@@ -1503,6 +1617,8 @@ static int capture_region_snapshots(guest_t *g,
             continue;
         if (n >= max_snaps) {
             close_region_snapshots(snaps, n);
+            rollback_region_array_txn(g, &txn);
+            finish_region_array_txn(&txn);
             return -LINUX_ENOMEM;
         }
 
@@ -1519,6 +1635,8 @@ static int capture_region_snapshots(guest_t *g,
             snap->backing_fd = dup(r->backing_fd);
             if (snap->backing_fd < 0) {
                 close_region_snapshots(snaps, n);
+                rollback_region_array_txn(g, &txn);
+                finish_region_array_txn(&txn);
                 return -LINUX_ENOMEM;
             }
         }
@@ -1530,6 +1648,7 @@ static int capture_region_snapshots(guest_t *g,
         str_copy_trunc(snap->name, r->name, sizeof(snap->name));
     }
 
+    finish_region_array_txn(&txn);
     return n;
 }
 
@@ -2122,12 +2241,23 @@ static int cleanup_overlays_in_range(guest_t *g, uint64_t start, uint64_t end)
     uint64_t host_start = ALIGN_DOWN(start, hps);
     uint64_t host_end = ALIGN_UP(end, hps);
 
+    region_array_txn_t split_txn;
+    int txn_err = begin_region_array_txn(g, &split_txn);
+    if (txn_err < 0)
+        return txn_err;
     int split_err = split_regions_at_boundary(g, host_start);
-    if (split_err < 0)
+    if (split_err < 0) {
+        rollback_region_array_txn(g, &split_txn);
+        finish_region_array_txn(&split_txn);
         return split_err;
+    }
     split_err = split_regions_at_boundary(g, host_end);
-    if (split_err < 0)
+    if (split_err < 0) {
+        rollback_region_array_txn(g, &split_txn);
+        finish_region_array_txn(&split_txn);
         return split_err;
+    }
+    finish_region_array_txn(&split_txn);
 
     /* Snapshot affected ranges first; the host-side mmap calls below do not
      * touch the region array, but a future caller invariant is to allow this
@@ -3313,9 +3443,27 @@ int64_t sys_mremap(guest_t *g,
             return finish_mremap(&source, -LINUX_ENOMEM);
         }
 
+        /* Keep both boundary captures in one transaction. The per-capture
+         * helper rolls back its own edits, while this outer guard also undoes
+         * a successful source capture if destination capture or the preflight
+         * shared-file flush fails afterward. */
+        region_array_txn_t capture_txn;
+        int capture_txn_err = begin_region_array_txn(g, &capture_txn);
+        if (capture_txn_err < 0) {
+            free(source_snaps);
+            free(dest_snaps);
+            if (track_backing_fd >= 0)
+                close(track_backing_fd);
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, capture_txn_err);
+        }
+
         source_nsnaps = capture_region_snapshots(
             g, old_off, old_off + old_size, source_snaps, GUEST_MAX_REGIONS);
         if (source_nsnaps < 0) {
+            rollback_region_array_txn(g, &capture_txn);
+            finish_region_array_txn(&capture_txn);
             free(source_snaps);
             free(dest_snaps);
             if (track_backing_fd >= 0)
@@ -3327,6 +3475,8 @@ int64_t sys_mremap(guest_t *g,
         int rebind_err =
             rebind_mremap_source_backings(&source, source_snaps, source_nsnaps);
         if (rebind_err < 0) {
+            rollback_region_array_txn(g, &capture_txn);
+            finish_region_array_txn(&capture_txn);
             dispose_region_snapshots(&source_snaps, &source_nsnaps);
             free(dest_snaps);
             if (track_backing_fd >= 0)
@@ -3338,6 +3488,8 @@ int64_t sys_mremap(guest_t *g,
         dest_nsnaps = capture_region_snapshots(g, new_off, new_off + new_size,
                                                dest_snaps, GUEST_MAX_REGIONS);
         if (dest_nsnaps < 0) {
+            rollback_region_array_txn(g, &capture_txn);
+            finish_region_array_txn(&capture_txn);
             dispose_region_snapshots(&source_snaps, &source_nsnaps);
             free(dest_snaps);
             if (track_backing_fd >= 0)
@@ -3346,6 +3498,20 @@ int64_t sys_mremap(guest_t *g,
                 close(tail_backing_fd);
             return finish_mremap(&source, dest_nsnaps);
         }
+
+        int64_t flush_err = flush_mremap_source_shared(g, &source);
+        if (flush_err < 0) {
+            rollback_region_array_txn(g, &capture_txn);
+            finish_region_array_txn(&capture_txn);
+            dispose_region_snapshots(&dest_snaps, &dest_nsnaps);
+            dispose_region_snapshots(&source_snaps, &source_nsnaps);
+            if (track_backing_fd >= 0)
+                close(track_backing_fd);
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, flush_err);
+        }
+        finish_region_array_txn(&capture_txn);
 
         if (source_overlay) {
             int cleanup_err =
@@ -3679,6 +3845,15 @@ int64_t sys_mremap(guest_t *g,
             if (tail_backing_fd >= 0)
                 close(tail_backing_fd);
             return finish_mremap(&source, -LINUX_ENOMEM);
+        }
+
+        int64_t flush_err = flush_mremap_source_shared(g, &source);
+        if (flush_err < 0) {
+            if (track_backing_fd >= 0)
+                close(track_backing_fd);
+            if (tail_backing_fd >= 0)
+                close(tail_backing_fd);
+            return finish_mremap(&source, flush_err);
         }
 
         int source_remove_fd = -1;
@@ -4312,8 +4487,8 @@ static int64_t sync_shared_aliases_range(guest_t *g,
     uint8_t original[4096];
 
     for (uint64_t chunk_start = file_start; chunk_start < file_end;) {
-        uint64_t chunk_end = ALIGN_DOWN(chunk_start + sizeof(original), 4096);
-        if (chunk_end <= chunk_start || chunk_end > file_end)
+        uint64_t chunk_end = chunk_start + sizeof(original);
+        if (chunk_end < chunk_start || chunk_end > file_end)
             chunk_end = file_end;
         size_t chunk_len = (size_t) (chunk_end - chunk_start);
 
@@ -4328,6 +4503,8 @@ static int64_t sync_shared_aliases_range(guest_t *g,
         for (int i = 0; i < g->nregions; i++) {
             const guest_region_t *src = &g->regions[i];
             if (!src->shared || src->backing_fd < 0)
+                continue;
+            if (src->overlay_active)
                 continue;
             if (!(src->prot & LINUX_PROT_WRITE))
                 continue;

@@ -261,6 +261,55 @@ static void test_postfork_adjacent_anon_rejected(void)
     munmap(first, span);
 }
 
+static void test_postfork_repeated_allocations_keep_lineage(void)
+{
+    TEST("repeated post-fork allocations never alias inherited VMA IDs");
+
+    const size_t span = 64 * 1024;
+    const int attempts = 256;
+    void *first = reserve_then_map_fixed(2 * span, span, PROT_READ | PROT_WRITE,
+                                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (first == MAP_FAILED) {
+        FAIL("inherited anonymous mmap failed");
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        FAIL("fork failed");
+        munmap(first, span);
+        return;
+    }
+    if (pid == 0) {
+        for (int i = 0; i < attempts; i++) {
+            void *tail =
+                mmap((char *) first + span, span, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+            if (tail != (char *) first + span)
+                _exit(90);
+
+            /* If child allocation reused the inherited source's vma_id,
+             * find_mremap_source would incorrectly accept the adjacent pair.
+             * A reseeded allocator keeps the logical lineages distinct. */
+            errno = 0;
+            void *same = mremap(first, 2 * span, 2 * span, 0);
+            if (same != MAP_FAILED || errno != EFAULT)
+                _exit(91);
+            if (munmap(tail, span) != 0)
+                _exit(92);
+        }
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) >= 0 && WIFEXITED(status) &&
+        WEXITSTATUS(status) == 0)
+        PASS();
+    else
+        FAIL("post-fork VMA IDs collided during repeated allocation");
+    munmap(first, span);
+}
+
 static void test_adjacent_file_vmas_rejected(void)
 {
     TEST("mremap rejects adjacent independent file VMAs");
@@ -315,6 +364,102 @@ static void test_adjacent_file_vmas_rejected(void)
     munmap(second, span);
     close(fd2);
     close(fd1);
+}
+
+static void test_misaligned_shared_mremap_writeback(void)
+{
+    TEST("misaligned MAP_SHARED mremap writes back after move");
+
+    const size_t page = 4096;
+    const size_t span = 64 * 1024;
+    char tmpl[] = "/tmp/elfuse-mremap-misaligned-XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) {
+        FAIL("mkstemp failed");
+        return;
+    }
+    unlink(tmpl);
+    if (ftruncate(fd, (off_t) (2 * span)) != 0) {
+        FAIL("file setup failed");
+        close(fd);
+        return;
+    }
+
+    /* Deliberately place the source one host page into its reservation. This
+     * keeps the guest mapping page-aligned while making it non-2MiB-aligned,
+     * so the MAP_SHARED overlay/mremap path exercises a split HVF segment. */
+    size_t reservation_length = 2 * span + page;
+    void *reservation = mmap(NULL, reservation_length, PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (reservation == MAP_FAILED ||
+        munmap(reservation, reservation_length) != 0) {
+        FAIL("source reservation failed");
+        if (reservation != MAP_FAILED)
+            (void) munmap(reservation, reservation_length);
+        close(fd);
+        return;
+    }
+    char *source_address = (char *) reservation + page;
+    char *source = mmap(source_address, span, PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_FIXED, fd, 0);
+    if (source == MAP_FAILED || source != source_address) {
+        FAIL("misaligned MAP_SHARED mmap failed");
+        close(fd);
+        return;
+    }
+    source[0] = 'A';
+    source[page + 7] = 'B';
+
+    /* Block in-place growth so mremap must move the mapping and leave the
+     * destination on the snapshot-style shared-writeback path. */
+    void *blocker = mmap(source + span, span, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (blocker != source + span) {
+        FAIL("mremap blocker mmap failed");
+        munmap(source, span);
+        close(fd);
+        return;
+    }
+
+    char *moved = mremap(source, span, 2 * span, MREMAP_MAYMOVE);
+    if (moved == MAP_FAILED || moved == source) {
+        FAIL("misaligned MAP_SHARED mremap did not move");
+        if (moved != MAP_FAILED)
+            munmap(moved, 2 * span);
+        else
+            munmap(source, span);
+        munmap(blocker, span);
+        close(fd);
+        return;
+    }
+    if (moved[0] != 'A' || moved[page + 7] != 'B') {
+        FAIL("mremap move corrupted source bytes");
+        munmap(moved, 2 * span);
+        munmap(blocker, span);
+        close(fd);
+        return;
+    }
+
+    moved[page + 7] = 'C';
+    moved[span + 19] = 'D';
+    errno = 0;
+    int sync_result = msync(moved, 2 * span, MS_SYNC);
+    int sync_errno = errno;
+    unsigned char first = 0, extension = 0;
+    bool writeback_ok = sync_result == 0 &&
+                        pread(fd, &first, 1, (off_t) (page + 7)) == 1 &&
+                        pread(fd, &extension, 1, (off_t) (span + 19)) == 1 &&
+                        first == 'C' && extension == 'D';
+    if (writeback_ok)
+        PASS();
+    else {
+        errno = sync_errno;
+        FAIL("mremap destination did not write back MAP_SHARED bytes");
+    }
+
+    munmap(moved, 2 * span);
+    munmap(blocker, span);
+    close(fd);
 }
 
 static void test_file_backed_fork_split_move(void)
@@ -829,7 +974,9 @@ int main(void)
     printf("test-mremap-fork-tracking: elfuse mremap tracker tests\n");
 
     test_postfork_adjacent_anon_rejected();
+    test_postfork_repeated_allocations_keep_lineage();
     test_adjacent_file_vmas_rejected();
+    test_misaligned_shared_mremap_writeback();
     test_file_backed_fork_split_move();
     test_file_backed_mprotect_fragments_move();
     test_file_backed_fixed_move_from_same_vma();

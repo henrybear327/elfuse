@@ -469,17 +469,25 @@ static void test_misaligned_shared_mremap_writeback(void)
 static void *map_misaligned_shared_fixed(size_t length,
                                          int prot,
                                          int fd,
-                                         off_t offset)
+                                         off_t offset,
+                                         void **reservation_out)
 {
     const size_t page = 4096;
+    *reservation_out = NULL;
+
     void *reservation = mmap(NULL, length + page, PROT_NONE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (reservation == MAP_FAILED)
         return MAP_FAILED;
 
     void *address = (char *) reservation + page;
-    if (munmap(reservation, length + page) != 0)
+    if (munmap(reservation, length + page) != 0) {
+        /* Keep ownership visible to the caller when the reservation cannot
+         * be released. Returning MAP_FAILED alone would make the live
+         * mapping indistinguishable from an allocation that never happened. */
+        *reservation_out = reservation;
         return MAP_FAILED;
+    }
     return mmap(address, length, prot, MAP_SHARED | MAP_FIXED, fd, offset);
 }
 
@@ -487,6 +495,7 @@ static void test_readonly_shared_mremap_does_not_flush_alias(void)
 {
     TEST("read-only MAP_SHARED mremap does not flush writable alias");
 
+    const size_t page = 4096;
     const size_t span = 64 * 1024;
     char tmpl[] = "/tmp/elfuse-mremap-readonly-alias-XXXXXX";
     int fd = mkstemp(tmpl);
@@ -501,15 +510,22 @@ static void test_readonly_shared_mremap_does_not_flush_alias(void)
         return;
     }
 
-    char *writer =
-        map_misaligned_shared_fixed(span, PROT_READ | PROT_WRITE, fd, 0);
-    char *source = map_misaligned_shared_fixed(span, PROT_READ, fd, 0);
+    void *writer_reservation = NULL;
+    void *source_reservation = NULL;
+    char *writer = map_misaligned_shared_fixed(span, PROT_READ | PROT_WRITE, fd,
+                                               0, &writer_reservation);
+    char *source = map_misaligned_shared_fixed(span, PROT_READ, fd, 0,
+                                               &source_reservation);
     if (writer == MAP_FAILED || source == MAP_FAILED) {
         FAIL("snapshot MAP_SHARED mappings failed");
         if (writer != MAP_FAILED)
             munmap(writer, span);
         if (source != MAP_FAILED)
             munmap(source, span);
+        if (writer_reservation != NULL)
+            munmap(writer_reservation, span + page);
+        if (source_reservation != NULL)
+            munmap(source_reservation, span + page);
         close(fd);
         return;
     }

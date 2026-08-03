@@ -79,8 +79,8 @@ static void child_probe(int file_fd, unsigned char *base)
     void *last_filler = MAP_FAILED;
     int filler_count = 0;
     for (; filler_count < FILL_LIMIT; filler_count++) {
-        void *address = (char *) reserved +
-                        (size_t) filler_count * 2 * PAGE_SIZE;
+        void *address =
+            (char *) reserved + (size_t) filler_count * 2 * PAGE_SIZE;
         void *filler = mmap(address, PAGE_SIZE, PROT_NONE,
                             MAP_PRIVATE | MAP_FIXED, file_fd, 0);
         if (filler == MAP_FAILED) {
@@ -124,8 +124,8 @@ static void child_probe(int file_fd, unsigned char *base)
 
     /* old_size ends inside the child-private tail. */
     errno = 0;
-    result = mremap(base, SPAN + PAGE_SIZE, 2 * SPAN + PAGE_SIZE,
-                    MREMAP_MAYMOVE);
+    result =
+        mremap(base, SPAN + PAGE_SIZE, 2 * SPAN + PAGE_SIZE, MREMAP_MAYMOVE);
     remap_errno = errno;
 
     /* Drop all duplicate guest slots, retaining the original file fd. */

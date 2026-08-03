@@ -357,8 +357,7 @@ static int find_mremap_source(const guest_t *g,
     if (!collect_segments)
         return 0;
 
-    source->segments =
-        malloc((size_t) nsegments * sizeof(*source->segments));
+    source->segments = malloc((size_t) nsegments * sizeof(*source->segments));
     if (!source->segments) {
         dispose_mremap_source(source);
         return -LINUX_ENOMEM;
@@ -371,8 +370,7 @@ static int find_mremap_source(const guest_t *g,
         const guest_region_t *r = &g->regions[index + segment_index];
         uint64_t segment_end = r->end < end ? r->end : end;
         uint64_t segment_len = segment_end - cursor;
-        mremap_source_segment_t *segment =
-            &source->segments[segment_index];
+        mremap_source_segment_t *segment = &source->segments[segment_index];
         segment->start = cursor;
         segment->end = segment_end;
         segment->gpa_base = expected_gpa;
@@ -4108,8 +4106,7 @@ int64_t sys_munmap(guest_t *g, uint64_t addr, uint64_t length)
                         close(remove_fd);
                     return -LINUX_ENOMEM;
                 }
-                guest_region_remove_reserved(g, addr, addr + length,
-                                             remove_fd);
+                guest_region_remove_reserved(g, addr, addr + length, remove_fd);
             }
             return 0;
         }

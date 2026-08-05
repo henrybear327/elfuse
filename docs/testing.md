@@ -260,7 +260,8 @@ CI splits this coverage by what each runner can do:
   cold cache with the image, then a `run --keep` cache that rmi refuses
   without `--force` and `--force` detaches and drops). Besides those, a
   per-image workload suite
-  (the `workload` job, one matrix leg per image: python, node, go, jvm, c)
+  (the `workload` job, one matrix leg per image: python, node, go, jvm, c,
+  redis)
   drives each image through its characteristic operations. The shared driver is
   `scripts/ci/oci-workload.sh <key>`; each image's guest workload lives in
   `scripts/ci/workloads/`:
@@ -277,6 +278,12 @@ CI splits this coverage by what each runner can do:
     file I/O, SHA-256, an 8-thread pool, and a subprocess.
   - **c** (`gcc:14`): a small multi-file `make` project plus a larger single
     translation unit compiled with `gcc -O1`.
+  - **redis** (`redis:7-alpine`): redis-server runs in the foreground as
+    the guest process, while a second guest drives redis-cli over the host
+    loopback. Several actions are performed: PING, a SET/GET round-trip,
+    and a BGSAVE polled until `INFO persistence` reports
+    `rdb_last_bgsave_status:ok`. BGSAVE forks the server and saves the
+    dataset from the copy-on-write child.
 
   `gcc:14` and `eclipse-temurin:21` are Debian/Ubuntu-based and ship the shadow
   suite, so these jobs also exercise the unpack setuid/setgid degrade end to

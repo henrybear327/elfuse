@@ -13,8 +13,8 @@
 #                   (crane/skopeo/umoci) on Linux
 #   oci-image-macos : elfuse-oci darwin build, unit tests, sparsebundle
 #                   round-trip, and a run-less image-lifecycle smoke
-#   workload      : per-image real-workload smokes (python/node/go/jvm/c, one
-#                   matrix leg each) that boot the image under HVF on
+#   workload      : per-image real-workload smokes (python/node/go/jvm/c/redis,
+#                   one matrix leg each) that boot the image under HVF on
 #                   self-hosted Apple Silicon and drive its characteristic
 #                   operations
 #
@@ -857,6 +857,7 @@ jobs:
           # gcc:14 is the largest first pull and the compile bursts (make plus
           # a heavier single TU) dominate the wall time.
           - { key: c, name: C, timeout: 45 }
+          - { key: redis, name: Redis, timeout: 30 }
     steps:
       - name: Checkout
         uses: actions/checkout@v7

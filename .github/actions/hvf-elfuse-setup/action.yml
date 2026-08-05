@@ -43,7 +43,8 @@ runs:
         cache: true
 
     # Reuse the arm64 elfuse binary built + entitlement-checked by build-macos
-    # instead of rebuilding the C project on the self-hosted runner five times.
+    # instead of rebuilding the C project on the self-hosted runner once per
+    # workload leg.
     # Mach-O code signatures (and their embedded HVF entitlement) travel inside
     # the binary, so they survive the artifact zip round-trip; only the execute
     # bit is lost and restored here.

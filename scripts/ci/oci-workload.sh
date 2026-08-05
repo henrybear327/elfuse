@@ -4,14 +4,14 @@
 # One key per image. `run` pulls on demand, so a warm persistent
 # ELFUSE_OCI_STORE keeps reruns network-free.
 #
-# Usage: ELFUSE_OCI_STORE=<store> scripts/ci/oci-workload.sh <python|node|go|jvm|c>
+# Usage: ELFUSE_OCI_STORE=<store> scripts/ci/oci-workload.sh <python|node|go|jvm|c|redis>
 # shellcheck source=scripts/ci/oci-lib.sh
 . "$(dirname "$0")/oci-lib.sh"
 require_bin
 : "${ELFUSE_OCI_STORE:?set ELFUSE_OCI_STORE to the store directory to use}"
 export ELFUSE_OCI_STORE
 
-key="${1:?usage: oci-workload.sh <python|node|go|jvm|c>}"
+key="${1:?usage: oci-workload.sh <python|node|go|jvm|c|redis>}"
 WL="$OCI_CI_DIR/workloads"
 
 # assert_sentinel SENTINEL DESC OUTPUT: OUTPUT must contain the fixed SENTINEL.
@@ -32,14 +32,21 @@ run_capture() {
     assert_sentinel "$sentinel" "$desc" "$out"
 }
 
-# Background guest bookkeeping for the node server phase; reap_guest (in
-# oci-lib.sh) keeps a failed assertion from leaking the guest.
+# Background guest bookkeeping for the node and redis server phases;
+# reap_guest (in oci-lib.sh) keeps a failed assertion from leaking the guest.
 guest=""
-node_outfile=""
+srv_outfile=""
 on_exit() {
     rc=$?
     reap_guest
-    [ -n "$node_outfile" ] && rm -f "$node_outfile"
+    # On failure the server's own log often holds the only evidence (a fork
+    # error during BGSAVE never reaches the driver guest); a duplicate dump
+    # on the paths that already cat it beats a missing one.
+    if [ "$rc" -ne 0 ] && [ -s "$srv_outfile" ]; then
+        echo "--- server guest output ---" >&2
+        cat "$srv_outfile" >&2
+    fi
+    [ -n "$srv_outfile" ] && rm -f "$srv_outfile"
     exit "$rc"
 }
 trap on_exit EXIT
@@ -66,9 +73,9 @@ run_node() {
     case "$reqs" in
     '' | *[!0-9]* | 0) fail "WL_NODE_REQUESTS must be a positive integer, got '$reqs'" ;;
     esac
-    node_outfile="$(mktemp)"
+    srv_outfile="$(mktemp)"
     "$BIN" run --entrypoint /usr/local/bin/node node:22-alpine \
-        -e "$(cat "$WL/node-server.js")" >"$node_outfile" 2>&1 &
+        -e "$(cat "$WL/node-server.js")" >"$srv_outfile" 2>&1 &
     guest=$!
 
     # Wait for the server to announce its ephemeral port. Poll rather than
@@ -76,10 +83,10 @@ run_node() {
     # its own captured output instead of an opaque timeout.
     local waited=0 port=""
     while [ "$waited" -lt 120 ]; do
-        port="$(awk -F= '/^PORT=/{print $2; exit}' "$node_outfile")"
+        port="$(awk -F= '/^PORT=/{print $2; exit}' "$srv_outfile")"
         [ -n "$port" ] && break
         if ! kill -0 "$guest" 2>/dev/null; then
-            cat "$node_outfile" >&2
+            cat "$srv_outfile" >&2
             guest=""
             fail "node server exited before announcing a port"
         fi
@@ -87,7 +94,7 @@ run_node() {
         waited=$((waited + 1))
     done
     if [ -z "$port" ]; then
-        cat "$node_outfile" >&2
+        cat "$srv_outfile" >&2
         fail "node server did not announce a port within 60s"
     fi
     # The PORT= line is the guest flushing stdout, not proof the socket accepts
@@ -123,6 +130,82 @@ run_node() {
     guest=""
 }
 
+run_redis() {
+    # redis-server runs foreground as the guest process and is driven from
+    # outside by a second redis-cli guest over the shared host loopback:
+    # an in-guest backgrounded daemon risks the backgrounded-fork wait
+    # livelock, and per-probe redis-cli guests would pay a boot each.
+    # --entrypoint bypasses the image's docker-entrypoint.sh, whose user
+    # switching this smoke does not need.
+    #
+    # redis cannot announce an ephemeral port (--port 0 disables TCP), so the
+    # host picks one: probe the shared loopback until a port refuses, in a
+    # range below the OS ephemeral allocator so another lane's port-0 bind
+    # cannot land on it. The probe-to-bind window stays unguarded; losing
+    # that race surfaces as the exited-early dump below.
+    local port="" try=0
+    while [ "$try" -lt 10 ]; do
+        port=$((20000 + RANDOM % 20000))
+        if ! nc -z 127.0.0.1 "$port" 2>/dev/null; then
+            break
+        fi
+        port=""
+        try=$((try + 1))
+    done
+    [ -n "$port" ] || fail "no free loopback port for redis after 10 probes"
+
+    # --save '' disables periodic snapshots so the only fork is the BGSAVE
+    # the driver issues; --dir /data names a path present in the rootfs.
+    srv_outfile="$(mktemp)"
+    "$BIN" run --entrypoint /usr/local/bin/redis-server redis:7-alpine \
+        --bind 127.0.0.1 --port "$port" --save '' --dir /data \
+        >"$srv_outfile" 2>&1 &
+    guest=$!
+
+    # Wait for the server's readiness log line. Poll rather than wait_for so
+    # a guest that dies (the ARM64 COW safety check aborting because
+    # /proc/self/smaps is not synthesized) surfaces its own captured output
+    # instead of an opaque timeout.
+    local waited=0 ready=""
+    while [ "$waited" -lt 120 ]; do
+        if grep -F "Ready to accept connections" "$srv_outfile" >/dev/null; then
+            ready=1
+            break
+        fi
+        if ! kill -0 "$guest" 2>/dev/null; then
+            cat "$srv_outfile" >&2
+            guest=""
+            fail "redis server exited before reporting readiness"
+        fi
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    if [ -z "$ready" ]; then
+        cat "$srv_outfile" >&2
+        fail "redis server not ready within 60s"
+    fi
+    # The log line is the guest flushing stdout, not proof the socket accepts
+    # connections yet; probe it before booting the driver guest.
+    wait_for 30 "redis server on 127.0.0.1:$port" nc -z 127.0.0.1 "$port"
+    printf 'redis server on 127.0.0.1:%s\n' "$port"
+
+    # One driver guest runs the whole PING/SET/GET/BGSAVE sequence. The port
+    # rides in as $1 so the script text stays fixed.
+    run_capture elfuse-oci-redis-workload-ok redis-driver \
+        --entrypoint /bin/sh redis:7-alpine \
+        -c "$(cat "$WL/redis-driver.sh")" sh "$port"
+
+    # The driver ends with SHUTDOWN NOSAVE; redis exits 0 on it. Bound the
+    # wait so a lost shutdown fails here and the EXIT trap reaps the guest
+    # instead of idling to the job's timeout-minutes.
+    wait_for 10 "redis server exit after SHUTDOWN" guest_gone
+    if ! wait "$guest"; then
+        guest=""
+        fail "redis server exited non-zero after SHUTDOWN"
+    fi
+    guest=""
+}
+
 case "$key" in
     python)
         run_capture elfuse-oci-python-workload-ok python \
@@ -130,6 +213,7 @@ case "$key" in
             -c "$(cat "$WL/python-workload.py")"
         ;;
     node) run_node ;;
+    redis) run_redis ;;
     go)
         run_capture elfuse-oci-go-workload-ok go \
             golang:1.23-alpine /bin/sh -c "$(cat "$WL/go-workload.sh")"
@@ -142,7 +226,7 @@ case "$key" in
         run_capture elfuse-oci-c-workload-ok c \
             gcc:14 /bin/sh -c "$(cat "$WL/c-workload.sh")"
         ;;
-    *) fail "unknown workload key: $key (want python|node|go|jvm|c)" ;;
+    *) fail "unknown workload key: $key (want python|node|go|jvm|c|redis)" ;;
 esac
 
 # Keep a persistent store bounded: a moved pin strands the old digest's

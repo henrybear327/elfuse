@@ -851,10 +851,7 @@ drops out of the resolution entirely, which is the point.
 A climbed path is the one case where the recheck's answer is the resolution
 itself rather than a discarded verdict, so it also honors the caller's create
 intent: missing sysroot parents are materialized exactly as they would be for
-the absolute spelling. The case-index sidecar declines a climbing relative
-create for the same reason (`sidecar_walk_parent_at()` in
-`src/syscall/sidecar.c`): its own walk from the descriptor has no clamp, and
-the clamped absolute spelling already bypasses sidecar lookup.
+the absolute spelling.
 
 ### Why The No-Symlinks Precheck Has No Component Budget
 

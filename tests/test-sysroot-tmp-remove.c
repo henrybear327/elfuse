@@ -32,7 +32,7 @@
  * The harness then checks placement from the host side: the staging directory
  * still holds exactly those three entries, and the sysroot gained the
  * redirected directory. It asserts at directory granularity because a
- * case-insensitive sysroot stores leaves under sidecar-mangled names, so the
+ * case-insensitive sysroot may store a leaf under its escaped spelling, so the
  * guest side proves the file itself by reading its bytes back.
  *
  * The invariants are one-directional on purpose: a path the guest cannot see at

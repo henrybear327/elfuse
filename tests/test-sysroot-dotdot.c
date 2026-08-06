@@ -157,11 +157,10 @@ static void section_relative(void)
     close(root);
 }
 
-/* An interior '..' must reach the host verbatim, so the component it pops is
- * still resolved and type-checked. Only the shapes the sidecar leaves alone
- * can be asserted here: on a case-folding sysroot it collapses every absolute
- * path before the resolvers' spelling is used, and it owns these answers until
- * it is removed.
+/* An interior '..' must reach the host verbatim: the resolvers clamp '..'
+ * only at the guest root and spell interior ones through untouched, leaving
+ * the pop to the kernel's own resolution. What is asserted here is that the
+ * pop arrives, not how the kernel type-checks the component it pops.
  */
 static void section_interior(void)
 {

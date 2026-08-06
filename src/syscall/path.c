@@ -198,6 +198,28 @@ static int path_check_relative_sysroot_containment(guest_fd_t dirfd,
                                                    char *host_out,
                                                    size_t host_outsz);
 
+/* Pick the sysroot resolver for @flags, for both the typed-path ladder and
+ * the reconstructed-path recheck, so the two cannot drift. CREATE outranks
+ * NOFOLLOW because a create anchors an absent leaf in the sysroot where the
+ * lookup resolvers fall through to the host: testing NOFOLLOW first sends a
+ * renameat destination through the lookup fallback, and an in-sysroot target
+ * below an escaped directory then reads as outside. Nofollow is not lost,
+ * the create resolver never following a final link either.
+ */
+static const char *resolve_sysroot_by_flags(const char *path,
+                                            unsigned int flags,
+                                            bool create_parents,
+                                            char *buf,
+                                            size_t bufsz)
+{
+    if (flags & PATH_TR_CREATE)
+        return proc_resolve_sysroot_create_path(path, buf, bufsz,
+                                                create_parents);
+    if (flags & PATH_TR_NOFOLLOW)
+        return proc_resolve_sysroot_nofollow_path(path, buf, bufsz);
+    return proc_resolve_sysroot_path(path, buf, bufsz);
+}
+
 int path_translate_at(guest_fd_t dirfd,
                       const char *path,
                       unsigned int flags,
@@ -268,17 +290,10 @@ int path_translate_at(guest_fd_t dirfd,
         lookup_flags &= ~PATH_TR_NOFOLLOW;
 
     errno = 0;
-    if (lookup_flags & PATH_TR_CREATE) {
-        tx->host_path = path_resolve_sysroot_create_path(
-            tx->guest_path, tx->host_buf, sizeof(tx->host_buf),
-            (lookup_flags & PATH_TR_CREATE_PARENTS) != 0);
-    } else if (lookup_flags & PATH_TR_NOFOLLOW) {
-        tx->host_path = path_resolve_sysroot_nofollow_path(
-            tx->guest_path, tx->host_buf, sizeof(tx->host_buf));
-    } else {
-        tx->host_path = path_resolve_sysroot_path(tx->guest_path, tx->host_buf,
-                                                  sizeof(tx->host_buf));
-    }
+    tx->host_path =
+        resolve_sysroot_by_flags(tx->guest_path, lookup_flags,
+                                 (lookup_flags & PATH_TR_CREATE_PARENTS) != 0,
+                                 tx->host_buf, sizeof(tx->host_buf));
 
     /* The resolvers above key off guest_path[0] == '/': a relative path is
      * handed back untouched because they have no dirfd context to rebuild a
@@ -507,26 +522,6 @@ static size_t path_lexical_depth(const char *path)
  */
 static int dirfd_guest_base_path(guest_fd_t dirfd, char *out, size_t outsz);
 
-const char *path_resolve_sysroot_path(const char *path, char *buf, size_t bufsz)
-{
-    return proc_resolve_sysroot_path(path, buf, bufsz);
-}
-
-const char *path_resolve_sysroot_nofollow_path(const char *path,
-                                               char *buf,
-                                               size_t bufsz)
-{
-    return proc_resolve_sysroot_nofollow_path(path, buf, bufsz);
-}
-
-const char *path_resolve_sysroot_create_path(const char *path,
-                                             char *buf,
-                                             size_t bufsz,
-                                             bool create_parents)
-{
-    return proc_resolve_sysroot_create_path(path, buf, bufsz, create_parents);
-}
-
 int sys_path_has_symlink(guest_fd_t dirfd, const char *path)
 {
     if (!path || path[0] == '\0')
@@ -563,7 +558,7 @@ int sys_path_has_symlink(guest_fd_t dirfd, const char *path)
                 }
             }
         }
-        const char *host_path = path_resolve_sysroot_nofollow_path(
+        const char *host_path = proc_resolve_sysroot_nofollow_path(
             path, sysroot_buf, sizeof(sysroot_buf));
         if (!host_path) {
             errno = ENAMETOOLONG;
@@ -1430,33 +1425,14 @@ static int path_check_relative_sysroot_containment(guest_fd_t dirfd,
     bool climbed = path_openat2_stays_beneath(abs_path, false) == 0;
 
     char host_buf[LINUX_PATH_MAX];
-    const char *checked;
-
-    /* CREATE outranks NOFOLLOW, exactly as in path_translate_at's absolute
-     * ladder: a create decides where an absent leaf goes, which the create
-     * resolver anchors in the sysroot, while the lookup resolvers fall through
-     * to the host for an absent path. Testing NOFOLLOW first sends a renameat
-     * destination (translated with both flags) through the lookup fallback, so
-     * an in-sysroot target below an escaped directory reads as outside and the
-     * caller skips the escape walk entirely. Nofollow semantics are not lost:
-     * the create resolver never follows a final link either.
+    /* A pure containment probe must not mkdir() anything: its result is
+     * discarded. A climbed resolution is the path the caller actually opens,
+     * so it owes the caller's create-parents semantics, or the create fails
+     * ENOENT where the absolute spelling succeeds.
      */
-    if (flags & PATH_TR_CREATE) {
-        /* A pure containment probe must not mkdir() anything: its result is
-         * discarded. A climbed resolution is the path the caller actually
-         * opens, so it owes the caller's create-parents semantics, or the
-         * create fails ENOENT where the absolute spelling succeeds.
-         */
-        bool create_parents = climbed && (flags & PATH_TR_CREATE_PARENTS) != 0;
-        checked = path_resolve_sysroot_create_path(
-            abs_path, host_buf, sizeof(host_buf), create_parents);
-    } else if (flags & PATH_TR_NOFOLLOW) {
-        checked = path_resolve_sysroot_nofollow_path(abs_path, host_buf,
-                                                     sizeof(host_buf));
-    } else {
-        checked =
-            path_resolve_sysroot_path(abs_path, host_buf, sizeof(host_buf));
-    }
+    const char *checked = resolve_sysroot_by_flags(
+        abs_path, flags, climbed && (flags & PATH_TR_CREATE_PARENTS) != 0,
+        host_buf, sizeof(host_buf));
 
     char fallback_buf[LINUX_PATH_MAX];
     if (!checked && errno == ELOOP && !(flags & PATH_TR_CREATE) &&

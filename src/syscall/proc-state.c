@@ -1028,6 +1028,24 @@ static casefold_verdict_t resolve_byte_exact_through_links(
     }
 }
 
+/* Decide whether an absent path is one the sysroot owns anyway: the guest
+ * system directories and the sysroot-backed temp roots resolve there whether
+ * or not anything exists yet. @checked hands back the spelling classified,
+ * lexically normalized or @lookup itself if that failed, which the caller's
+ * follow-up probes must reuse.
+ */
+static bool sysroot_claims_absent_path(const char *lookup,
+                                       char *norm,
+                                       size_t normsz,
+                                       const char **checked)
+{
+    bool has_norm = lexical_normalize_absolute_path(norm, lookup, normsz);
+
+    *checked = has_norm ? norm : lookup;
+    return is_guest_system_path(*checked) ||
+           is_sysroot_backed_temp_path(*checked);
+}
+
 static const char *proc_resolve_sysroot_path_flags(const char *path,
                                                    char *buf,
                                                    size_t bufsz,
@@ -1178,11 +1196,9 @@ static const char *proc_resolve_sysroot_path_flags(const char *path,
      * which is what it is in the guest's namespace.
      */
     char norm_path[LINUX_PATH_MAX];
-    bool has_norm =
-        lexical_normalize_absolute_path(norm_path, lookup, sizeof(norm_path));
-    const char *path_to_check = has_norm ? norm_path : lookup;
-    if (is_guest_system_path(path_to_check) ||
-        is_sysroot_backed_temp_path(path_to_check))
+    const char *path_to_check;
+    if (sysroot_claims_absent_path(lookup, norm_path, sizeof(norm_path),
+                                   &path_to_check))
         return buf;
 
     /* A path reached by following a symlink has already been rebased to the
@@ -1344,12 +1360,14 @@ const char *proc_resolve_sysroot_create_path(const char *path,
      * the host literal.
      */
     char norm_path[LINUX_PATH_MAX];
-    bool has_norm =
-        lexical_normalize_absolute_path(norm_path, lookup, sizeof(norm_path));
-    const char *path_to_check = has_norm ? norm_path : lookup;
+    const char *path_to_check;
 
-    if (!is_sysroot_backed_temp_path(path_to_check) &&
-        !is_guest_system_path(path_to_check)) {
+    if (!sysroot_claims_absent_path(lookup, norm_path, sizeof(norm_path),
+                                    &path_to_check)) {
+        /* As in the lookup resolver: a path reached by following a link may not
+         * fall through to the host, and after a link the guest path lives in a
+         * local buffer, so the input pointer is no longer the input.
+         */
         if (followed_link) {
             errno = ELOOP;
             return NULL;

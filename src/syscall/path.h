@@ -202,17 +202,6 @@ int resolve_proc_dirfd_path(guest_fd_t dirfd,
                             size_t outsz);
 int sys_path_has_symlink(guest_fd_t dirfd, const char *path);
 
-const char *path_resolve_sysroot_path(const char *path,
-                                      char *buf,
-                                      size_t bufsz);
-const char *path_resolve_sysroot_nofollow_path(const char *path,
-                                               char *buf,
-                                               size_t bufsz);
-const char *path_resolve_sysroot_create_path(const char *path,
-                                             char *buf,
-                                             size_t bufsz,
-                                             bool create_parents);
-
 int path_openat2_stays_beneath(const char *path, bool clamp_at_root);
 int path_openat2_normalize_in_root(const char *path, char *out, size_t outsz);
 bool path_openat2_is_fd_magiclink_anchor(guest_fd_t dirfd, const char *path);

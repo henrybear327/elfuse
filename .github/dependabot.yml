@@ -1,0 +1,29 @@
+# Keep the GitHub Actions used by the CI workflows current.
+#
+# Refs in .github/workflows are floating major tags, which already absorb minor
+# and patch releases, so this proposes major bumps only.
+#
+# The updates are grouped into a single pull request because the runtime and
+# sanitizer legs share one self-hosted Apple Silicon runner, and each separate
+# pull request would occupy it for a full matrix cycle.
+#
+# The default commit subject ("Bump actions/cache from 5 to 6") is already
+# imperative and free of a semantic prefix, so it is left unconfigured.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    # Pinned rather than left to the 05:00 UTC default so the run lands at the
+    # quiet start of the week for the self-hosted runner.
+    schedule:
+      interval: weekly
+      day: monday
+      time: "00:00"
+      timezone: Etc/UTC
+    groups:
+      actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 2

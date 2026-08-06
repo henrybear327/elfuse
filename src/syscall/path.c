@@ -346,16 +346,14 @@ int path_translate_at(guest_fd_t dirfd,
         bool follow_final =
             !(lookup_flags & (PATH_TR_NOFOLLOW | PATH_TR_CREATE));
         host_fd_ref_t ref;
-        casefold_walk_t walk;
         casefold_verdict_t verdict;
 
         if (host_dirfd_ref_open(dirfd, &ref) < 0) {
             errno = EBADF;
             return -1;
         }
-        verdict =
-            casefold_resolve_at(ref.fd, "", tx->guest_path, follow_final,
-                                tx->host_buf, sizeof(tx->host_buf), &walk);
+        verdict = casefold_resolve_at(ref.fd, "", tx->guest_path, follow_final,
+                                      tx->host_buf, sizeof(tx->host_buf), NULL);
         host_fd_ref_close(&ref);
         if (verdict == CASEFOLD_ERROR)
             return -1;
@@ -560,10 +558,9 @@ int sys_path_has_symlink(guest_fd_t dirfd, const char *path)
             char sr[LINUX_PATH_MAX];
 
             if (proc_sysroot_snapshot(sr, sizeof(sr))) {
-                casefold_walk_t walk;
                 casefold_verdict_t verdict =
                     casefold_resolve_at(AT_FDCWD, sr, path, false, sysroot_buf,
-                                        sizeof(sysroot_buf), &walk);
+                                        sizeof(sysroot_buf), NULL);
 
                 if (verdict == CASEFOLD_ERROR)
                     return -1;
@@ -649,10 +646,9 @@ int sys_path_has_symlink(guest_fd_t dirfd, const char *path)
          * through its !climbed_root gate.
          */
         if (in_sysroot && recheck == 0) {
-            casefold_walk_t walk;
             casefold_verdict_t verdict =
                 casefold_resolve_at(current_fd, "", path, false, sysroot_buf,
-                                    sizeof(sysroot_buf), &walk);
+                                    sizeof(sysroot_buf), NULL);
 
             if (verdict == CASEFOLD_ERROR) {
                 rc = -1;

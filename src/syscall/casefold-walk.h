@@ -113,6 +113,8 @@ typedef struct {
  *
  * @follow_final rechecks the resolved object through symlinks, so a dangling
  * link reports absent, matching what an access(2) existence probe would say.
+ *
+ * @walk may be NULL when the caller needs only the verdict and @out.
  */
 casefold_verdict_t casefold_resolve_at(host_fd_t base_fd,
                                        const char *base_host_prefix,

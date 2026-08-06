@@ -183,8 +183,7 @@ static probe_result_t probe_exact(host_fd_t base_fd,
         char name[CASEFOLD_STORED_NAME_MAX];
     } __attribute__((aligned(4), packed)) attr_buf;
 
-    if (is_link)
-        *is_link = false;
+    *is_link = false;
 
     if (getattrlistat(base_fd, path, &al, &attr_buf, sizeof(attr_buf),
                       FSOPT_NOFOLLOW) == 0) {
@@ -208,7 +207,7 @@ static probe_result_t probe_exact(host_fd_t base_fd,
             size_t obj_end = (size_t) ((const char *) &attr_buf.obj_type -
                                        (const char *) &attr_buf) +
                              sizeof(attr_buf.obj_type);
-            if (is_link && (attr_buf.returned.commonattr & ATTR_CMN_OBJTYPE) &&
+            if ((attr_buf.returned.commonattr & ATTR_CMN_OBJTYPE) &&
                 obj_end <= usable)
                 *is_link = attr_buf.obj_type == VLNK;
             if (!strcmp(stored, leaf))
@@ -323,9 +322,9 @@ static int name_by_rule(const char *guest, char *out, size_t outsz)
     return casefold_escape(guest, out, outsz);
 }
 
-/* Spell one component, given the parent already spelled in @out. Reports
- * through @present whether the entry is there, and writes the host spelling
- * into @host.
+/* Spell one component, given the parent already spelled in @out. The entry is
+ * there exactly when the verdict is PROBE_EXACT; the host spelling goes to
+ * @host either way.
  */
 static probe_result_t resolve_component(host_fd_t base_fd,
                                         const char *out,
@@ -333,14 +332,11 @@ static probe_result_t resolve_component(host_fd_t base_fd,
                                         const char *guest,
                                         char *host,
                                         size_t hostsz,
-                                        bool *present,
                                         bool *is_link)
 {
     char probe_path[LINUX_PATH_MAX];
     size_t probe_len = len;
     probe_result_t verdict;
-
-    *present = false;
 
     /* An escape-shaped guest name is stored escaped unconditionally, so it can
      * never be mistaken for the encoding of a different name. Probing its
@@ -364,7 +360,6 @@ static probe_result_t resolve_component(host_fd_t base_fd,
                 errno = ENAMETOOLONG;
                 return PROBE_ERROR;
             }
-            *present = true;
             return PROBE_EXACT;
         }
     } else {
@@ -380,15 +375,16 @@ static probe_result_t resolve_component(host_fd_t base_fd,
      * differently-spelled sibling in the slot, a name the volume refuses, or
      * simply nothing there), the escape is the only other place the name can
      * live, so ask whether it does.
+     *
+     * The escape cannot fail here: path_component_copy delivered a non-empty,
+     * slash-free name of at most CASEFOLD_GUEST_NAME_MAX bytes, "." and ".."
+     * never reach a probe, and @host is sized by CASEFOLD_HOST_NAME_MAX,
+     * which casefold.h statically proves large enough for any legal guest
+     * name. A failure means a broken precondition, so fail closed rather than
+     * guess a spelling.
      */
-    if (casefold_escape(guest, host, hostsz) < 0) {
-        if (errno != ENAMETOOLONG && errno != EINVAL)
-            return PROBE_ERROR;
-        /* Cannot be escaped, so the literal spelling is the only candidate and
-         * the probe already answered for it.
-         */
-        return name_by_rule(guest, host, hostsz) < 0 ? PROBE_ERROR : verdict;
-    }
+    if (casefold_escape(guest, host, hostsz) < 0)
+        return PROBE_ERROR;
 
     probe_len = len;
     if (str_copy_trunc(probe_path, out, sizeof(probe_path)) >=
@@ -401,7 +397,6 @@ static probe_result_t resolve_component(host_fd_t base_fd,
 
     switch (probe_exact(base_fd, probe_path, host, is_link)) {
     case PROBE_EXACT:
-        *present = true;
         return PROBE_EXACT;
     case PROBE_ERROR:
         return PROBE_ERROR;
@@ -443,7 +438,10 @@ casefold_verdict_t casefold_resolve_at(host_fd_t base_fd,
     size_t comp_len;
     size_t len;
     bool absent = false;
+    casefold_walk_t local;
 
+    if (!walk)
+        walk = &local;
     walk->parent_found = true;
     walk->parent_offset = 0;
     walk->link_rest_offset = 0;
@@ -461,7 +459,6 @@ casefold_verdict_t casefold_resolve_at(host_fd_t base_fd,
     while (path_next_component(&scan, &comp, &comp_len)) {
         char guest[CASEFOLD_GUEST_NAME_MAX + 1];
         char host[CASEFOLD_HOST_NAME_MAX + 1];
-        bool present = false;
 
         if (path_component_copy(guest, sizeof(guest), comp, comp_len) < 0)
             return CASEFOLD_ERROR;
@@ -487,9 +484,8 @@ casefold_verdict_t casefold_resolve_at(host_fd_t base_fd,
                 return CASEFOLD_ERROR;
         } else {
             bool is_link = false;
-            probe_result_t verdict =
-                resolve_component(base_fd, out, len, guest, host, sizeof(host),
-                                  &present, &is_link);
+            probe_result_t verdict = resolve_component(
+                base_fd, out, len, guest, host, sizeof(host), &is_link);
 
             if (verdict == PROBE_ERROR)
                 return CASEFOLD_ERROR;
@@ -505,7 +501,7 @@ casefold_verdict_t casefold_resolve_at(host_fd_t base_fd,
              * sysroot rather than at the host root. Handing them to the kernel
              * looks somewhere else entirely.
              */
-            if (present && is_link) {
+            if (verdict == PROBE_EXACT && is_link) {
                 const char *rest = scan;
 
                 while (*rest == '/')
@@ -533,7 +529,7 @@ casefold_verdict_t casefold_resolve_at(host_fd_t base_fd,
              */
             if (verdict == PROBE_NOTDIR)
                 walk->notdir = true;
-            absent = !present;
+            absent = verdict != PROBE_EXACT;
         }
 
         if (append_leaf(out, outsz, &len, host, walk) < 0)

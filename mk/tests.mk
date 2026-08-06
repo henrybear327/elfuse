@@ -90,147 +90,124 @@ check-tsan: clean
 # the remaining compat sections (rseq, /proc, sockets) stay on the release lane.
 SANITIZER_SECTIONS := Threading|Stress|Signal.*thread|Fork edge|CoW fork|Guard page|mremap|MAP_SHARED|madvise|futex|FD table race|Multithreaded|SysV shared|membarrier|I/O subsystem
 
+# One banner-plus-run pair, for a host unit binary run directly and for a
+# lane reached through its own make target. Canned recipes (make manual 5.8)
+# rather than 59 hand-kept printf/invoke pairs, so a lane list edit cannot
+# leave a banner naming the wrong lane. Banner text arrives through $(call),
+# so a comma in it silently splits into $(3) and truncates the banner.
+define run-host-unit
+@printf "\n$(BLUE)━━━ $(2) ━━━$(RESET)\n"
+@$(BUILD_DIR)/$(1)
+endef
+
+# The lane is a single '+'-marked recipe line. The '+' is needed because make
+# decides what still runs under -n by looking for a literal $(MAKE) in the
+# unexpanded recipe line, which a canned recipe hides (make manual 9.3);
+# without it, "make -n check" prints the sub-make instead of expanding the
+# lane it would run. One line rather than a banner-then-invoke pair because
+# once a '+' line appears in an expansion, every later line of that same
+# expansion also runs for real under -n, so split banners would behave
+# unlike each other, and a non-lane line appended after a run-lane call
+# would execute during a dry build.
+define run-lane
++@printf "\n$(BLUE)━━━ $(2) ━━━$(RESET)\n"; \
+$(MAKE) --no-print-directory $(1)
+endef
+
+# Open a lane recipe with a scratch directory in $$tmpdir, removed however
+# the recipe exits. Recipes that clean up more than the scratch directory
+# replace the trap once the extra paths are named.
+define SYSROOT_SCRATCH
+set -e; \
+tmpdir=$$(mktemp -d); \
+trap 'rm -rf "$$tmpdir"' EXIT
+endef
+
+# Count the absock namespace dirs before the lane runs, then require the
+# count not to have grown: the exit sweeps must leave nothing behind, and a
+# grown count is a leaked /tmp/elfuse-absock-<nsid> no later process owns.
+define ABSOCK_LEAK_BEFORE
+before=$$(ls -d /tmp/elfuse-absock-* 2>/dev/null | wc -l | tr -d ' ')
+endef
+
+define ASSERT_NO_ABSOCK_LEAK
+after=$$(ls -d /tmp/elfuse-absock-* 2>/dev/null | wc -l | tr -d ' '); \
+if [ "$$after" -gt "$$before" ]; then \
+	printf "$(RED)FAIL$(RESET) absock namespace dir leaked ($$before -> $$after)\n"; \
+	exit 1; \
+fi
+endef
+
+# The host unit binaries both suites run directly, as prerequisites.
+CHECK_HOST_UNIT_BINS := $(addprefix $(BUILD_DIR)/, \
+        test-tlbi-encoder-host test-fork-ipc-protocol-host \
+        test-vcpu-run-hooks-host test-identity-override-host \
+        test-teardown-live-vcpu-host test-casefold-host \
+        test-casefold-walk-host test-absock-names-host)
+
+# Lanes shared by check and check-sanitizer, in execution order: the host
+# unit binaries, then the name-contract lanes cheap enough for a sanitizer
+# build. check-sanitizer's coverage is exactly this prefix, kept as one
+# explicit sequence rather than "whatever check happens to run".
+define CHECK_SHARED_LANES
+$(call run-host-unit,test-tlbi-encoder-host,TLBI RVAE1IS encoder unit test)
+$(call run-host-unit,test-fork-ipc-protocol-host,fork IPC protocol identity unit test)
+$(call run-host-unit,test-vcpu-run-hooks-host,vCPU run-loop hook API unit test)
+$(call run-host-unit,test-identity-override-host,identity override unit test)
+$(call run-host-unit,test-teardown-live-vcpu-host,teardown live-worker accounting unit test)
+$(call run-host-unit,test-casefold-host,filename codec unit test)
+$(call run-host-unit,test-casefold-walk-host,case-exact path resolution unit test)
+$(call run-host-unit,test-absock-names-host,absock derived-name unit test)
+$(call run-lane,test-sysroot-name-unique,one on-disk name per guest name)
+$(call run-lane,test-sysroot-name-relative,relative and dirfd-relative names)
+$(call run-lane,test-sysroot-name-i18n,non-ASCII guest filenames)
+$(call run-lane,test-sysroot-name-length,guest filenames at full length)
+$(call run-lane,test-sysroot-name-staged,host-staged escape-shaped names)
+endef
+
 ## Run the representative internal-implementation subset (for sanitizer builds)
-check-sanitizer: $(ELFUSE_BIN) $(TEST_DEPS) \
-		$(BUILD_DIR)/test-tlbi-encoder-host \
-		$(BUILD_DIR)/test-fork-ipc-protocol-host \
-		$(BUILD_DIR)/test-vcpu-run-hooks-host \
-		$(BUILD_DIR)/test-identity-override-host \
-		$(BUILD_DIR)/test-teardown-live-vcpu-host \
-		$(BUILD_DIR)/test-casefold-host \
-		$(BUILD_DIR)/test-casefold-walk-host \
-		$(BUILD_DIR)/test-absock-names-host
+check-sanitizer: $(ELFUSE_BIN) $(TEST_DEPS) $(CHECK_HOST_UNIT_BINS)
 	@bash tests/driver.sh -e $(ELFUSE_BIN) -d $(TEST_DIR) -v -s '$(SANITIZER_SECTIONS)'
-	@printf "\n$(BLUE)━━━ TLBI RVAE1IS encoder unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-tlbi-encoder-host
-	@printf "\n$(BLUE)━━━ fork IPC protocol identity unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-fork-ipc-protocol-host
-	@printf "\n$(BLUE)━━━ vCPU run-loop hook API unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-vcpu-run-hooks-host
-	@printf "\n$(BLUE)━━━ identity override unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-identity-override-host
-	@printf "\n$(BLUE)━━━ teardown live-worker accounting unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-teardown-live-vcpu-host
-	@printf "\n$(BLUE)━━━ filename codec unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-casefold-host
-	@printf "\n$(BLUE)━━━ case-exact path resolution unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-casefold-walk-host
-	@printf "\n$(BLUE)━━━ absock derived-name unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-absock-names-host
-	@printf "\n$(BLUE)━━━ one on-disk name per guest name ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-unique
-	@printf "\n$(BLUE)━━━ relative and dirfd-relative names ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-relative
-	@printf "\n$(BLUE)━━━ non-ASCII guest filenames ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-i18n
-	@printf "\n$(BLUE)━━━ guest filenames at full length ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-length
-	@printf "\n$(BLUE)━━━ host-staged escape-shaped names ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-staged
+	$(CHECK_SHARED_LANES)
 
 ## Run the unit test suite plus busybox applet validation
 check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage \
-		$(BUILD_DIR)/test-tlbi-encoder-host \
-		$(BUILD_DIR)/test-fork-ipc-protocol-host \
-		$(BUILD_DIR)/test-vcpu-run-hooks-host \
-		$(BUILD_DIR)/test-identity-override-host \
-		$(BUILD_DIR)/test-teardown-live-vcpu-host \
-		$(BUILD_DIR)/test-casefold-host \
-		$(BUILD_DIR)/test-casefold-walk-host \
-		$(BUILD_DIR)/test-absock-names-host
+		$(CHECK_HOST_UNIT_BINS)
 	@bash tests/driver.sh -e $(ELFUSE_BIN) -d $(TEST_DIR) -v
-	@printf "\n$(BLUE)━━━ TLBI RVAE1IS encoder unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-tlbi-encoder-host
-	@printf "\n$(BLUE)━━━ fork IPC protocol identity unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-fork-ipc-protocol-host
-	@printf "\n$(BLUE)━━━ vCPU run-loop hook API unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-vcpu-run-hooks-host
-	@printf "\n$(BLUE)━━━ identity override unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-identity-override-host
-	@printf "\n$(BLUE)━━━ teardown live-worker accounting unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-teardown-live-vcpu-host
-	@printf "\n$(BLUE)━━━ filename codec unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-casefold-host
-	@printf "\n$(BLUE)━━━ case-exact path resolution unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-casefold-walk-host
-	@printf "\n$(BLUE)━━━ absock derived-name unit test ━━━$(RESET)\n"
-	@$(BUILD_DIR)/test-absock-names-host
-	@printf "\n$(BLUE)━━━ one on-disk name per guest name ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-unique
-	@printf "\n$(BLUE)━━━ relative and dirfd-relative names ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-relative
-	@printf "\n$(BLUE)━━━ non-ASCII guest filenames ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-i18n
-	@printf "\n$(BLUE)━━━ guest filenames at full length ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-length
-	@printf "\n$(BLUE)━━━ host-staged escape-shaped names ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-staged
-	@printf "\n$(BLUE)━━━ concurrent creation of colliding names ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-name-race
-	@printf "\n$(BLUE)━━━ guest paths at the host path ceiling ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-pathmax
-	@printf "\n$(BLUE)━━━ frozen on-disk spelling corpus ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-corpus
-	@printf "\n$(BLUE)━━━ addressing modes agree across the path matrix ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-path-matrix
-	@printf "\n$(BLUE)━━━ shebang parser unit test ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-shebang-host
-	@printf "\n$(BLUE)━━━ gva-math.h call-site contract checks ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-gva-contracts
-	@printf "\n$(BLUE)━━━ proctitle argv-tail regression ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-proctitle-host
-	@printf "\n$(BLUE)━━━ proctitle low-stack regression ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-proctitle-low-stack
-	@printf "\n$(BLUE)━━━ busybox applet validation ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-busybox
-	@printf "\n$(BLUE)━━━ sysroot procfs exec validation ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-procfs-exec
-	@printf "\n$(BLUE)━━━ getdents64 overlong-UTF-8 dirent skip ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-getdents64-overlong
-	@printf "\n$(BLUE)━━━ sysroot host-fallback validation ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-host-fallback
-	@printf "\n$(BLUE)━━━ sysroot /tmp remove/rename consistency ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-tmp-remove
-	@printf "\n$(BLUE)━━━ sysroot byte-exact lookup validation ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-case-exact
-	@printf "\n$(BLUE)━━━ sysroot relative-dirfd symlink escape validation ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-symlink-escape
-	@printf "\n$(BLUE)━━━ no-symlinks path walking ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-openat2-walk
-	@printf "\n$(BLUE)━━━ sysroot '..' resolution ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-dotdot
-	@printf "\n$(BLUE)━━━ escaped symlink-target resolution ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-symlink-target
-	@printf "\n$(BLUE)━━━ inotify names across the escape boundary ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-inotify-names
-	@printf "\n$(BLUE)━━━ exec identity across the escape boundary ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-exec-names
-	@printf "\n$(BLUE)━━━ PT_INTERP /lib fallback ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-interp-fallback
-	@printf "\n$(BLUE)━━━ PT_INTERP through an escaped path ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-interp-cased
-	@printf "\n$(BLUE)━━━ pathname sockets across the escape boundary ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-absock-names
-	@printf "\n$(BLUE)━━━ absock namespace lifecycle ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-absock-cleanup
-	@printf "\n$(BLUE)━━━ sysroot mounted at / ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-root
-	@printf "\n$(BLUE)━━━ literal names without a sysroot ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-nosysroot-literal-names
-	@printf "\n$(BLUE)━━━ literal names outside the sysroot ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-outside-names
-	@printf "\n$(BLUE)━━━ guest-visible working directory ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-sysroot-chdir
-	@printf "\n$(BLUE)━━━ case collisions on a folding sysroot ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-case-collision-fallback
-	@printf "\n$(BLUE)━━━ Alpine sysroot FUSE validation ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-fuse-alpine
-	@printf "\n$(BLUE)━━━ timeout=0 validation ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-timeout-disable
-	@printf "\n$(BLUE)━━━ rosetta CLI gating ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-rosetta-cli
-	@printf "\n$(BLUE)━━━ hot-syscall guardrail ━━━$(RESET)\n"
-	@$(MAKE) --no-print-directory test-bench-guardrail
+	$(CHECK_SHARED_LANES)
+	$(call run-lane,test-sysroot-name-race,concurrent creation of colliding names)
+	$(call run-lane,test-sysroot-pathmax,guest paths at the host path ceiling)
+	$(call run-lane,test-sysroot-corpus,frozen on-disk spelling corpus)
+	$(call run-lane,test-sysroot-path-matrix,addressing modes agree across the path matrix)
+	$(call run-lane,test-shebang-host,shebang parser unit test)
+	$(call run-lane,test-gva-contracts,gva-math.h call-site contract checks)
+	$(call run-lane,test-proctitle-host,proctitle argv-tail regression)
+	$(call run-lane,test-proctitle-low-stack,proctitle low-stack regression)
+	$(call run-lane,test-busybox,busybox applet validation)
+	$(call run-lane,test-sysroot-procfs-exec,sysroot procfs exec validation)
+	$(call run-lane,test-getdents64-overlong,getdents64 overlong-UTF-8 dirent skip)
+	$(call run-lane,test-sysroot-host-fallback,sysroot host-fallback validation)
+	$(call run-lane,test-sysroot-tmp-remove,sysroot /tmp remove/rename consistency)
+	$(call run-lane,test-sysroot-case-exact,sysroot byte-exact lookup validation)
+	$(call run-lane,test-sysroot-symlink-escape,sysroot relative-dirfd symlink escape validation)
+	$(call run-lane,test-sysroot-openat2-walk,no-symlinks path walking)
+	$(call run-lane,test-sysroot-dotdot,sysroot '..' resolution)
+	$(call run-lane,test-sysroot-symlink-target,escaped symlink-target resolution)
+	$(call run-lane,test-sysroot-inotify-names,inotify names across the escape boundary)
+	$(call run-lane,test-sysroot-exec-names,exec identity across the escape boundary)
+	$(call run-lane,test-sysroot-interp-fallback,PT_INTERP /lib fallback)
+	$(call run-lane,test-sysroot-interp-cased,PT_INTERP through an escaped path)
+	$(call run-lane,test-sysroot-absock-names,pathname sockets across the escape boundary)
+	$(call run-lane,test-absock-cleanup,absock namespace lifecycle)
+	$(call run-lane,test-sysroot-root,sysroot mounted at /)
+	$(call run-lane,test-nosysroot-literal-names,literal names without a sysroot)
+	$(call run-lane,test-sysroot-outside-names,literal names outside the sysroot)
+	$(call run-lane,test-sysroot-chdir,guest-visible working directory)
+	$(call run-lane,test-case-collision-fallback,case collisions on a folding sysroot)
+	$(call run-lane,test-fuse-alpine,Alpine sysroot FUSE validation)
+	$(call run-lane,test-timeout-disable,timeout=0 validation)
+	$(call run-lane,test-rosetta-cli,rosetta CLI gating)
+	$(call run-lane,test-bench-guardrail,hot-syscall guardrail)
 
 ## Hot-syscall performance guardrail: ensure getpid, libc clock_gettime,
 ## and 1-byte /dev/urandom reads stay under their TODO ns/op ceilings.
@@ -395,9 +372,7 @@ test-case-collision-fallback: $(ELFUSE_BIN) $(BUILD_DIR)/test-case-collision
 ## resolver's host-literal fallback instead of vetoing it with ENOENT.
 ## Regression test for the test-matrix "musl dyn" coreutils failures.
 test-sysroot-host-fallback: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-host-fallback
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	sysroot="$$tmpdir/sysroot"; \
 	hostdir="$$tmpdir/host-data"; \
 	mkdir -p "$$sysroot" "$$hostdir"; \
@@ -454,9 +429,7 @@ test-sysroot-tmp-remove: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-tmp-remove
 ## spellings do not resolve. The normalization probes require the walk,
 ## so the guest skips them when the staging volume is case-sensitive.
 test-sysroot-case-exact: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-case-exact
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	sysroot="$$tmpdir/sysroot"; \
 	mkdir -p "$$sysroot/data/sub"; \
 	printf 'exact\n' > "$$sysroot/data/Makefile"; \
@@ -480,9 +453,7 @@ test-sysroot-case-exact: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-case-exact
 # name.
 ## Each guest name has exactly one on-disk representation
 test-sysroot-name-unique: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-unique
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" \
 	    $(BUILD_DIR)/test-sysroot-name-unique; \
 	left=$$(ls -A "$$tmpdir/name-unique" 2>/dev/null | wc -l | tr -d ' '); \
@@ -499,9 +470,7 @@ test-sysroot-name-unique: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-unique
 # it is measured against. Tree walkers reach every name this way.
 ## Relative and dirfd-relative names resolve to the same file as absolute ones
 test-sysroot-name-relative: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-relative
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	outside="$$tmpdir-outside"; \
 	mkdir -p "$$outside"; \
 	trap 'rm -rf "$$tmpdir" "$$tmpdir-outside"' EXIT; \
@@ -529,9 +498,7 @@ test-sysroot-name-relative: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-relativ
 
 ## Symlink targets are resolved in the guest namespace, not the host's
 test-sysroot-symlink-target: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-symlink-target
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	mkdir -p "$$tmpdir/host-downloads"; \
 	ln -s "$$HOME" "$$tmpdir/host-home-link"; \
 	mkdir -p "$$tmpdir/home/muplar"; \
@@ -556,10 +523,8 @@ test-sysroot-symlink-target: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-symlink-tar
 # exit.
 ## pathname AF_UNIX socket addresses resolve through the sysroot
 test-sysroot-absock-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-absock-names
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
-	before=$$(ls -d /tmp/elfuse-absock-* 2>/dev/null | wc -l | tr -d ' '); \
+	@$(SYSROOT_SCRATCH); \
+	$(ABSOCK_LEAK_BEFORE); \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" \
 	    $(BUILD_DIR)/test-sysroot-absock-names; \
 	for leaf in My.Sock Recv.Sock Sender.Sock sock Sock; do \
@@ -573,21 +538,15 @@ test-sysroot-absock-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-absock-names
 		ls -Ab "$$tmpdir/sockdir"; \
 		exit 1; \
 	fi; \
-	after=$$(ls -d /tmp/elfuse-absock-* 2>/dev/null | wc -l | tr -d ' '); \
-	if [ "$$after" -gt "$$before" ]; then \
-		printf "$(RED)FAIL$(RESET) absock namespace dir leaked ($$before -> $$after)\n"; \
-		exit 1; \
-	fi
+	$(ASSERT_NO_ABSOCK_LEAK)
 
 # The absock namespace dir is shared across a forked guest tree, so neither
 # exit order may destroy state the other side still needs; the recipe also
 # asserts the dir itself does not leak.
 ## absock namespace lifecycle across fork and exit order
 test-absock-cleanup: $(ELFUSE_BIN) $(BUILD_DIR)/test-absock-cleanup
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
-	before=$$(ls -d /tmp/elfuse-absock-* 2>/dev/null | wc -l | tr -d ' '); \
+	@$(SYSROOT_SCRATCH); \
+	$(ABSOCK_LEAK_BEFORE); \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" $(BUILD_DIR)/test-absock-cleanup; \
 	printf "  %-30s " "owner sweep spares live child"; \
 	out=$$($(ELFUSE_BIN) --sysroot "$$tmpdir" \
@@ -609,11 +568,7 @@ test-absock-cleanup: $(ELFUSE_BIN) $(BUILD_DIR)/test-absock-cleanup
 		printf "FAIL: late bind %s\n" "$${verdict:-unreported}"; \
 		exit 1; \
 	fi; \
-	after=$$(ls -d /tmp/elfuse-absock-* 2>/dev/null | wc -l | tr -d ' '); \
-	if [ "$$after" -gt "$$before" ]; then \
-		printf "$(RED)FAIL$(RESET) absock namespace dir leaked ($$before -> $$after)\n"; \
-		exit 1; \
-	fi
+	$(ASSERT_NO_ABSOCK_LEAK)
 
 # PT_INTERP names the loader by the guest's spelling, and a rootfs may ship
 # it somewhere other than where the binary asks (store-style paths). The
@@ -684,9 +639,7 @@ test-sysroot-interp-cased: $(ELFUSE_BIN) $(BUILD_DIR)/mkdir-arg \
 # so the passing exec lanes prove the resolution actually crossed it.
 ## exec paths and the reported exec identity stay in the guest namespace
 test-sysroot-exec-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-exec-names
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" \
 	    $(BUILD_DIR)/test-sysroot-exec-names; \
 	if [ -e "$$tmpdir/Apps" ] && \
@@ -724,9 +677,7 @@ test-sysroot-root: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-root
 # Same binary as test-sysroot-outside-names: one set of assertions, two
 # invocation modes, so the two halves of the scoping contract cannot drift.
 test-nosysroot-literal-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-outside-names
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	printf 'literal\n' > "$$tmpdir/.ef=464f4f"; \
 	printf 'other\n'   > "$$tmpdir/plain"; \
 	$(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-outside-names "$$tmpdir" nosysroot
@@ -752,9 +703,7 @@ test-sysroot-outside-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-outside-name
 # equal and the guest must see as two files.
 ## Non-ASCII, normalization and case-folding guest filenames
 test-sysroot-name-i18n: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-i18n
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	printf 'staged\n' > "$$tmpdir/$$(printf '\346\226\207\346\241\243')-host.txt"; \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" $(BUILD_DIR)/test-sysroot-name-i18n; \
 	if [ ! -e "$$tmpdir/$$(printf '\346\226\207\346\241\243')-host.txt" ]; then \
@@ -767,9 +716,7 @@ test-sysroot-name-i18n: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-i18n
 # stands for. Nothing below the Linux maximum may be refused.
 ## Guest filenames at their full length, both stored forms
 test-sysroot-name-length: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-length
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" $(BUILD_DIR)/test-sysroot-name-length
 
 # Component length is a guest budget; whole-path length is a host one, and the
@@ -780,9 +727,7 @@ test-sysroot-name-length: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-length
 # there.
 ## Guest paths that cross the host path ceiling report ENAMETOOLONG
 test-sysroot-pathmax: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-pathmax
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	printf 'probe\n' > "$$tmpdir/pathmax-probe"; \
 	mode=exact; \
 	if [ -e "$$tmpdir/PATHMAX-PROBE" ]; then mode=fold; fi; \
@@ -799,9 +744,7 @@ test-sysroot-pathmax: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-pathmax
 # uses a payload whose lowercase form is not also staged.
 ## Host-staged escape-shaped names in a sysroot
 test-sysroot-name-staged: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-staged
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	d="$$tmpdir/staged"; \
 	mkdir -p "$$d"; \
 	printf 'plain\n'          > "$$d/Plain.Host"; \
@@ -842,9 +785,7 @@ test-sysroot-name-staged: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-staged
 # scratch volume is a SKIP, not a pass.
 ## Read a corpus of frozen on-disk spellings staged host-side
 test-sysroot-corpus: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-corpus
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	printf 'p\n' > "$$tmpdir/CaseProbe"; \
 	if [ ! -e "$$tmpdir/caseprobe" ]; then \
 		printf "$(YELLOW)SKIP$(RESET) test-sysroot-corpus (scratch volume is case-sensitive)\n"; \
@@ -875,9 +816,7 @@ test-sysroot-corpus: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-corpus
 # of tests/test-sysroot-name-soak.c states the invariants.
 ## Soak colliding-name churn for SECS seconds (default 120)
 test-sysroot-name-soak: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-soak
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	$(ELFUSE_BIN) --timeout 0 --sysroot "$$tmpdir" \
 	    $(BUILD_DIR)/test-sysroot-name-soak $(or $(SECS),120)
 
@@ -925,9 +864,7 @@ test-sysroot-name-race: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-race
 # case-sensitive volume.
 ## Addressing modes agree over operation x shape x name class
 test-sysroot-path-matrix: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-path-matrix
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" \
 	    $(BUILD_DIR)/test-sysroot-path-matrix
 
@@ -1002,9 +939,7 @@ check-name-caseexact: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-name-unique \
 # any APFS hash ordering puts an overlong entry in a position where
 # pre-fix code returned -ENAMETOOLONG to userspace.
 test-getdents64-overlong: $(ELFUSE_BIN) $(BUILD_DIR)/test-getdents64-overlong
-	@set -e; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
+	@$(SYSROOT_SCRATCH); \
 	mkdir -p "$$tmpdir/fixture"; \
 	: > "$$tmpdir/fixture/expected.txt"; \
 	for tag in a b c d e; do \

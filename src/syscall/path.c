@@ -195,8 +195,6 @@ static int path_check_relative_sysroot_containment(guest_fd_t dirfd,
                                                    const char *path,
                                                    unsigned int flags,
                                                    bool *in_sysroot,
-                                                   char *abs_out,
-                                                   size_t abs_outsz,
                                                    char *host_out,
                                                    size_t host_outsz);
 
@@ -297,13 +295,11 @@ int path_translate_at(guest_fd_t dirfd,
      */
     bool climbed_root = false;
     bool relative_in_sysroot = false;
-    char relative_abs[LINUX_PATH_MAX];
     char relative_host[LINUX_PATH_MAX];
     if (tx->host_path && tx->guest_path[0] != '/' && proc_get_sysroot()) {
         int recheck = path_check_relative_sysroot_containment(
             dirfd, tx->guest_path, lookup_flags, &relative_in_sysroot,
-            relative_abs, sizeof(relative_abs), relative_host,
-            sizeof(relative_host));
+            relative_host, sizeof(relative_host));
         if (recheck < 0) {
             tx->host_path = NULL;
             if (errno == 0)
@@ -641,7 +637,7 @@ int sys_path_has_symlink(guest_fd_t dirfd, const char *path)
         bool in_sysroot = false;
 
         int recheck = path_check_relative_sysroot_containment(
-            dirfd, path, PATH_TR_NOFOLLOW, &in_sysroot, NULL, 0, NULL, 0);
+            dirfd, path, PATH_TR_NOFOLLOW, &in_sysroot, NULL, 0);
         if (recheck < 0) {
             rc = -1;
             goto out;
@@ -1427,20 +1423,17 @@ out:
     return rc;
 }
 
-/* Returns 1 when the reconstruction climbed the guest root, so the caller opens
- * the resolved absolute host path instead of walking from dirfd; 0 when the
- * walk stays beneath it; or -1 with errno set. @in_sysroot reports whether the
- * sysroot claims the reconstructed path. @abs_out (the reconstructed absolute
- * guest path) and @host_out (the resolved host spelling, filled for a climbed
- * or in-sysroot path) hand the work back to callers that need it; a NULL
- * pointer opts out of either.
+/* Returns 1 when the reconstruction climbed the guest root, so the caller
+ * opens the resolved absolute host path instead of walking from dirfd; 0 when
+ * the walk stays beneath it; or -1 with errno set. @in_sysroot reports whether
+ * the sysroot claims the reconstructed path. @host_out (the resolved host
+ * spelling, filled for a climbed or in-sysroot path) hands the resolution back
+ * to callers that need it; a NULL pointer opts out.
  */
 static int path_check_relative_sysroot_containment(guest_fd_t dirfd,
                                                    const char *path,
                                                    unsigned int flags,
                                                    bool *in_sysroot,
-                                                   char *abs_out,
-                                                   size_t abs_outsz,
                                                    char *host_out,
                                                    size_t host_outsz)
 {
@@ -1504,22 +1497,12 @@ static int path_check_relative_sysroot_containment(guest_fd_t dirfd,
      * prefix of its own to make that call from.
      */
     *in_sysroot = checked != abs_path;
-
-    /* The reconstruction is not free, and a caller that has to follow a symlink
-     * needs the same absolute path to do it, so hand it back rather than make
-     * it build one of its own that could differ.
-     */
-    if (abs_out && str_copy_trunc(abs_out, abs_path, abs_outsz) >= abs_outsz) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-
-    /* The resolution itself is not free either. A caller whose own walk stops
-     * at a link needs exactly this host path (resolved with the same flag
-     * mapping), and re-deriving it invites the two mappings to drift. A path
-     * that clamped at the guest root needs it whichever way it resolved: both
-     * spellings are absolute, so either lands where the guest's own resolution
-     * would, and the descriptor drops out of the walk.
+    /* The resolution is not free. A caller whose own walk stops at a link
+     * needs exactly this host path (resolved with the same flag mapping), and
+     * re-deriving it invites the two mappings to drift. A path that clamped at
+     * the guest root needs it whichever way it resolved: both spellings are
+     * absolute, so either lands where the guest's own resolution would, and
+     * the descriptor drops out of the walk.
      */
     if (host_out && (*in_sysroot || climbed) &&
         str_copy_trunc(host_out, checked, host_outsz) >= host_outsz) {

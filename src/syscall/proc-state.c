@@ -1100,16 +1100,7 @@ static const char *proc_resolve_sysroot_path_flags(const char *path,
         if (!present && errno == ENOTDIR)
             return buf;
     } else {
-        int n = snprintf(buf, bufsz, "%s%s", sr, lookup);
-        if (n < 0) {
-            if (errno == 0)
-                errno = EINVAL;
-            return NULL;
-        }
-        if ((size_t) n >= bufsz) {
-            errno = ENAMETOOLONG;
-            return NULL;
-        }
+        /* @buf already holds sr + the clamped lookup, spelled by the seed. */
         present = sysroot_path_exists(buf, follow_final);
         if (!present && errno == ENOTDIR)
             return buf;
@@ -1276,16 +1267,7 @@ const char *proc_resolve_sysroot_create_path(const char *path,
             return NULL;
         }
     } else {
-        int n = snprintf(buf, bufsz, "%s%s", sr, lookup);
-        if (n < 0) {
-            if (errno == 0)
-                errno = EINVAL;
-            return NULL;
-        }
-        if ((size_t) n >= bufsz) {
-            errno = ENAMETOOLONG;
-            return NULL;
-        }
+        /* @buf already holds sr + the clamped lookup, spelled by the seed. */
 
         /* An all-slash guest path ("/", "///") names the root, which always
          * exists and has no parent to check; trimming it would walk strrchr

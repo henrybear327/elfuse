@@ -384,10 +384,8 @@ static probe_result_t resolve_component(host_fd_t base_fd,
         if (verdict == PROBE_ERROR)
             return PROBE_ERROR;
         if (verdict == PROBE_EXACT) {
-            if (str_copy_trunc(host, guest, hostsz) >= hostsz) {
-                errno = ENAMETOOLONG;
+            if (str_copy_checked(host, guest, hostsz) < 0)
                 return PROBE_ERROR;
-            }
             return PROBE_EXACT;
         }
     } else {

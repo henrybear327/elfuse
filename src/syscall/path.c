@@ -368,11 +368,9 @@ int path_translate_at(guest_fd_t dirfd,
          * whose descriptor is the anchor openat(2) semantics are measured from.
          */
         if (verdict == CASEFOLD_SYMLINK &&
-            str_copy_trunc(tx->host_buf, relative_host, sizeof(tx->host_buf)) >=
-                sizeof(tx->host_buf)) {
-            errno = ENAMETOOLONG;
+            str_copy_checked(tx->host_buf, relative_host,
+                             sizeof(tx->host_buf)) < 0)
             return -1;
-        }
         tx->host_path = tx->host_buf;
     }
 
@@ -398,11 +396,9 @@ int path_translate_at(guest_fd_t dirfd,
         size_t len = strlen(tx->host_path);
 
         if (tx->host_path != tx->host_buf) {
-            if (str_copy_trunc(tx->host_buf, tx->host_path,
-                               sizeof(tx->host_buf)) >= sizeof(tx->host_buf)) {
-                errno = ENAMETOOLONG;
+            if (str_copy_checked(tx->host_buf, tx->host_path,
+                                 sizeof(tx->host_buf)) < 0)
                 return -1;
-            }
             tx->host_path = tx->host_buf;
         }
         if (len + 2 > sizeof(tx->host_buf)) {
@@ -460,11 +456,8 @@ int path_translate_dirent_name(bool dir_holds_escapes,
      * real name behind it.
      */
     if (!dir_holds_escapes) {
-        if (str_copy_trunc(guest_name, host_name, guest_name_sz) >=
-            guest_name_sz) {
-            errno = ENAMETOOLONG;
+        if (str_copy_checked(guest_name, host_name, guest_name_sz) < 0)
             return -1;
-        }
         return 0;
     }
 
@@ -1203,12 +1196,7 @@ int path_host_to_guest(const char *host_path, char *out, size_t outsz)
         }
     }
 
-    size_t len = str_copy_trunc(out, guest_path, outsz);
-    if (len >= outsz) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    return 0;
+    return str_copy_checked(out, guest_path, outsz);
 }
 
 static int dirfd_guest_base_path(guest_fd_t dirfd, char *out, size_t outsz)
@@ -1219,6 +1207,9 @@ static int dirfd_guest_base_path(guest_fd_t dirfd, char *out, size_t outsz)
             errno = EBADF;
             return -1;
         }
+        /* Raw, not str_copy_checked: the view has to be released before errno
+         * is set, which a helper setting it inside the copy cannot do.
+         */
         size_t len = str_copy_trunc(out, view.path, outsz);
         proc_release_cwd_view(&view);
         if (len >= outsz) {
@@ -1238,12 +1229,7 @@ static int dirfd_guest_base_path(guest_fd_t dirfd, char *out, size_t outsz)
             errno = ENOTDIR;
             return -1;
         }
-        size_t len = str_copy_trunc(out, snap.proc_path, outsz);
-        if (len >= outsz) {
-            errno = ENAMETOOLONG;
-            return -1;
-        }
-        return 0;
+        return str_copy_checked(out, snap.proc_path, outsz);
     }
 
     if (snap.type == FD_FUSE_DIR) {
@@ -1497,10 +1483,8 @@ static int path_check_relative_sysroot_containment(guest_fd_t dirfd,
      * descriptor drops out of the walk.
      */
     if (host_out && (*in_sysroot || climbed) &&
-        str_copy_trunc(host_out, checked, host_outsz) >= host_outsz) {
-        errno = ENAMETOOLONG;
+        str_copy_checked(host_out, checked, host_outsz) < 0)
         return -1;
-    }
     return climbed ? 1 : 0;
 }
 
@@ -1656,10 +1640,8 @@ static int host_component_spelling(host_fd_t dirfd,
 
     *is_link = -1;
     if (!casefold_active()) {
-        if (str_copy_trunc(out, guest, outsz) >= outsz) {
-            errno = ENAMETOOLONG;
+        if (str_copy_checked(out, guest, outsz) < 0)
             return -1;
-        }
         return 0;
     }
     casefold_verdict_t verdict =
@@ -1781,11 +1763,8 @@ int path_openat2_crosses_mount(guest_fd_t dirfd,
             char parent[LINUX_PATH_MAX];
             if (path_component_copy(name, sizeof(name), comp, len) < 0)
                 goto out;
-            if (str_copy_trunc(parent, current, sizeof(parent)) >=
-                sizeof(parent)) {
-                errno = ENAMETOOLONG;
+            if (str_copy_checked(parent, current, sizeof(parent)) < 0)
                 goto out;
-            }
 
             int leaf_link = -1;
             if (host_walk &&

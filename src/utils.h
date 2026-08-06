@@ -101,6 +101,19 @@ static inline size_t str_copy_trunc(char *dst, const char *src, size_t dst_size)
     return src_len;
 }
 
+/* str_copy_trunc with the truncation check folded in: 0 on success, -1 with
+ * errno set to ENAMETOOLONG when @src does not fit. A shortened path names a
+ * different file, so nearly every caller treats truncation as failure.
+ */
+static inline int str_copy_checked(char *dst, const char *src, size_t dst_size)
+{
+    if (str_copy_trunc(dst, src, dst_size) >= dst_size) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    return 0;
+}
+
 /* close(2) on a cleanup path: preserves errno across the close so the caller's
  * failure errno survives untouched. Skips the close when fd < 0.
  */

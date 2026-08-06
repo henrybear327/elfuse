@@ -856,10 +856,8 @@ static casefold_verdict_t resolve_through_links(const char *sr,
         verdict = casefold_resolve_at(AT_FDCWD, sr, cur, follow_final, buf,
                                       bufsz, walk);
         if (verdict != CASEFOLD_SYMLINK) {
-            if (str_copy_trunc(guest_out, cur, guest_outsz) >= guest_outsz) {
-                errno = ENAMETOOLONG;
+            if (str_copy_checked(guest_out, cur, guest_outsz) < 0)
                 return CASEFOLD_ERROR;
-            }
             return verdict;
         }
 
@@ -1270,10 +1268,8 @@ const char *proc_resolve_sysroot_create_path(const char *path,
                                   &followed_relative_link) == CASEFOLD_ERROR)
             return NULL;
         followed_link = rebase_after_link(&lookup, followed);
-        if (str_copy_trunc(parent, buf, sizeof(parent)) >= sizeof(parent)) {
-            errno = ENAMETOOLONG;
+        if (str_copy_checked(parent, buf, sizeof(parent)) < 0)
             return NULL;
-        }
         /* An all-slash guest path names the root, which always exists and has
          * no parent to check.
          */

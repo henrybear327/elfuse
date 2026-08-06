@@ -201,11 +201,8 @@ static int exec_resolve_guest_host_path(const char *guest_path,
         return 0;
     }
 
-    size_t len = str_copy_trunc(host_path, tx.host_path, host_path_sz);
-    if (len >= host_path_sz) {
-        errno = ENAMETOOLONG;
+    if (str_copy_checked(host_path, tx.host_path, host_path_sz) < 0)
         return -1;
-    }
     *shm_nofollow = tx.is_dev_shm;
     return 0;
 }
@@ -278,12 +275,9 @@ static int exec_resolve_interp_host_path(const char *interp_guest_path,
         if (exec_resolve_guest_host_path(lib_guest, lib_host, sizeof(lib_host),
                                          &lib_temp, &lib_shm) == 0 &&
             exec_translated_usable(lib_host, lib_guest, lib_temp, lib_shm)) {
-            size_t len =
-                str_copy_trunc(interp_host_path, lib_host, interp_host_path_sz);
-            if (len >= interp_host_path_sz) {
-                errno = ENAMETOOLONG;
+            if (str_copy_checked(interp_host_path, lib_host,
+                                 interp_host_path_sz) < 0)
                 return -1;
-            }
             *interp_host_temp = lib_temp;
             *shm_nofollow = lib_shm;
         }

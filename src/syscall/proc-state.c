@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -55,7 +56,13 @@ static char sysroot_path[LINUX_PATH_MAX] = {0};
  * the snprintf input buffer underneath that thread.
  */
 static pthread_mutex_t sysroot_lock = PTHREAD_MUTEX_INITIALIZER;
-static bool sysroot_casefold = false;
+/* Atomic rather than guarded by sysroot_lock: the fold mode is decided once
+ * at startup (and re-published to a forked child) before any vCPU thread
+ * issues a syscall, while the flag is read several times per path
+ * translation. There is no state to keep consistent with it, so a lock
+ * would buy ordering nothing needs and charge every translation for it.
+ */
+static _Atomic bool sysroot_casefold = false;
 /* True when proc_set_sysroot's realpath succeeded, so sysroot_path already
  * holds the canonical spelling and containment checks need not re-derive it
  * per call. False leaves them the per-call realpath, for a sysroot that did
@@ -439,18 +446,12 @@ bool proc_sysroot_snapshot(char *out, size_t outsz)
 
 void proc_set_sysroot_casefold(bool enabled)
 {
-    pthread_mutex_lock(&sysroot_lock);
-    sysroot_casefold = enabled;
-    pthread_mutex_unlock(&sysroot_lock);
+    atomic_store(&sysroot_casefold, enabled);
 }
 
 bool proc_sysroot_casefold_enabled(void)
 {
-    bool enabled;
-    pthread_mutex_lock(&sysroot_lock);
-    enabled = sysroot_casefold;
-    pthread_mutex_unlock(&sysroot_lock);
-    return enabled;
+    return atomic_load(&sysroot_casefold);
 }
 
 /* True when realpath(3) failed because the path stopped resolving rather than

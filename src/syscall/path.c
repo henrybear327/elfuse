@@ -436,19 +436,12 @@ bool path_dirent_dir_holds_escapes(host_fd_t host_dirfd)
     if (fcntl(host_dirfd, F_GETPATH, dirpath) < 0)
         return false;
     size_t sr_len = strlen(sr);
-
-    /* "--sysroot /" is the one prefix that is a bare separator: it owns every
-     * host path, but path_prefix_match on it accepts only "/" itself.
-     */
-    if (sr_len == 1)
-        return true;
-
     /* proc_set_sysroot stores a realpath()-canonical prefix and F_GETPATH
      * reports canonical paths, so a byte compare is sound; the residual
      * folding-volume caveat is the accepted gap the NO_XDEV checker documents
      * (path.h).
      */
-    return path_prefix_match(dirpath, sr, sr_len);
+    return path_under_prefix(dirpath, sr, sr_len);
 }
 
 int path_translate_dirent_name(bool dir_holds_escapes,
@@ -762,36 +755,25 @@ static int proc_apply_components(const char *path,
                                  size_t *depth)
 {
     const char *seg = path;
-    while (*seg) {
-        while (*seg == '/')
-            seg++;
-        if (*seg == '\0')
-            break;
+    const char *comp;
+    size_t len;
 
-        const char *end = seg;
-        while (*end != '\0' && *end != '/')
-            end++;
-
-        size_t len = (size_t) (end - seg);
-        if (len == 1 && seg[0] == '.') {
-            seg = end;
+    while (path_next_component(&seg, &comp, &len)) {
+        if (path_component_is_dot(comp, len))
             continue;
-        }
-        if (len == 2 && seg[0] == '.' && seg[1] == '.') {
+        if (path_component_is_dotdot(comp, len)) {
             if (*depth > 0) {
                 *depth -= 1;
                 out[marks[*depth]] = '\0';
             }
-            seg = end;
             continue;
         }
         if (*depth >= marks_cap) {
             errno = ENAMETOOLONG;
             return -1;
         }
-        if (proc_push_component(out, outsz, marks, depth, seg, len) < 0)
+        if (proc_push_component(out, outsz, marks, depth, comp, len) < 0)
             return -1;
-        seg = end;
     }
     return 0;
 }
@@ -881,21 +863,13 @@ int path_openat2_stays_beneath(const char *path, bool clamp_at_root)
 {
     int depth = 0;
     const char *p = path;
+    const char *comp;
+    size_t len;
 
-    while (*p) {
-        while (*p == '/')
-            p++;
-        if (*p == '\0')
-            break;
-
-        const char *start = p;
-        while (*p && *p != '/')
-            p++;
-        size_t len = (size_t) (p - start);
-
-        if (len == 1 && start[0] == '.')
+    while (path_next_component(&p, &comp, &len)) {
+        if (path_component_is_dot(comp, len))
             continue;
-        if (len == 2 && start[0] == '.' && start[1] == '.') {
+        if (path_component_is_dotdot(comp, len)) {
             if (depth == 0) {
                 if (!clamp_at_root)
                     return 0;
@@ -916,25 +890,17 @@ int path_openat2_normalize_in_root(const char *path, char *out, size_t outsz)
     size_t marks[LINUX_PATH_MAX / 2];
     size_t out_len = 0;
     const char *p = path;
+    const char *comp;
+    size_t len;
 
     if (outsz == 0)
         return -1;
     out[0] = '\0';
 
-    while (*p) {
-        while (*p == '/')
-            p++;
-        if (*p == '\0')
-            break;
-
-        const char *start = p;
-        while (*p && *p != '/')
-            p++;
-        size_t len = (size_t) (p - start);
-
-        if (len == 1 && start[0] == '.')
+    while (path_next_component(&p, &comp, &len)) {
+        if (path_component_is_dot(comp, len))
             continue;
-        if (len == 2 && start[0] == '.' && start[1] == '.') {
+        if (path_component_is_dotdot(comp, len)) {
             if (depth > 0) {
                 out_len = marks[depth - 1];
                 out[out_len] = '\0';
@@ -954,7 +920,7 @@ int path_openat2_normalize_in_root(const char *path, char *out, size_t outsz)
         }
         if (out_len + len >= outsz)
             return -1;
-        memcpy(out + out_len, start, len);
+        memcpy(out + out_len, comp, len);
         out_len += len;
         out[out_len] = '\0';
         depth++;
@@ -1071,9 +1037,7 @@ int path_openat2_resolved_within_root(guest_fd_t dirfd,
         }
     }
 
-    size_t root_len = strlen(real_root);
-    if (strncmp(real_path, real_root, root_len) != 0 ||
-        (real_path[root_len] != '\0' && real_path[root_len] != '/')) {
+    if (!path_prefix_match(real_path, real_root, strlen(real_root))) {
         errno = EXDEV;
         return -1;
     }
@@ -1704,18 +1668,10 @@ int path_openat2_crosses_mount(guest_fd_t dirfd,
             goto out;
     }
 
-    while (*walk) {
-        while (*walk == '/')
-            walk++;
-        if (!*walk)
-            break;
-
-        const char *comp = walk;
-        while (*walk && *walk != '/')
-            walk++;
-        size_t len = (size_t) (walk - comp);
-
-        if (len == 1 && comp[0] == '.')
+    const char *comp;
+    size_t len;
+    while (path_next_component(&walk, &comp, &len)) {
+        if (path_component_is_dot(comp, len))
             continue;
 
         /* The component's stored spelling, resolved once per component: the
@@ -1725,7 +1681,7 @@ int path_openat2_crosses_mount(guest_fd_t dirfd,
          */
         char host_name[CASEFOLD_STORED_NAME_MAX];
 
-        if (len == 2 && comp[0] == '.' && comp[1] == '.') {
+        if (path_component_is_dotdot(comp, len)) {
             size_t before_len = strlen(current);
             guest_path_pop(current, floor_len);
             if (host_walk && strlen(current) < before_len) {
@@ -1832,7 +1788,7 @@ int path_openat2_crosses_mount(guest_fd_t dirfd,
         while (*rest == '/')
             rest++;
         if (host_walk && *rest != '\0' &&
-            !(len == 2 && comp[0] == '.' && comp[1] == '.')) {
+            !path_component_is_dotdot(comp, len)) {
             host_fd_t next_fd = openat(current_fd, host_name,
                                        O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             if (replace_walk_fd(&current_fd, next_fd) < 0)

@@ -67,12 +67,34 @@ static inline int path_translation_at_flags(const path_translation_t *tx,
     return tx->is_dev_shm ? (at_flags | AT_SYMLINK_NOFOLLOW) : at_flags;
 }
 
+/* True when the translation resolved to an object with no host vnode behind
+ * it: a FUSE-backed path or a synthetic /proc file. Consumers that must hand
+ * the kernel a real host file refuse these with ENOSYS.
+ */
+static inline bool path_translation_is_synthetic(const path_translation_t *tx)
+{
+    return tx->fuse_path || tx->proc_resolved != 0;
+}
+
 /* True when path equals prefix exactly, or extends it with '/'. Avoids the
  * surprise where "/sys/devices/system/cpufoo" would match a bare strncmp on
  * "/sys/devices/system/cpu" and pull an unrelated path through the intercept
  * layer.
  */
 bool path_prefix_match(const char *path, const char *prefix, size_t plen);
+
+/* path_prefix_match for a directory prefix that may be the root: a one-byte
+ * "/" prefix owns every absolute path, where the extends-with-'/' test
+ * accepts only "/" itself.
+ */
+static inline bool path_under_prefix(const char *path,
+                                     const char *prefix,
+                                     size_t plen)
+{
+    if (plen == 1 && prefix[0] == '/')
+        return path[0] == '/';
+    return path_prefix_match(path, prefix, plen);
+}
 
 /* Advance *pathp to the next '/'-separated component, skipping empty segments
  * from repeated slashes.

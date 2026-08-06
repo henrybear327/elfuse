@@ -495,7 +495,7 @@ int net_sockaddr_to_mac(const uint8_t *linux_sa,
         if (path_translate_at(LINUX_AT_FDCWD, guest_path,
                               create ? PATH_TR_CREATE : PATH_TR_NONE, &tx) < 0)
             return absock_errno();
-        if (tx.fuse_path || tx.proc_resolved != 0)
+        if (path_translation_is_synthetic(&tx))
             return -LINUX_ENOSYS;
 
         /* A shm leaf carries the never-follow rule, but bind(2) and connect(2)

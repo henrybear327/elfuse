@@ -679,7 +679,7 @@ int64_t sys_inotify_add_watch(guest_t *g,
     path_translation_t tx;
     if (path_translate_at(LINUX_AT_FDCWD, path, PATH_TR_NONE, &tx) < 0)
         return linux_errno();
-    if (tx.fuse_path || tx.proc_resolved != 0)
+    if (path_translation_is_synthetic(&tx))
         return -LINUX_ENOSYS;
 
     /* Open the path for event monitoring. O_EVTONLY is macOS-specific: opens

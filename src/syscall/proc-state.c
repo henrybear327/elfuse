@@ -532,12 +532,7 @@ static bool sysroot_path_is_contained(const char *resolved_path,
         }
     }
 
-    size_t sr_len = strlen(real_sysroot);
-    if (strncmp(real_path, real_sysroot, sr_len) != 0)
-        return false;
-    if (sr_len == 1 && real_sysroot[0] == '/')
-        return true;
-    return real_path[sr_len] == '\0' || real_path[sr_len] == '/';
+    return path_under_prefix(real_path, real_sysroot, strlen(real_sysroot));
 }
 
 static bool sysroot_path_exists(const char *resolved_path, bool follow_final)

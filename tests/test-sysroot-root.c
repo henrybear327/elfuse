@@ -15,7 +15,10 @@
  * split off the walk's recorded offsets, and the all-slash guard the
  * containment check needs. A regression shows up as ELOOP where the host's
  * own answer should come through, which sends a caller looking for a link
- * loop that does not exist.
+ * loop that does not exist. With argv[1] set, also path_host_to_guest in
+ * src/syscall/path.c: the lane starts inside a directory stored under its
+ * escape, so the first getcwd must decode the leaf back to argv[1] rather
+ * than hand back the stored bytes.
  *
  * Nothing here writes: the macOS root is read-only, and what is asserted is
  * that the guest is told so rather than being told something untrue. Run under
@@ -24,7 +27,10 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -34,12 +40,34 @@ int passes = 0, fails = 0;
 
 #define UNWRITABLE "/elfuse-sysroot-root-probe"
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct stat st;
     int fd;
 
     printf("test-sysroot-root: sysroot at the filesystem root\n");
+
+    /* The recipe passes the expected leaf only on a folding volume, where a
+     * stored escape decodes; on a byte-exact root the stored name means
+     * itself and there is nothing to strip wrongly.
+     */
+    if (argc > 1) {
+        char cwd[PATH_MAX];
+
+        TEST("getcwd decodes the stored leaf under --sysroot /");
+        if (!getcwd(cwd, sizeof(cwd))) {
+            FAIL("getcwd");
+        } else {
+            const char *leaf = strrchr(cwd, '/');
+            bool decoded;
+
+            leaf = leaf ? leaf + 1 : cwd;
+            decoded = !strcmp(leaf, argv[1]);
+            EXPECT_TRUE(decoded, "cwd leaked the stored spelling");
+            if (!decoded)
+                fprintf(stderr, "  got %s\n", cwd);
+        }
+    }
 
     /* The root is read-only on macOS, so the create must fail, but with the
      * host's reason. ELOOP would mean the path arithmetic broke before the

@@ -694,9 +694,23 @@ test-sysroot-inotify-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-inotify-name
 		exit 1; \
 	fi
 
+# The second leg starts the lane inside a directory stored under its escape,
+# so the guest's first getcwd exercises the one-byte prefix strip. Decoding is
+# gated on the root volume's fold flag under --sysroot /, so the probe is /ETC
+# rather than $TMPDIR, which can fold on a case-sensitive boot volume.
 ## The degenerate sysroot: a one-character host prefix
 test-sysroot-root: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-root
 	$(ELFUSE_BIN) --sysroot / $(BUILD_DIR)/test-sysroot-root
+	@$(SYSROOT_SCRATCH); \
+	elfuse="$(CURDIR)/$(ELFUSE_BIN)"; \
+	test_bin="$(CURDIR)/$(BUILD_DIR)/test-sysroot-root"; \
+	if [ -e /ETC ]; then \
+		mkdir "$$tmpdir/.ef=464f4f"; \
+		(cd "$$tmpdir/.ef=464f4f" && \
+		 "$$elfuse" --sysroot / "$$test_bin" FOO); \
+	else \
+		printf "$(YELLOW)SKIP$(RESET) test-sysroot-root (byte-exact root stores escapes literally)\n"; \
+	fi
 
 ## Escape-shaped host names must mean themselves when there is no sysroot
 # Same binary as test-sysroot-outside-names: one set of assertions, two

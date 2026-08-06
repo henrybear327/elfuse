@@ -83,6 +83,14 @@ static inline bool path_translation_is_synthetic(const path_translation_t *tx)
  */
 bool path_prefix_match(const char *path, const char *prefix, size_t plen);
 
+/* True for the one prefix that is a bare separator. path_under_prefix and
+ * path_prefix_strip_len both read the root case from here.
+ */
+static inline bool path_prefix_is_root(const char *prefix, size_t plen)
+{
+    return plen == 1 && prefix[0] == '/';
+}
+
 /* path_prefix_match for a directory prefix that may be the root: a one-byte
  * "/" prefix owns every absolute path, where the extends-with-'/' test
  * accepts only "/" itself.
@@ -91,9 +99,18 @@ static inline bool path_under_prefix(const char *path,
                                      const char *prefix,
                                      size_t plen)
 {
-    if (plen == 1 && prefix[0] == '/')
+    if (path_prefix_is_root(prefix, plen))
         return path[0] == '/';
     return path_prefix_match(path, prefix, plen);
+}
+
+/* Bytes to drop from a path path_under_prefix accepted, to leave the spelling
+ * below @prefix. Zero at the root, whose one byte is the remainder's own
+ * leading separator; the whole prefix otherwise.
+ */
+static inline size_t path_prefix_strip_len(const char *prefix, size_t plen)
+{
+    return path_prefix_is_root(prefix, plen) ? 0 : plen;
 }
 
 /* Advance *pathp to the next '/'-separated component, skipping empty segments

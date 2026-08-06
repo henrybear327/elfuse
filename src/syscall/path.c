@@ -1139,9 +1139,13 @@ int path_host_to_guest(const char *host_path, char *out, size_t outsz)
 
     if (proc_sysroot_snapshot(sysroot, sizeof(sysroot))) {
         size_t sysroot_len = strlen(sysroot);
-        if (!strncmp(host_path, sysroot, sysroot_len) &&
-            (host_path[sysroot_len] == '\0' || host_path[sysroot_len] == '/')) {
-            guest_path = host_path + sysroot_len;
+        /* A one-byte "/" prefix is also the guest path's own leading
+         * separator, so it owns every absolute path while the strip takes no
+         * bytes. Both answers read the root case from path.h.
+         */
+        if (path_under_prefix(host_path, sysroot, sysroot_len)) {
+            guest_path =
+                host_path + path_prefix_strip_len(sysroot, sysroot_len);
             if (*guest_path == '\0')
                 guest_path = "/";
 

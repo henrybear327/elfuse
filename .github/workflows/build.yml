@@ -1,0 +1,66 @@
+# Build verification on macOS Apple Silicon. Hosted runners don't expose
+# Hypervisor.framework, so this job stops at `make elfuse` + entitlement check;
+# the runtime suites run self-hosted.
+
+name: Build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build (macOS Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      GNU_OBJCOPY: /opt/homebrew/opt/binutils/bin/objcopy
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      BREW_PKGS: binutils
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache Homebrew downloads
+        # No restore-keys: a partial match would mask upstream regressions.
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-${{ env.BREW_PKGS }}
+
+      - name: Confirm host is arm64
+        run: |
+          set -euo pipefail
+          uname -mrs
+          test "$(uname -m)" = "arm64"
+
+      - name: Install GNU objcopy
+        # shellcheck disable=SC2086 -- BREW_PKGS is a space-separated list.
+        run: |
+          set -euo pipefail
+          brew install --quiet $BREW_PKGS
+          "$GNU_OBJCOPY" --version | head -1
+
+      - name: Build elfuse
+        run: |
+          set -euo pipefail
+          clang --version | head -1
+          make elfuse
+
+      - name: Verify HVF entitlement is embedded
+        run: |
+          set -euo pipefail
+          codesign -d --entitlements - build/elfuse 2>&1 \
+            | grep -q 'com\.apple\.security\.hypervisor'
+
+      - name: Upload elfuse binary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: elfuse-${{ runner.os }}-${{ runner.arch }}
+          path: build/elfuse
+          retention-days: 7
+          if-no-files-found: warn

@@ -1,0 +1,57 @@
+# Build elfuse and run the lint, analysis, and runtime suites.
+#
+# Each stage below is a reusable workflow that documents its own jobs; this
+# file carries only the triggers and the graph that orders them.
+#
+# Runtime and sanitizer tests require Hypervisor.framework, which GitHub-hosted
+# macOS runners do not expose, so they run on a self-hosted Apple Silicon
+# runner. That runner is a single shared resource: runtime waits on build so a
+# compile that is already broken never occupies it, and the repository guard
+# keeps forks from queueing against it.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same PR; keep main runs going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+
+  build:
+    uses: ./.github/workflows/build.yml
+
+  analysis:
+    uses: ./.github/workflows/analysis.yml
+
+  runtime:
+    needs: build
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request')
+    # A called workflow cannot raise its own permissions, so the pull-requests
+    # scope its superseded-run guard needs must be granted here.
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/runtime.yml

@@ -115,6 +115,10 @@ typedef struct {
  * link reports absent, matching what an access(2) existence probe would say.
  *
  * @walk may be NULL when the caller needs only the verdict and @out.
+ *
+ * @out doubles as the walk's probe scratch, so it must not overlap
+ * @guest_path or @base_host_prefix, and it holds nothing meaningful once
+ * CASEFOLD_ERROR is returned.
  */
 casefold_verdict_t casefold_resolve_at(host_fd_t base_fd,
                                        const char *base_host_prefix,

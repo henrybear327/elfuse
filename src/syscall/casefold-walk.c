@@ -322,20 +322,48 @@ static int name_by_rule(const char *guest, char *out, size_t outsz)
     return casefold_escape(guest, out, outsz);
 }
 
+/* Probe @cand against the parent already spelled in @out[0..len), appending it
+ * in place so the accumulated prefix is never recopied per component. @out is
+ * restored to that prefix on every exit, including the append's own
+ * ENAMETOOLONG: the separator is written before the length check that rejects
+ * an over-long candidate, so an unrestored buffer would keep a trailing '/'.
+ */
+static probe_result_t probe_candidate(host_fd_t base_fd,
+                                      char *out,
+                                      size_t outsz,
+                                      size_t len,
+                                      const char *cand,
+                                      bool *is_link)
+{
+    size_t probe_len = len;
+    probe_result_t verdict;
+
+    if (append_component(out, outsz, &probe_len, cand) < 0) {
+        out[len] = '\0';
+        return PROBE_ERROR;
+    }
+    verdict = probe_exact(base_fd, out, cand, is_link);
+    out[len] = '\0';
+    return verdict;
+}
+
 /* Spell one component, given the parent already spelled in @out. The entry is
  * there exactly when the verdict is PROBE_EXACT; the host spelling goes to
- * @host either way.
+ * @host either way. @out doubles as the probe buffer: each candidate is
+ * appended in place and the terminator restored before returning, so the
+ * accumulated prefix is never recopied per component. A candidate that does
+ * not fit reports ENAMETOOLONG exactly as the final spelling would, since an
+ * escape is never shorter than the literal it stands for.
  */
 static probe_result_t resolve_component(host_fd_t base_fd,
-                                        const char *out,
+                                        char *out,
+                                        size_t outsz,
                                         size_t len,
                                         const char *guest,
                                         char *host,
                                         size_t hostsz,
                                         bool *is_link)
 {
-    char probe_path[LINUX_PATH_MAX];
-    size_t probe_len = len;
     probe_result_t verdict;
 
     /* An escape-shaped guest name is stored escaped unconditionally, so it can
@@ -343,16 +371,7 @@ static probe_result_t resolve_component(host_fd_t base_fd,
      * literal spelling would find some unrelated file.
      */
     if (!casefold_is_escaped(guest)) {
-        if (str_copy_trunc(probe_path, out, sizeof(probe_path)) >=
-            sizeof(probe_path)) {
-            errno = ENAMETOOLONG;
-            return PROBE_ERROR;
-        }
-        if (append_component(probe_path, sizeof(probe_path), &probe_len,
-                             guest) < 0)
-            return PROBE_ERROR;
-
-        verdict = probe_exact(base_fd, probe_path, guest, is_link);
+        verdict = probe_candidate(base_fd, out, outsz, len, guest, is_link);
         if (verdict == PROBE_ERROR)
             return PROBE_ERROR;
         if (verdict == PROBE_EXACT) {
@@ -386,16 +405,9 @@ static probe_result_t resolve_component(host_fd_t base_fd,
     if (casefold_escape(guest, host, hostsz) < 0)
         return PROBE_ERROR;
 
-    probe_len = len;
-    if (str_copy_trunc(probe_path, out, sizeof(probe_path)) >=
-        sizeof(probe_path)) {
-        errno = ENAMETOOLONG;
-        return PROBE_ERROR;
-    }
-    if (append_component(probe_path, sizeof(probe_path), &probe_len, host) < 0)
-        return PROBE_ERROR;
-
-    switch (probe_exact(base_fd, probe_path, host, is_link)) {
+    probe_result_t escape_verdict =
+        probe_candidate(base_fd, out, outsz, len, host, is_link);
+    switch (escape_verdict) {
     case PROBE_EXACT:
         return PROBE_EXACT;
     case PROBE_ERROR:
@@ -485,7 +497,7 @@ casefold_verdict_t casefold_resolve_at(host_fd_t base_fd,
         } else {
             bool is_link = false;
             probe_result_t verdict = resolve_component(
-                base_fd, out, len, guest, host, sizeof(host), &is_link);
+                base_fd, out, outsz, len, guest, host, sizeof(host), &is_link);
 
             if (verdict == PROBE_ERROR)
                 return CASEFOLD_ERROR;

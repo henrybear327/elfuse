@@ -1069,6 +1069,7 @@ static const char *proc_resolve_sysroot_path_flags(const char *path,
     bool folded = false;
     bool followed_link = false;
     bool followed_relative_link = false;
+    bool walk_vouched = false;
     char followed[LINUX_PATH_MAX];
     if (casefold_active()) {
         casefold_walk_t walk;
@@ -1080,6 +1081,7 @@ static const char *proc_resolve_sysroot_path_flags(const char *path,
             return NULL;
         present = verdict == CASEFOLD_FOUND;
         folded = walk.folded;
+        walk_vouched = present && walk.all_types_known;
         /* The walk stopped at a component that is not a directory, which is
          * the answer the byte-exact branch below reads off ENOTDIR: resolution
          * fails there (path_resolution(7)) and the host fallback must not run,
@@ -1134,6 +1136,15 @@ static const char *proc_resolve_sysroot_path_flags(const char *path,
     }
 
     if (present) {
+        /* A walk that typed every component has proven containment: '..' was
+         * clamped before it ran, no unseen symlink can hide in a fully typed
+         * path, and a link it did see was re-resolved in the guest namespace,
+         * so realpath() would only re-derive the same bytes. The recheck
+         * remains where the walk cannot vouch: a readdir-answered component,
+         * and the byte-exact arm, which runs no walk.
+         */
+        if (walk_vouched)
+            return buf;
         if (!sysroot_path_is_contained(buf, sr, follow_final)) {
             errno = ELOOP;
             return NULL;

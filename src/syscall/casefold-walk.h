@@ -93,6 +93,14 @@ typedef struct {
      */
     bool leaf_type_known;
     bool leaf_is_link;
+    /* True when every component that resolved was typed by its probe, so no
+     * symlink can hide in the resolved path; only the readdir fallback,
+     * whose listing carries no type, can pass one unseen. Dot components
+     * navigate rather than name an entry, and components below an absent one
+     * name nothing, so neither withholds a type. A FOUND path with this set
+     * cannot resolve outside the prefix it was built under.
+     */
+    bool all_types_known;
 } casefold_walk_t;
 
 /* Resolve @guest_path, interpreted relative to @base_fd, into its host spelling

@@ -315,6 +315,28 @@ static void section_symlink(void)
     else
         host_fail("a listing-answered walk reports no leaf type",
                   "expected leaf_type_known false when readdir answered");
+
+    /* The walk-wide form of the same withdrawal. all_types_known is what
+     * lets the resolver skip its canonical containment recheck: a walk that
+     * typed every component has proven no symlink hides in the path. A
+     * component the listing answered breaks that proof, so the flag must go
+     * false, or the recheck would be skipped for a path holding a component
+     * nothing ever typed.
+     */
+    if (casefold_resolve_at(AT_FDCWD, root, "/lowdir/inner.txt", false, out,
+                            sizeof(out), &walk) == CASEFOLD_FOUND &&
+        walk.all_types_known)
+        host_ok();
+    else
+        host_fail("a fully probed walk vouches for every type",
+                  "expected all_types_known true");
+    if (casefold_resolve_at(AT_FDCWD, root, "/second-link", false, out,
+                            sizeof(out), &walk) == CASEFOLD_FOUND &&
+        !walk.all_types_known)
+        host_ok();
+    else
+        host_fail("a listing-answered walk does not vouch",
+                  "expected all_types_known false when readdir answered");
 }
 
 static void section_limits(void)

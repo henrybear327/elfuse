@@ -85,6 +85,14 @@ typedef struct {
      * rebuild the directory a relative target is measured from.
      */
     size_t link_guest_offset;
+    /* Object type of the last component a probe answered, for a FOUND path
+     * its leaf. leaf_type_known is false when the readdir fallback answered,
+     * since a listing carries no type, and for dot components, which are
+     * never probed. Spares a caller one fstatat per component where the
+     * probe already paid for ATTR_CMN_OBJTYPE.
+     */
+    bool leaf_type_known;
+    bool leaf_is_link;
 } casefold_walk_t;
 
 /* Resolve @guest_path, interpreted relative to @base_fd, into its host spelling

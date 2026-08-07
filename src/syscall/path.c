@@ -1645,14 +1645,22 @@ static int reset_walk_fd(host_fd_t *current_fd, host_fd_t root_fd)
  * the walker would then report the absence rather than what is actually there.
  * Outside a sysroot, and for any name needing no escape, this is the name
  * itself.
+ *
+ * @is_link reports the entry's link-ness when the walk's own probe answered
+ * it: -1 unknown (the caller must stat), 0 not a symlink or not there, 1 a
+ * symlink. The probe already pays for ATTR_CMN_OBJTYPE, so a known answer
+ * spares the caller a second host probe per component; only the readdir
+ * fallback, whose listing carries no type, leaves it unknown.
  */
 static int host_component_spelling(host_fd_t dirfd,
                                    const char *guest,
                                    char *out,
-                                   size_t outsz)
+                                   size_t outsz,
+                                   int *is_link)
 {
     casefold_walk_t walk;
 
+    *is_link = -1;
     if (!casefold_active()) {
         if (str_copy_trunc(out, guest, outsz) >= outsz) {
             errno = ENAMETOOLONG;
@@ -1660,10 +1668,19 @@ static int host_component_spelling(host_fd_t dirfd,
         }
         return 0;
     }
-    return casefold_resolve_at(dirfd, "", guest, false, out, outsz, &walk) ==
-                   CASEFOLD_ERROR
-               ? -1
-               : 0;
+    casefold_verdict_t verdict =
+        casefold_resolve_at(dirfd, "", guest, false, out, outsz, &walk);
+    if (verdict == CASEFOLD_ERROR)
+        return -1;
+    /* Any non-FOUND verdict here means not there: @guest is one component
+     * with follow_final false, so CASEFOLD_SYMLINK, which the walk returns
+     * only for a link it must pass through, cannot come back.
+     */
+    if (verdict != CASEFOLD_FOUND)
+        *is_link = 0;
+    else if (walk.leaf_type_known)
+        *is_link = walk.leaf_is_link;
+    return 0;
 }
 
 int path_openat2_crosses_mount(guest_fd_t dirfd,
@@ -1776,68 +1793,78 @@ int path_openat2_crosses_mount(guest_fd_t dirfd,
                 goto out;
             }
 
+            int leaf_link = -1;
             if (host_walk &&
                 host_component_spelling(current_fd, name, host_name,
-                                        sizeof(host_name)) < 0)
+                                        sizeof(host_name), &leaf_link) < 0)
                 goto out;
 
-            struct stat st;
-            if (host_walk &&
-                fstatat(current_fd, host_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-                if (S_ISLNK(st.st_mode)) {
-                    if (guest_path_append(current, sizeof(current), comp, len) <
-                        0)
-                        goto out;
+            /* Only where the walk could not answer. ENOENT is the one
+             * failure that still yields a verdict: nothing is there, so
+             * nothing can be a link. Any other errno leaves link-ness
+             * undecided, and an undecided component must not be walked
+             * through as though it were an ordinary directory.
+             */
+            if (host_walk && leaf_link < 0) {
+                struct stat st;
 
-                    int cls = classify_guest_path_mount(current);
-                    if (cls < 0) {
-                        errno = EINVAL;
-                        goto out;
-                    }
-                    if (cls != start_class) {
-                        rc = 1;
-                        goto out;
-                    }
-                    str_copy_trunc(current, parent, sizeof(current));
+                if (fstatat(current_fd, host_name, &st, AT_SYMLINK_NOFOLLOW) ==
+                    0)
+                    leaf_link = S_ISLNK(st.st_mode) ? 1 : 0;
+                else if (errno != ENOENT)
+                    goto out;
+                else
+                    leaf_link = 0;
+            }
+            if (host_walk && leaf_link == 1) {
+                if (guest_path_append(current, sizeof(current), comp, len) < 0)
+                    goto out;
 
-                    char target[LINUX_PATH_MAX];
-                    ssize_t target_len = readlinkat(current_fd, host_name,
-                                                    target, sizeof(target) - 1);
-                    if (target_len < 0)
-                        goto out;
-                    if (++symlink_count > MAXSYMLINKS) {
-                        errno = ELOOP;
-                        goto out;
-                    }
-                    target[target_len] = '\0';
-
-                    /* No prefix: an absolute target re-anchors the walk fd
-                     * below, and a relative one continues from current_fd,
-                     * which already names the link's directory.
-                     */
-                    if (path_splice_link_target(NULL, 0, target, walk, pending,
-                                                sizeof(pending)) < 0)
-                        goto out;
-                    walk = pending;
-
-                    if (target[0] == '/') {
-                        host_fd_t reset_fd =
-                            in_root ? root_fd : absolute_root_fd;
-                        if (reset_walk_fd(&current_fd, reset_fd) < 0)
-                            goto out;
-                        if (in_root) {
-                            if (dirfd_guest_base_path(dirfd, current,
-                                                      sizeof(current)) < 0)
-                                goto out;
-                        } else {
-                            current[0] = '/';
-                            current[1] = '\0';
-                        }
-                    }
-                    continue;
+                int cls = classify_guest_path_mount(current);
+                if (cls < 0) {
+                    errno = EINVAL;
+                    goto out;
                 }
-            } else if (host_walk && errno != ENOENT) {
-                goto out;
+                if (cls != start_class) {
+                    rc = 1;
+                    goto out;
+                }
+                str_copy_trunc(current, parent, sizeof(current));
+
+                char target[LINUX_PATH_MAX];
+                ssize_t target_len = readlinkat(current_fd, host_name, target,
+                                                sizeof(target) - 1);
+                if (target_len < 0)
+                    goto out;
+                if (++symlink_count > MAXSYMLINKS) {
+                    errno = ELOOP;
+                    goto out;
+                }
+                target[target_len] = '\0';
+
+                /* No prefix: an absolute target re-anchors the walk fd
+                 * below, and a relative one continues from current_fd,
+                 * which already names the link's directory.
+                 */
+                if (path_splice_link_target(NULL, 0, target, walk, pending,
+                                            sizeof(pending)) < 0)
+                    goto out;
+                walk = pending;
+
+                if (target[0] == '/') {
+                    host_fd_t reset_fd = in_root ? root_fd : absolute_root_fd;
+                    if (reset_walk_fd(&current_fd, reset_fd) < 0)
+                        goto out;
+                    if (in_root) {
+                        if (dirfd_guest_base_path(dirfd, current,
+                                                  sizeof(current)) < 0)
+                            goto out;
+                    } else {
+                        current[0] = '/';
+                        current[1] = '\0';
+                    }
+                }
+                continue;
             }
 
             if (guest_path_append(current, sizeof(current), comp, len) < 0)

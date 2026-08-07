@@ -298,6 +298,23 @@ static void section_symlink(void)
           CASEFOLD_FOUND, "second-link");
     check("escaped second link to a symlink", "/Hard.Link", CASEFOLD_FOUND,
           esc("Hard.Link"));
+
+    /* Same entry, asked about the report rather than the spelling. A directory
+     * listing carries no object type, so a walk the fallback answered cannot
+     * claim to know the leaf's. It used to: the getattrlistat that preceded
+     * the fallback recorded the type of whatever entry the volume named, and
+     * the fallback returned without withdrawing it, so leaf_type_known
+     * reached the caller true for a name whose type nothing confirmed. The
+     * NO_XDEV walker skips its own fstatat on the strength of that flag, so
+     * a wrong true classifies a component nothing ever typed.
+     */
+    if (casefold_resolve_at(AT_FDCWD, root, "/second-link", false, out,
+                            sizeof(out), &walk) == CASEFOLD_FOUND &&
+        !walk.leaf_type_known)
+        host_ok();
+    else
+        host_fail("a listing-answered walk reports no leaf type",
+                  "expected leaf_type_known false when readdir answered");
 }
 
 static void section_limits(void)

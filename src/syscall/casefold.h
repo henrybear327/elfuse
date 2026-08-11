@@ -84,12 +84,6 @@ _Static_assert(CASEFOLD_PREFIX_LEN +
                    CASEFOLD_UNIT_MAX,
                "long-tier escape exceeds the per-name UTF-16 unit limit");
 
-/* UTF-16 code units @s occupies, which is what the host counts against its
- * per-name limit: one per code point below U+10000, two above. Returns 0 when
- * @s is not valid UTF-8, which callers treat as "cannot be stored literally".
- */
-size_t casefold_utf16_units(const char *s);
-
 /* True when @name cannot be stored under its own spelling. That is any name
  * carrying an uppercase ASCII letter or a byte >= 0x80, plus any name that is
  * itself escape-shaped so it cannot be confused with the escape of another

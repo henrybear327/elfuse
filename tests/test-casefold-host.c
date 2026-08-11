@@ -23,6 +23,11 @@
  * Each of those would surface inside a guest much later as a missing or a
  * wrong file.
  *
+ * The UTF-8 well-formedness oracle below moved here from the codec, which
+ * had no other caller. Nothing in src/ constrains it now, so a codec change
+ * that breaks the unit budget shows up as a disagreement here rather than
+ * being mirrored into silence.
+ *
  * Native macOS binary; no HVF entitlement needed.
  */
 
@@ -32,6 +37,7 @@
 #include <ftw.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +48,96 @@
 #include "casefold-vectors.h"
 #include "host-test-util.h"
 #include "syscall/casefold.h"
+
+/* True when @s is well-formed UTF-8: no overlong forms, no surrogates,
+ * nothing above U+10FFFF. APFS refuses to create a name that is not, so an
+ * ill-formed name has to be escaped rather than stored.
+ */
+static bool casefold_utf8_valid(const char *s)
+{
+    const unsigned char *p = (const unsigned char *) s;
+
+    while (*p) {
+        unsigned char c = *p;
+        unsigned extra;
+        uint32_t cp;
+
+        if (c < 0x80) {
+            p++;
+            continue;
+        }
+        if (c >= 0xC2 && c <= 0xDF) {
+            extra = 1;
+            cp = c & 0x1Fu;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            extra = 2;
+            cp = c & 0x0Fu;
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            extra = 3;
+            cp = c & 0x07u;
+        } else {
+            /* 0x80-0xC1 is a stray continuation or an overlong two-byte lead;
+             * 0xF5-0xFF encodes above U+10FFFF.
+             */
+            return false;
+        }
+
+        for (unsigned i = 0; i < extra; i++) {
+            unsigned char cc = p[1 + i];
+            if ((cc & 0xC0u) != 0x80u)
+                return false;
+            cp = (cp << 6) | (cc & 0x3Fu);
+        }
+
+        /* Reject the forms that encode a code point in more bytes than
+         * needed, the UTF-16 surrogate range, and anything past the Unicode
+         * maximum. Each has more than one byte sequence otherwise, which
+         * would break the one-spelling-per-name property.
+         */
+        if (extra == 2 && cp < 0x800u)
+            return false;
+        if (extra == 3 && cp < 0x10000u)
+            return false;
+        if (cp >= 0xD800u && cp <= 0xDFFFu)
+            return false;
+        if (cp > 0x10FFFFu)
+            return false;
+
+        p += 1 + extra;
+    }
+    return true;
+}
+
+/* Budget oracle: the UTF-16 code units @s occupies, which is what the
+ * volume counts against its per-name limit, one per code point below
+ * U+10000 and two above. Kept in the test rather than the codec, whose
+ * production arithmetic must not be its own referee; a 0 means @s is not
+ * well-formed UTF-8, a name the volume will not hold literally.
+ */
+static size_t casefold_utf16_units(const char *s)
+{
+    const unsigned char *p = (const unsigned char *) s;
+    size_t units = 0;
+
+    if (!casefold_utf8_valid(s))
+        return 0;
+
+    while (*p) {
+        if (*p < 0x80)
+            p += 1;
+        else if (*p < 0xE0)
+            p += 2;
+        else if (*p < 0xF0)
+            p += 3;
+        else {
+            /* Above the BMP: encoded as a surrogate pair, so two units. */
+            p += 4;
+            units++;
+        }
+        units++;
+    }
+    return units;
+}
 
 /* Print a name so a failure is diagnosable when the bytes are not printable. */
 static void dump(const char *label, const char *s)

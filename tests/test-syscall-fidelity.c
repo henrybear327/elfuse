@@ -373,6 +373,32 @@ out:
     rmdir(dir_template);
 }
 
+/* Linux resolves a RESOLVE_BENEATH walk from / like one from any other
+ * directory (openat2(2)). The root is the one prefix a byte-wise "ends or
+ * continues with '/'" test can never accept, the next byte of a deeper path
+ * being that path's own leading separator.
+ */
+static void test_openat2_resolve_beneath_root_anchor(void)
+{
+    TEST("openat2 RESOLVE_BENEATH from /");
+
+    int dirfd = open("/", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        FAIL("open /");
+        return;
+    }
+    struct open_how how = {
+        .flags = O_RDONLY, .mode = 0, .resolve = RESOLVE_BENEATH};
+    long fd = syscall(SYS_openat2, dirfd, "etc", &how, sizeof(how));
+    close(dirfd);
+    if (fd < 0) {
+        FAIL("a walk from the root must resolve");
+        return;
+    }
+    close((int) fd);
+    PASS();
+}
+
 static void test_openat2_resolve_in_root_clamps_dotdot(void)
 {
     TEST("openat2 RESOLVE_IN_ROOT clamps .. at root");
@@ -1414,6 +1440,7 @@ int main(void)
     test_openat2_rejects_tmpfile_readonly();
     test_openat2_resolve_beneath();
     test_openat2_resolve_beneath_allows_internal_dotdot();
+    test_openat2_resolve_beneath_root_anchor();
     test_openat2_resolve_in_root_clamps_dotdot();
     test_openat2_resolve_no_symlinks_intermediate();
     test_openat2_resolve_no_symlinks_deep_path();

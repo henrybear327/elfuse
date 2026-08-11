@@ -1037,7 +1037,11 @@ int path_openat2_resolved_within_root(guest_fd_t dirfd,
         }
     }
 
-    if (!path_prefix_match(real_path, real_root, strlen(real_root))) {
+    /* @real_root is a host directory realpath, so it is "/" whenever the
+     * anchor is the root itself; path_prefix_match accepts only "/" there,
+     * which would read every walk from the root as an escape.
+     */
+    if (!path_under_prefix(real_path, real_root, strlen(real_root))) {
         errno = EXDEV;
         return -1;
     }

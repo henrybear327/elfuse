@@ -58,6 +58,13 @@ static inline int utf8_put(char *o, unsigned cp)
  * tell "exists as spelled" from "exists under a spelling that folded onto it".
  * FSOPT_NOFOLLOW because a symlink's own name is the question, not its
  * target's. Returns a pointer to static storage, valid until the next call.
+ *
+ * The reply is bounds-checked before the reference and the name are read:
+ * attr_dataoffset and attr_length come from the filesystem, and --sysroot may
+ * name an SMB or NFS mount that need not fill them the way APFS does. This
+ * mirrors casefold_attr_stored_name rather than calling it: of the three
+ * lanes including this header, only test-casefold-walk-host links
+ * casefold-walk.o.
  */
 static inline const char *disk_name(const char *dir, const char *name)
 {
@@ -72,7 +79,7 @@ static inline const char *disk_name(const char *dir, const char *name)
         attribute_set_t returned;
         attrreference_t name_ref;
         char name[1024];
-    } __attribute__((aligned(4), packed)) buf;
+    } __attribute__((aligned(4), packed)) buf = {0};
 
     if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int) sizeof(path))
         return NULL;
@@ -81,8 +88,33 @@ static inline const char *disk_name(const char *dir, const char *name)
         return NULL;
     if (!(buf.returned.commonattr & ATTR_CMN_NAME))
         return NULL;
-    snprintf(out, sizeof(out), "%s",
-             (const char *) &buf.name_ref + buf.name_ref.attr_dataoffset);
+
+    /* The reference itself is checked against the reply before its fields are
+     * read: a volume can set ATTR_CMN_NAME in returned yet write a reply too
+     * short to hold the reference, and buf past buf.length is only zeros.
+     */
+    size_t usable = buf.length < sizeof(buf) ? buf.length : sizeof(buf);
+    size_t ref_off =
+        (size_t) ((const char *) &buf.name_ref - (const char *) &buf);
+    if (ref_off > usable || usable - ref_off < sizeof(buf.name_ref))
+        return NULL;
+
+    /* attr_dataoffset is signed; a negative one points before the reference,
+     * outside anything the kernel wrote for this attribute.
+     */
+    if (buf.name_ref.attr_dataoffset <= 0 || buf.name_ref.attr_length == 0)
+        return NULL;
+    size_t name_off = ref_off + (size_t) buf.name_ref.attr_dataoffset;
+    if (name_off >= usable || buf.name_ref.attr_length > usable - name_off)
+        return NULL;
+
+    const char *stored = (const char *) &buf + name_off;
+    /* No NUL inside the declared length means the name is not a C string, and
+     * "%s" would read past what the volume wrote.
+     */
+    if (!memchr(stored, '\0', buf.name_ref.attr_length))
+        return NULL;
+    snprintf(out, sizeof(out), "%s", stored);
     return out;
 }
 

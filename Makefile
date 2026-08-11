@@ -243,131 +243,137 @@ $(BUILD_DIR)/test-hello: tests/hello.S tests/simple.ld | $(BUILD_DIR)
 
 # Pattern rule: cross-compile tests/*.c to static aarch64-linux binaries
 # -D_GNU_SOURCE exposes pipe2/dup3/O_DIRECT/etc. on glibc (musl exposes them by default)
+# -MMD tracks the shared test headers, so editing one rebuilds the binaries
+# that include it; guest tests compile and link in one gcc step, where -MMD
+# alone would name the dependency target after the object file, which matches
+# no target make knows, so -MT points it at the binary. The .d lands in
+# $(BUILD_DIR), which mk/common.mk already -includes.
+CROSS_TEST_CFLAGS = -D_GNU_SOURCE -static -O2 -MMD -MP -MT $@ -MF $@.d
 $(BUILD_DIR)/%: tests/%.c | $(BUILD_DIR)
 	@echo "  CROSS   $<"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $<
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $<
 
 # test-pthread needs -lpthread
 $(BUILD_DIR)/test-pthread: tests/test-pthread.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-sysroot-name-soak churns from worker threads plus forked children
 $(BUILD_DIR)/test-sysroot-name-soak: tests/test-sysroot-name-soak.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-process-lifecycle creates a worker to verify that process PIDs and
 # thread TIDs share one namespace-wide allocator across fork children.
 $(BUILD_DIR)/test-process-lifecycle: tests/test-process-lifecycle.c src/utils.h | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -Isrc -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -Isrc -o $@ $< -lpthread
 
 # test-sigsuspend parks two threads on one process-directed signal.
 $(BUILD_DIR)/test-sigsuspend: tests/test-sigsuspend.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -Itests -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -Itests -o $@ $< -lpthread
 
 # test-thread-churn creates >64 threads to force thread-table slot reuse.
 $(BUILD_DIR)/test-thread-churn: tests/test-thread-churn.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-cntvct-thread verifies cloned vCPUs inherit EL0 timer access.
 $(BUILD_DIR)/test-cntvct-thread: tests/test-cntvct-thread.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-poll uses pthread_kill to verify blocked read signal delivery.
 $(BUILD_DIR)/test-poll: tests/test-poll.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-tgkill-directed verifies thread-directed (pthread_kill/tgkill) routing.
 $(BUILD_DIR)/test-tgkill-directed: tests/test-tgkill-directed.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-sigtimedwait uses a sender pthread to verify thread-directed waits.
 $(BUILD_DIR)/test-sigtimedwait: tests/test-sigtimedwait.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-osync-requeue drives a raw FUTEX_REQUEUE against a plain-FUTEX_WAIT
 # waiter (musl unlock_requeue pattern) to guard the os_sync wake-at-source
 # degradation; needs -lpthread.
 $(BUILD_DIR)/test-osync-requeue: tests/test-osync-requeue.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-scm-creds blocks accept in a pthread while the listener option changes.
 $(BUILD_DIR)/test-scm-creds: tests/test-scm-creds.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-fault-signal-mt spawns pthreads that each take recoverable SIGSEGVs to
 # stress synchronous-fault delivery routing in a multi-threaded guest.
 $(BUILD_DIR)/test-fault-signal-mt: tests/test-fault-signal-mt.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-exit-group-worker has a non-main pthread issue exit_group while
 # spinner threads hammer memory, guarding the join-before-teardown order.
 $(BUILD_DIR)/test-exit-group-worker: tests/test-exit-group-worker.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-shim-cred-race spawns a pthread reader while the main thread
 # toggles setresuid; the reader spins on the identity fast path.
 $(BUILD_DIR)/test-shim-cred-race: tests/test-shim-cred-race.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-mprotect-mt stresses multi-vCPU mprotect under concurrent reader
 # threads to surface stale-TLB regressions.
 $(BUILD_DIR)/test-mprotect-mt: tests/test-mprotect-mt.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-shim-urandom-smp spawns N pthreads racing on a shared FD_URANDOM
 # slot to exercise the shim's LDXR/STXR head-advance under contention.
 $(BUILD_DIR)/test-shim-urandom-smp: tests/test-shim-urandom-smp.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-shim-urandom-toctou races mprotect(PROT_NONE) against urandom
 # reads to exercise the EL1 data abort recovery path. Needs pthreads.
 $(BUILD_DIR)/test-shim-urandom-toctou: tests/test-shim-urandom-toctou.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-fuse-basic runs a guest daemon thread and consumer in one process
 $(BUILD_DIR)/test-fuse-basic: tests/test-fuse-basic.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-sched-policy spawns a pthread to verify per-thread TID lookup
 $(BUILD_DIR)/test-sched-policy: tests/test-sched-policy.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-signalfd-hardening needs -lpthread for the worker-thread tid
 # regression case in test_rt_sigqueueinfo_rejects_thread_tid.
 $(BUILD_DIR)/test-signalfd-hardening: tests/test-signalfd-hardening.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-futex-waitv needs -lpthread for the host wake-thread used to unblock
 # the main thread's futex_waitv.
 $(BUILD_DIR)/test-futex-waitv: tests/test-futex-waitv.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -o $@ $< -lpthread
 
 # test-fork-lowbase must be a non-PIE ET_EXEC linked below ELF_DEFAULT_BASE so
 # nested forks exercise elf_load_min preservation across fork IPC.
 $(BUILD_DIR)/test-fork-lowbase: tests/test-fork-lowbase.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (low-base ET_EXEC)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -no-pie \
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -no-pie \
 		-Wl,-Ttext-segment=0x200000 -o $@ $<
 
 # test-lowbase-mem variants must be non-PIE ET_EXEC binaries linked below
@@ -375,12 +381,12 @@ $(BUILD_DIR)/test-fork-lowbase: tests/test-fork-lowbase.c | $(BUILD_DIR)
 # window at two offsets.
 $(BUILD_DIR)/test-lowbase-mem-200000: tests/test-lowbase-mem.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (low-base ET_EXEC @0x200000)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -no-pie \
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -no-pie \
 		-Wl,-Ttext-segment=0x200000 -o $@ $<
 
 $(BUILD_DIR)/test-lowbase-mem-300000: tests/test-lowbase-mem.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (low-base ET_EXEC @0x300000)"
-	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -no-pie \
+	$(Q)$(CROSS_COMPILE)gcc $(CROSS_TEST_CFLAGS) -no-pie \
 		-Wl,-Ttext-segment=0x300000 -o $@ $<
 
 # bench-hot-guard-glibc is the dynamic-glibc twin of bench-hot-guard.

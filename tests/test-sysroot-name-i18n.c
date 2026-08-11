@@ -75,37 +75,14 @@ static int write_file(const char *name, const char *text)
 static int read_back(const char *name, char *buf, size_t bufsz)
 {
     char path[PATH_MAX];
-    int fd;
-    ssize_t n;
 
     snprintf(path, sizeof(path), "%s/%s", DIR_I, name);
-    fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return -1;
-    n = read(fd, buf, bufsz - 1);
-    close(fd);
-    if (n < 0)
-        return -1;
-    buf[n] = '\0';
-    return 0;
+    return read_file_nul(path, buf, bufsz) < 0 ? -1 : 0;
 }
 
 static bool in_listing(const char *name)
 {
-    DIR *d = opendir(DIR_I);
-    struct dirent *de;
-    bool found = false;
-
-    if (!d)
-        return false;
-    while ((de = readdir(d))) {
-        if (!strcmp(de->d_name, name)) {
-            found = true;
-            break;
-        }
-    }
-    closedir(d);
-    return found;
+    return dir_contains(DIR_I, name);
 }
 
 /* Create one name, read it back, and require it to appear in a listing spelled

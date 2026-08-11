@@ -53,22 +53,6 @@ int passes = 0, fails = 0;
 
 #define DEEP_DIR "/Deep.A/Deep.B/Deep.C/Deep.D"
 
-static int bind_pathname(const char *path)
-{
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-        return -1;
-    struct sockaddr_un un = {0};
-    un.sun_family = AF_UNIX;
-    strncpy(un.sun_path, path, sizeof(un.sun_path) - 1);
-    if (bind(fd, (struct sockaddr *) &un, sizeof(un)) < 0 ||
-        listen(fd, 1) < 0) {
-        close(fd);
-        return -1;
-    }
-    return fd;
-}
-
 static bool getsockname_is(int fd, const char *expect)
 {
     struct sockaddr_un got = {0};
@@ -208,7 +192,7 @@ static int child_after_owner_mode(void)
              (mkdir("/Deep.A/Deep.B", 0755) == 0 || errno == EEXIST) &&
              (mkdir("/Deep.A/Deep.B/Deep.C", 0755) == 0 || errno == EEXIST) &&
              (mkdir(DEEP_DIR, 0755) == 0 || errno == EEXIST);
-        int fd = ok ? bind_pathname(DEEP_DIR "/Late.Sock") : -1;
+        int fd = ok ? unix_bind(DEEP_DIR "/Late.Sock", SOCK_STREAM, 1) : -1;
         ok = fd >= 0 && getsockname_is(fd, DEEP_DIR "/Late.Sock");
 
         const char *msg = ok ? "CHILD_AFTER=ok\n" : "CHILD_AFTER=failed\n";
@@ -247,7 +231,7 @@ int main(int argc, char **argv)
     EXPECT_TRUE(deep, "mkdir deep chain");
 
     TEST("parent over-long bind");
-    int pfd = bind_pathname(DEEP_DIR "/Parent.Sock");
+    int pfd = unix_bind(DEEP_DIR "/Parent.Sock", SOCK_STREAM, 1);
     EXPECT_TRUE(pfd >= 0, "parent bind+listen");
 
     TEST("parent getsockname before fork");
@@ -261,7 +245,7 @@ int main(int argc, char **argv)
     TEST("child binds over-long and exits");
     pid_t pid = fork();
     if (pid == 0) {
-        int cfd = bind_pathname(DEEP_DIR "/Child.Sock");
+        int cfd = unix_bind(DEEP_DIR "/Child.Sock", SOCK_STREAM, 1);
         _exit(cfd >= 0 ? 0 : 1);
     }
     int status = 0;

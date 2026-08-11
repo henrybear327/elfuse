@@ -362,17 +362,11 @@ static void section_alphabet(void)
 
 int main(int argc, char **argv)
 {
-    const char *base = argc > 1 ? argv[1] : getenv("TMPDIR");
     char tmpl[4096];
 
-    if (!base || base[0] == '\0')
-        base = "/tmp";
-    snprintf(tmpl, sizeof(tmpl), "%s/elfuse-probe-XXXXXX", base);
-    if (!mkdtemp(tmpl)) {
-        fprintf(stderr, "cannot create a scratch directory in %s: %s\n", base,
-                strerror(errno));
+    if (host_scratch_root(argv[0], "elfuse-probe", argc > 1 ? argv[1] : NULL,
+                          tmpl, sizeof(tmpl)) < 0)
         return 1;
-    }
     root = tmpl;
     printf("probing %s\n\n", root);
 

@@ -34,6 +34,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "host-test-util.h"
 #include "syscall/net-abi.h"
 #include "syscall/net-absock.h"
 #include "syscall/path.h"
@@ -82,19 +83,6 @@ int path_host_to_guest(const char *host_path, char *out, size_t outsz)
     (void) out;
     (void) outsz;
     return -1;
-}
-
-static int passes;
-static int fails;
-
-static void check(bool ok, const char *label, const char *detail)
-{
-    if (ok) {
-        passes++;
-    } else {
-        fails++;
-        fprintf(stderr, "FAIL %s: %s\n", label, detail);
-    }
 }
 
 /* The 32-bit FNV-1a the old tail used, kept here as the collision oracle. */
@@ -189,10 +177,10 @@ int main(void)
 
     printf("test-absock-names-host: derived socket names\n");
 
-    check(find_fnv32_collision(a, b, sizeof(a)), "collision search",
-          "no 32-bit collision in 400k candidates");
-    check(!strncmp(a, b, 20) && strcmp(a, b), "collision pair",
-          "pair must share 20 bytes and differ");
+    host_check(find_fnv32_collision(a, b, sizeof(a)), "collision search",
+               "no 32-bit collision in 400k candidates");
+    host_check(!strncmp(a, b, 20) && strcmp(a, b), "collision pair",
+               "pair must share 20 bytes and differ");
 
     /* The pair defeats a 32-bit tail by construction; the encoded names must
      * still differ.
@@ -201,17 +189,18 @@ int main(void)
                        sizeof(name_a));
     absock_encode_name(dir, (const uint8_t *) b, (uint32_t) strlen(b), name_b,
                        sizeof(name_b));
-    check(strcmp(name_a, name_b), "encode collision",
-          "32-bit-colliding names must encode differently");
-    check(strlen(name_a) < 104, "encode budget",
-          "encoded name must fit sun_path");
+    host_check(strcmp(name_a, name_b), "encode collision",
+               "32-bit-colliding names must encode differently");
+    host_check(strlen(name_a) < 104, "encode budget",
+               "encoded name must fit sun_path");
 
-    check(absock_link_name(dir, a, name_a, sizeof(name_a)) == 0 &&
-              absock_link_name(dir, b, name_b, sizeof(name_b)) == 0,
-          "link naming", "link name derivation failed");
-    check(strcmp(name_a, name_b), "link collision",
-          "32-bit-colliding paths must derive distinct links");
-    check(strlen(name_a) < 104, "link budget", "link name must fit sun_path");
+    host_check(absock_link_name(dir, a, name_a, sizeof(name_a)) == 0 &&
+                   absock_link_name(dir, b, name_b, sizeof(name_b)) == 0,
+               "link naming", "link name derivation failed");
+    host_check(strcmp(name_a, name_b), "link collision",
+               "32-bit-colliding paths must derive distinct links");
+    host_check(strlen(name_a) < 104, "link budget",
+               "link name must fit sun_path");
 
     /* Pid scoping: the marker that makes every exit-time unlink provably of
      * the process's own property.
@@ -220,8 +209,8 @@ int main(void)
         char marker[32];
 
         snprintf(marker, sizeof(marker), "/p%d-", (int) getpid());
-        check(strstr(name_a, marker) != NULL, "pid scope",
-              "link name must embed the minting pid");
+        host_check(strstr(name_a, marker) != NULL, "pid scope",
+                   "link name must embed the minting pid");
     }
 
     /* The digest never truncates: with a tight buffer the literal prefix
@@ -230,14 +219,12 @@ int main(void)
     {
         char tight[64];
 
-        check(absock_link_name(dir, a, tight, sizeof(tight)) == 0 &&
-                  strlen(tight) >= 16,
-              "tight budget", "digest must survive a tight buffer");
-        check(strspn(tight + strlen(tight) - 16, "0123456789abcdef") == 16,
-              "digest tail", "last 16 chars must be the hex digest");
+        host_check(absock_link_name(dir, a, tight, sizeof(tight)) == 0 &&
+                       strlen(tight) >= 16,
+                   "tight budget", "digest must survive a tight buffer");
+        host_check(strspn(tight + strlen(tight) - 16, "0123456789abcdef") == 16,
+                   "digest tail", "last 16 chars must be the hex digest");
     }
 
-    printf("test-absock-names-host: %d passed, %d failed - %s\n", passes, fails,
-           fails ? "FAIL" : "PASS");
-    return fails ? 1 : 0;
+    return host_summary("test-absock-names-host");
 }

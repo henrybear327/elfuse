@@ -721,13 +721,15 @@ test-sysroot-root: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-root
 	$(ELFUSE_BIN) --sysroot / $(BUILD_DIR)/test-sysroot-root
 
 ## Escape-shaped host names must mean themselves when there is no sysroot
-test-nosysroot-literal-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-nosysroot-literal-names
+# Same binary as test-sysroot-outside-names: one set of assertions, two
+# invocation modes, so the two halves of the scoping contract cannot drift.
+test-nosysroot-literal-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-outside-names
 	@set -e; \
 	tmpdir=$$(mktemp -d); \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	printf 'literal\n' > "$$tmpdir/.ef=464f4f"; \
 	printf 'other\n'   > "$$tmpdir/plain"; \
-	$(ELFUSE_BIN) $(BUILD_DIR)/test-nosysroot-literal-names "$$tmpdir"
+	$(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-outside-names "$$tmpdir" nosysroot
 
 ## Escape-shaped host names must mean themselves outside the sysroot
 test-sysroot-outside-names: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-outside-names

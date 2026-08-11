@@ -49,34 +49,6 @@ int passes = 0, fails = 0;
 #define NAME_B "Beta.Two"
 #define NAME_C "Gamma.Three"
 
-static int write_at(int dirfd, const char *name, const char *text)
-{
-    int fd = openat(dirfd, name, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    ssize_t n;
-
-    if (fd < 0)
-        return -1;
-    n = write(fd, text, strlen(text));
-    close(fd);
-    return n == (ssize_t) strlen(text) ? 0 : -1;
-}
-
-static int content_at(int dirfd, const char *name, const char *want)
-{
-    char buf[64];
-    int fd = openat(dirfd, name, O_RDONLY);
-    ssize_t n;
-
-    if (fd < 0)
-        return -1;
-    n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n < 0)
-        return -1;
-    buf[n] = '\0';
-    return !strcmp(buf, want) ? 0 : -1;
-}
-
 /* Outside the sysroot the guest is looking at the real host filesystem, where
  * elfuse owns nothing and must store names exactly as given. An absolute path
  * that falls through already does; a relative one has to agree, or the same
@@ -102,21 +74,22 @@ static void section_outside_sysroot(const char *host_dir)
     EXPECT_TRUE(chdir(host_dir) == 0, "chdir");
 
     TEST("create a mixed-case name there through a relative path");
-    EXPECT_TRUE(write_at(AT_FDCWD, "Outside.Rel", "rel") == 0, "create");
+    EXPECT_TRUE(file_write_at(AT_FDCWD, "Outside.Rel", "rel") == 0, "create");
 
     TEST("create a mixed-case name there through an absolute path");
     snprintf(abs, sizeof(abs), "%s/Outside.Abs", host_dir);
-    EXPECT_TRUE(write_at(AT_FDCWD, abs, "abs") == 0, "create");
+    EXPECT_TRUE(file_write_at(AT_FDCWD, abs, "abs") == 0, "create");
 
     /* Both spellings must reach both files: nothing was translated, so a
      * relative and an absolute name of the same file are the same name.
      */
     TEST("the relative-created name opens absolutely");
     snprintf(abs, sizeof(abs), "%s/Outside.Rel", host_dir);
-    EXPECT_TRUE(content_at(AT_FDCWD, abs, "rel") == 0, "content");
+    EXPECT_TRUE(file_content_at_is(AT_FDCWD, abs, "rel") == 0, "content");
 
     TEST("the absolute-created name opens relatively");
-    EXPECT_TRUE(content_at(AT_FDCWD, "Outside.Abs", "abs") == 0, "content");
+    EXPECT_TRUE(file_content_at_is(AT_FDCWD, "Outside.Abs", "abs") == 0,
+                "content");
 
     TEST("chdir back to the sysroot root");
     EXPECT_TRUE(chdir("/") == 0, "chdir");
@@ -195,7 +168,7 @@ static void section_openat2_no_symlinks(int dirfd)
 
         memset(longname, 'Q', 126);
         longname[126] = '\0';
-        if (write_at(dirfd, longname, "long") != 0) {
+        if (file_write_at(dirfd, longname, "long") != 0) {
             FAIL("create");
         } else {
             errno = 0;
@@ -211,7 +184,7 @@ static void section_openat2_no_symlinks(int dirfd)
         TEST("openat2 RESOLVE_NO_SYMLINKS opens a 255-byte escaped name");
         memset(longname, 'Q', 255);
         longname[255] = '\0';
-        if (write_at(dirfd, longname, "long") != 0) {
+        if (file_write_at(dirfd, longname, "long") != 0) {
             FAIL("create");
         } else {
             errno = 0;
@@ -240,9 +213,9 @@ static void section_trailing_slash(void)
     int fd;
 
     TEST("stage a file and a directory whose names need escaping");
-    EXPECT_TRUE(write_at(AT_FDCWD, DIR_V "/Slash.File", "f") == 0 &&
+    EXPECT_TRUE(file_write_at(AT_FDCWD, DIR_V "/Slash.File", "f") == 0 &&
                     (mkdir(DIR_V "/Slash.Dir", 0755) == 0 || errno == EEXIST) &&
-                    write_at(AT_FDCWD, DIR_V "/slashfile", "g") == 0,
+                    file_write_at(AT_FDCWD, DIR_V "/slashfile", "g") == 0,
                 "stage");
 
     TEST("open of an escaped file with a trailing slash is ENOTDIR");
@@ -307,8 +280,8 @@ static void section_below_non_directory(void)
     struct stat st;
 
     TEST("stage regular files to resolve below");
-    EXPECT_TRUE(write_at(AT_FDCWD, DIR_V "/notdirfile", "f") == 0 &&
-                    write_at(AT_FDCWD, DIR_V "/Not.Dir.File", "g") == 0,
+    EXPECT_TRUE(file_write_at(AT_FDCWD, DIR_V "/notdirfile", "f") == 0 &&
+                    file_write_at(AT_FDCWD, DIR_V "/Not.Dir.File", "g") == 0,
                 "stage");
 
     TEST("stat below a fold-stable regular file is ENOTDIR");
@@ -353,13 +326,13 @@ int main(int argc, char **argv)
     /* Created absolutely, reopened relatively. */
     snprintf(abs, sizeof(abs), "%s/%s", DIR_V, NAME_A);
     TEST("create through an absolute path");
-    EXPECT_TRUE(write_at(AT_FDCWD, abs, "abs") == 0, "create");
+    EXPECT_TRUE(file_write_at(AT_FDCWD, abs, "abs") == 0, "create");
 
     TEST("chdir into the directory");
     EXPECT_TRUE(chdir(DIR_V) == 0, "chdir");
 
     TEST("the same file opens through a cwd-relative name");
-    EXPECT_TRUE(content_at(AT_FDCWD, NAME_A, "abs") == 0,
+    EXPECT_TRUE(file_content_at_is(AT_FDCWD, NAME_A, "abs") == 0,
                 "relative spelling reached a different file");
 
     /* An O_EXCL create of a name that already exists must fail, whichever way
@@ -372,11 +345,11 @@ int main(int argc, char **argv)
 
     /* Created relatively, reopened absolutely. */
     TEST("create through a cwd-relative name");
-    EXPECT_TRUE(write_at(AT_FDCWD, NAME_B, "rel") == 0, "create");
+    EXPECT_TRUE(file_write_at(AT_FDCWD, NAME_B, "rel") == 0, "create");
 
     snprintf(abs, sizeof(abs), "%s/%s", DIR_V, NAME_B);
     TEST("the same file opens through an absolute path");
-    EXPECT_TRUE(content_at(AT_FDCWD, abs, "rel") == 0,
+    EXPECT_TRUE(file_content_at_is(AT_FDCWD, abs, "rel") == 0,
                 "absolute spelling reached a different file");
 
     /* The directory holds one entry per guest name and no more: a spelling that
@@ -394,15 +367,15 @@ int main(int argc, char **argv)
         "open dirfd");
 
     TEST("create through a dirfd");
-    EXPECT_TRUE(write_at(dirfd, NAME_C, "dfd") == 0, "create");
+    EXPECT_TRUE(file_write_at(dirfd, NAME_C, "dfd") == 0, "create");
 
     snprintf(abs, sizeof(abs), "%s/%s", DIR_V, NAME_C);
     TEST("the dirfd-created file opens absolutely");
-    EXPECT_TRUE(content_at(AT_FDCWD, abs, "dfd") == 0,
+    EXPECT_TRUE(file_content_at_is(AT_FDCWD, abs, "dfd") == 0,
                 "dirfd spelling reached a different file");
 
     TEST("the absolute-created file opens through the dirfd");
-    EXPECT_TRUE(content_at(dirfd, NAME_A, "abs") == 0,
+    EXPECT_TRUE(file_content_at_is(dirfd, NAME_A, "abs") == 0,
                 "dirfd lookup reached a different file");
 
     TEST("three names, three entries");
@@ -419,7 +392,8 @@ int main(int argc, char **argv)
     EXPECT_TRUE(renameat(dirfd, NAME_C, dirfd, "Delta.Four") == 0, "renameat");
     TEST("the renamed file opens absolutely under its new name");
     snprintf(abs, sizeof(abs), "%s/Delta.Four", DIR_V);
-    EXPECT_TRUE(content_at(AT_FDCWD, abs, "dfd") == 0, "renamed content");
+    EXPECT_TRUE(file_content_at_is(AT_FDCWD, abs, "dfd") == 0,
+                "renamed content");
 
     TEST("mkdirat through the dirfd");
     EXPECT_TRUE(mkdirat(dirfd, "Sub.Dir", 0755) == 0, "mkdirat");
@@ -455,11 +429,11 @@ int main(int argc, char **argv)
             mkdirat(dirfd, "Walk.Dir", 0755) == 0 &&
                 (sub = openat(dirfd, "Walk.Dir", O_RDONLY | O_DIRECTORY)) >=
                     0 &&
-                write_at(sub, "Leaf.File", "leaf") == 0 &&
+                file_write_at(sub, "Leaf.File", "leaf") == 0 &&
                 mkdirat(dirfd, "walkdir", 0755) == 0 &&
                 (plain = openat(dirfd, "walkdir", O_RDONLY | O_DIRECTORY)) >=
                     0 &&
-                write_at(plain, "leaf", "plain") == 0 &&
+                file_write_at(plain, "leaf", "plain") == 0 &&
                 symlinkat("walkdir", dirfd, "Walk.Link") == 0 &&
                 symlinkat("/proc", dirfd, "Cross.Link") == 0,
             "stage");

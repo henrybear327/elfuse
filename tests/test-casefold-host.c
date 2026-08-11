@@ -43,20 +43,6 @@
 #include "host-test-util.h"
 #include "syscall/casefold.h"
 
-static int passes;
-static int fails;
-
-static void ok(void)
-{
-    passes++;
-}
-
-static void fail(const char *label, const char *detail)
-{
-    fails++;
-    fprintf(stderr, "FAIL %s: %s\n", label, detail);
-}
-
 /* Print a name so a failure is diagnosable when the bytes are not printable. */
 static void dump(const char *label, const char *s)
 {
@@ -83,33 +69,33 @@ static void check_roundtrip(const char *label, const char *guest)
     size_t units;
 
     if (casefold_escape(guest, enc, sizeof(enc)) < 0) {
-        fail(label, "escape failed");
+        host_fail(label, "escape failed");
         dump("guest", guest);
         return;
     }
     if (!casefold_is_escaped(enc)) {
-        fail(label, "encoded form is not recognized as an escape");
+        host_fail(label, "encoded form is not recognized as an escape");
         dump("encoded", enc);
         return;
     }
     units = casefold_utf16_units(enc);
     if (units == 0 || units > CASEFOLD_UNIT_MAX) {
-        fail(label, "encoded form exceeds the host per-name budget");
+        host_fail(label, "encoded form exceeds the host per-name budget");
         fprintf(stderr, "  units = %zu\n", units);
         return;
     }
     if (casefold_to_guest(enc, dec, sizeof(dec)) < 0) {
-        fail(label, "decode failed");
+        host_fail(label, "decode failed");
         dump("encoded", enc);
         return;
     }
     if (strcmp(dec, guest)) {
-        fail(label, "round trip changed the name");
+        host_fail(label, "round trip changed the name");
         dump("guest", guest);
         dump("decoded", dec);
         return;
     }
-    ok();
+    host_ok();
 }
 
 static void check_not_escaped(const char *label, const char *host)
@@ -117,7 +103,7 @@ static void check_not_escaped(const char *label, const char *host)
     char out[CASEFOLD_HOST_NAME_MAX + 1];
 
     if (casefold_is_escaped(host)) {
-        fail(label, "malformed escape was accepted");
+        host_fail(label, "malformed escape was accepted");
         dump("host", host);
         return;
     }
@@ -125,20 +111,21 @@ static void check_not_escaped(const char *label, const char *host)
      * report a name the guest cannot open.
      */
     if (casefold_to_guest(host, out, sizeof(out)) < 0 || strcmp(out, host)) {
-        fail(label, "unrecognized name did not pass through unchanged");
+        host_fail(label, "unrecognized name did not pass through unchanged");
         return;
     }
-    ok();
+    host_ok();
 }
 
 static void check_needs_escape(const char *label, const char *name, bool want)
 {
     if (casefold_needs_escape(name) != want) {
-        fail(label, want ? "should need escaping" : "should not need escaping");
+        host_fail(label,
+                  want ? "should need escaping" : "should not need escaping");
         dump("name", name);
         return;
     }
-    ok();
+    host_ok();
 }
 
 /* casefold_utf16_units spends no budget on a name that is not well-formed
@@ -149,11 +136,12 @@ static void check_needs_escape(const char *label, const char *name, bool want)
 static void check_utf8(const char *label, const char *s, bool want)
 {
     if ((casefold_utf16_units(s) > 0) != want) {
-        fail(label, want ? "should be valid UTF-8" : "should be invalid UTF-8");
+        host_fail(label,
+                  want ? "should be valid UTF-8" : "should be invalid UTF-8");
         dump("name", s);
         return;
     }
-    ok();
+    host_ok();
 }
 
 static void check_units(const char *label, const char *s, size_t want)
@@ -161,11 +149,11 @@ static void check_units(const char *label, const char *s, size_t want)
     size_t got = casefold_utf16_units(s);
 
     if (got != want) {
-        fail(label, "wrong UTF-16 unit count");
+        host_fail(label, "wrong UTF-16 unit count");
         fprintf(stderr, "  got %zu, expected %zu\n", got, want);
         return;
     }
-    ok();
+    host_ok();
 }
 
 static void fill(char *buf, size_t n, char c)
@@ -192,36 +180,39 @@ static void section_golden(void)
         bool literal = !strcmp(v->guest, v->host);
 
         if (casefold_needs_escape(v->guest) == literal) {
-            fail(v->label,
-                 literal ? "should be stored literally" : "should be escaped");
+            host_fail(v->label, literal ? "should be stored literally"
+                                        : "should be escaped");
             dump("guest", v->guest);
             continue;
         }
         if (!literal) {
             if (casefold_escape(v->guest, host, sizeof(host)) < 0) {
-                fail(v->label, "escape failed");
+                host_fail(v->label, "escape failed");
                 dump("guest", v->guest);
                 continue;
             }
             if (strcmp(host, v->host)) {
-                fail(v->label, "on-disk spelling moved off the frozen bytes");
+                host_fail(v->label,
+                          "on-disk spelling moved off the frozen bytes");
                 dump("expected", v->host);
                 dump("got", host);
                 continue;
             }
             if (!casefold_is_escaped(v->host)) {
-                fail(v->label, "frozen spelling not recognized as an escape");
+                host_fail(v->label,
+                          "frozen spelling not recognized as an escape");
                 continue;
             }
         }
         if (casefold_to_guest(v->host, guest, sizeof(guest)) < 0 ||
             strcmp(guest, v->guest)) {
-            fail(v->label, "frozen spelling did not decode to the guest name");
+            host_fail(v->label,
+                      "frozen spelling did not decode to the guest name");
             dump("host", v->host);
             dump("decoded", guest);
             continue;
         }
-        ok();
+        host_ok();
     }
 
     /* The long-tier budget arithmetic, pinned on the frozen strings: symbols
@@ -260,10 +251,10 @@ static void section_boundaries(void)
     fill(name, CASEFOLD_GUEST_NAME_MAX, 'X');
     if (casefold_escape(name, enc, sizeof(enc)) == 0 &&
         casefold_utf16_units(enc) == 175 && CASEFOLD_UNIT_MAX - 175 == 80)
-        ok();
+        host_ok();
     else
-        fail("worst-case escape costs 175 of 255 units",
-             "the longest guest name no longer costs 175 units");
+        host_fail("worst-case escape costs 175 of 255 units",
+                  "the longest guest name no longer costs 175 units");
 
     /* The tier is picked by length alone, so a short name is never spelled with
      * symbols and a long one never with hex. That is half of what makes each
@@ -272,16 +263,16 @@ static void section_boundaries(void)
     fill(name, CASEFOLD_HEX_MAX, 'x');
     if (casefold_escape(name, enc, sizeof(enc)) == 0 &&
         (unsigned char) enc[CASEFOLD_PREFIX_LEN] < 0x80)
-        ok();
+        host_ok();
     else
-        fail("hex tier uses hex", "short name did not use the hex tier");
+        host_fail("hex tier uses hex", "short name did not use the hex tier");
     fill(name, CASEFOLD_HEX_MAX + 1, 'x');
     if (casefold_escape(name, enc, sizeof(enc)) == 0 &&
         (unsigned char) enc[CASEFOLD_PREFIX_LEN] >= 0x80)
-        ok();
+        host_ok();
     else
-        fail("symbol tier uses symbols",
-             "long name did not use the symbol tier");
+        host_fail("symbol tier uses symbols",
+                  "long name did not use the symbol tier");
 
     /* "." and ".." name no entry, so no escape can stand for one. Rejecting
      * them keeps every name the codec accepts one that has a slot to live in;
@@ -289,13 +280,13 @@ static void section_boundaries(void)
      * directory can hold.
      */
     if (casefold_escape(".", enc, sizeof(enc)) < 0 && errno == EINVAL)
-        ok();
+        host_ok();
     else
-        fail("dot is refused", "\".\" was escaped");
+        host_fail("dot is refused", "\".\" was escaped");
     if (casefold_escape("..", enc, sizeof(enc)) < 0 && errno == EINVAL)
-        ok();
+        host_ok();
     else
-        fail("dotdot is refused", "\"..\" was escaped");
+        host_fail("dotdot is refused", "\"..\" was escaped");
 
     /* A guest name over NAME_MAX cannot reach a syscall, but the codec must
      * reject it rather than truncate.
@@ -305,31 +296,33 @@ static void section_boundaries(void)
     memset(over, 'x', sizeof(over) - 1);
     over[sizeof(over) - 1] = '\0';
     if (casefold_escape(over, enc, sizeof(enc)) < 0 && errno == EINVAL)
-        ok();
+        host_ok();
     else
-        fail("over-long guest name", "should be rejected with EINVAL");
+        host_fail("over-long guest name", "should be rejected with EINVAL");
 
     /* A caller buffer too small is ENAMETOOLONG, which is distinct from "this
      * name has no representation"; the latter cannot happen.
      */
     fill(name, 8, 'x');
     if (casefold_escape(name, enc, 4) < 0 && errno == ENAMETOOLONG)
-        ok();
+        host_ok();
     else
-        fail("short output buffer", "should be rejected with ENAMETOOLONG");
+        host_fail("short output buffer",
+                  "should be rejected with ENAMETOOLONG");
 
     /* '/' separates components and so never appears inside one. Encoding it
      * would produce a name no directory could hold, so it is refused outright
      * rather than escaped.
      */
     if (casefold_escape("a/z", enc, sizeof(enc)) < 0 && errno == EINVAL)
-        ok();
+        host_ok();
     else
-        fail("component containing a slash", "should be rejected with EINVAL");
+        host_fail("component containing a slash",
+                  "should be rejected with EINVAL");
     if (casefold_escape("", enc, sizeof(enc)) < 0 && errno == EINVAL)
-        ok();
+        host_ok();
     else
-        fail("empty component", "should be rejected with EINVAL");
+        host_fail("empty component", "should be rejected with EINVAL");
 }
 
 static void section_shapes(void)
@@ -378,10 +371,10 @@ static void section_shapes(void)
     if (casefold_escape(".ef=464f4f", enc, sizeof(enc)) == 0 &&
         casefold_to_guest(enc, dec, sizeof(dec)) == 0 &&
         !strcmp(dec, ".ef=464f4f") && strcmp(dec, "FOO"))
-        ok();
+        host_ok();
     else
-        fail("escape-shaped name is not confused with FOO",
-             "decoded to the wrong name");
+        host_fail("escape-shaped name is not confused with FOO",
+                  "decoded to the wrong name");
 
     /* Which names must be escaped at all. Lowercase ASCII is the fixed point
      * that can be stored literally; everything else cannot.
@@ -499,8 +492,9 @@ static void section_i18n(void)
         if (casefold_needs_escape(i18n_corpus[i]))
             check_roundtrip("i18n round trip", i18n_corpus[i]);
         else
-            ok(); /* fold-stable names are stored literally, nothing to encode
-                   */
+            host_ok(); /* fold-stable names are stored literally, nothing to
+                        * encode
+                        */
     }
 
     /* Distinct names must encode distinctly, or two files would share a slot.
@@ -512,11 +506,11 @@ static void section_i18n(void)
         if (!casefold_needs_escape(i18n_corpus[i]))
             continue;
         /* An encoder that refused these names would skip every comparison and
-         * reach the ok() below having proved nothing, so a refusal is the
+         * reach the host_ok() below having proved nothing, so a refusal is the
          * failure rather than a reason to move on.
          */
         if (casefold_escape(i18n_corpus[i], a, sizeof(a)) < 0) {
-            fail("distinct names encode distinctly", "escape failed");
+            host_fail("distinct names encode distinctly", "escape failed");
             dump("name", i18n_corpus[i]);
             return;
         }
@@ -527,20 +521,20 @@ static void section_i18n(void)
             if (!casefold_needs_escape(i18n_corpus[j]))
                 continue;
             if (casefold_escape(i18n_corpus[j], b, sizeof(b)) < 0) {
-                fail("distinct names encode distinctly", "escape failed");
+                host_fail("distinct names encode distinctly", "escape failed");
                 dump("name", i18n_corpus[j]);
                 return;
             }
             if (!strcmp(a, b)) {
-                fail("distinct names encode distinctly",
-                     "two names share an encoding");
+                host_fail("distinct names encode distinctly",
+                          "two names share an encoding");
                 dump("first", i18n_corpus[i]);
                 dump("second", i18n_corpus[j]);
                 return;
             }
         }
     }
-    ok();
+    host_ok();
 }
 
 /* ---------------------------------------------------------- filesystem arm */
@@ -570,7 +564,7 @@ static void section_alphabet(const char *root)
 
     snprintf(dir, sizeof(dir), "%s/alphabet", root);
     if (mkdir(dir, 0755) < 0) {
-        fail("alphabet directory", strerror(errno));
+        host_fail("alphabet directory", strerror(errno));
         return;
     }
     for (unsigned v = 0; v < 4096; v++) {
@@ -582,14 +576,14 @@ static void section_alphabet(const char *root)
         name[len] = '\0';
         rc = create_in(dir, name);
         if (rc < 0) {
-            fail("payload alphabet is fold-free", strerror(-rc));
+            host_fail("payload alphabet is fold-free", strerror(-rc));
             fprintf(stderr, "  symbol %u (U+%04X)\n", v, cp);
             return;
         }
         created++;
     }
     if (created == 4096)
-        ok();
+        host_ok();
 
     int seen = 0;
     DIR *d = opendir(dir);
@@ -601,9 +595,9 @@ static void section_alphabet(const char *root)
     if (d)
         closedir(d);
     if (seen == 4096) {
-        ok();
+        host_ok();
     } else {
-        fail("payload alphabet survives a listing", "wrong entry count");
+        host_fail("payload alphabet survives a listing", "wrong entry count");
         fprintf(stderr, "  listed %d of 4096\n", seen);
     }
 }
@@ -620,7 +614,7 @@ static void section_accept(const char *root)
 
     snprintf(dir, sizeof(dir), "%s/accept", root);
     if (mkdir(dir, 0755) < 0) {
-        fail("acceptance directory", strerror(errno));
+        host_fail("acceptance directory", strerror(errno));
         return;
     }
 
@@ -652,7 +646,7 @@ static void section_accept(const char *root)
 
             if (casefold_needs_escape(names[k])) {
                 if (casefold_escape(names[k], host, sizeof(host)) < 0) {
-                    fail("encoder accepts every byte", "escape failed");
+                    host_fail("encoder accepts every byte", "escape failed");
                     dump("name", names[k]);
                     bad = true;
                     break;
@@ -668,9 +662,9 @@ static void section_accept(const char *root)
              */
             rc = create_in(dir, host);
             if (rc < 0) {
-                fail("encoder output is creatable",
-                     rc == -EEXIST ? "two names share one entry"
-                                   : strerror(-rc));
+                host_fail("encoder output is creatable",
+                          rc == -EEXIST ? "two names share one entry"
+                                        : strerror(-rc));
                 dump("guest", names[k]);
                 dump("host", host);
                 bad = true;
@@ -686,7 +680,7 @@ static void section_accept(const char *root)
 
         if (casefold_needs_escape(i18n_corpus[i])) {
             if (casefold_escape(i18n_corpus[i], host, sizeof(host)) < 0) {
-                fail("encoder accepts the i18n corpus", "escape failed");
+                host_fail("encoder accepts the i18n corpus", "escape failed");
                 bad = true;
                 break;
             }
@@ -695,8 +689,9 @@ static void section_accept(const char *root)
         }
         rc = create_in(dir, host);
         if (rc < 0) {
-            fail("i18n encoder output is creatable",
-                 rc == -EEXIST ? "two names share one entry" : strerror(-rc));
+            host_fail(
+                "i18n encoder output is creatable",
+                rc == -EEXIST ? "two names share one entry" : strerror(-rc));
             dump("guest", i18n_corpus[i]);
             dump("host", host);
             bad = true;
@@ -720,7 +715,7 @@ static void section_accept(const char *root)
 
         if (casefold_needs_escape(guest)) {
             if (casefold_escape(guest, host, sizeof(host)) < 0) {
-                fail("encoder handles every length", "escape failed");
+                host_fail("encoder handles every length", "escape failed");
                 fprintf(stderr, "  length %zu\n", n);
                 bad = true;
                 break;
@@ -730,7 +725,8 @@ static void section_accept(const char *root)
         }
         rc = create_in(dir, host);
         if (rc < 0 && rc != -EEXIST) {
-            fail("encoder output is creatable at every length", strerror(-rc));
+            host_fail("encoder output is creatable at every length",
+                      strerror(-rc));
             fprintf(stderr, "  length %zu\n", n);
             dump("host", host);
             bad = true;
@@ -738,7 +734,7 @@ static void section_accept(const char *root)
     }
 
     if (!bad)
-        ok();
+        host_ok();
 }
 
 /* The three volume behaviors the resolver is built on. If a macOS release
@@ -754,20 +750,20 @@ static void section_volume(const char *root)
 
     snprintf(dir, sizeof(dir), "%s/volume", root);
     if (mkdir(dir, 0755) < 0) {
-        fail("volume directory", strerror(errno));
+        host_fail("volume directory", strerror(errno));
         return;
     }
     if (create_in(dir, "Mixed.Case") < 0) {
-        fail("volume fixture", strerror(errno));
+        host_fail("volume fixture", strerror(errno));
         return;
     }
 
     spelling = disk_name(dir, "Mixed.Case");
     if (spelling && !strcmp(spelling, "Mixed.Case"))
-        ok();
+        host_ok();
     else
-        fail("getattrlistat reports the on-disk spelling",
-             "probe did not return the name as stored");
+        host_fail("getattrlistat reports the on-disk spelling",
+                  "probe did not return the name as stored");
 
     /* On a folding volume the probe is what separates "absent" from "present
      * under another spelling"; on a case-sensitive one the wrong case is simply
@@ -775,21 +771,21 @@ static void section_volume(const char *root)
      */
     spelling = disk_name(dir, "mixed.case");
     if (!spelling || strcmp(spelling, "mixed.case"))
-        ok();
+        host_ok();
     else
-        fail("a wrong-case spelling is never reported as exact",
-             "probe accepted a folded spelling");
+        host_fail("a wrong-case spelling is never reported as exact",
+                  "probe accepted a folded spelling");
 
     snprintf(path, sizeof(path), "%s/mixed.case", dir);
     if (realpath(path, real)) {
         const char *base = strrchr(real, '/');
         if (base && !strcmp(base + 1, "Mixed.Case"))
-            ok();
+            host_ok();
         else
-            fail("realpath returns the true on-disk case", real);
+            host_fail("realpath returns the true on-disk case", real);
     } else {
         /* A case-sensitive volume has no such entry at all, which is fine. */
-        ok();
+        host_ok();
     }
 
     /* The per-name budget is counted in UTF-16 units, not bytes: this is what
@@ -801,20 +797,20 @@ static void section_volume(const char *root)
         len += utf8_put(wide + len, 0x6587);
     wide[len] = '\0';
     if (create_in(dir, wide) == 0)
-        ok();
+        host_ok();
     else
-        fail("a 255-unit BMP name is creatable",
-             "the per-name limit is not counted in UTF-16 units");
+        host_fail("a 255-unit BMP name is creatable",
+                  "the per-name limit is not counted in UTF-16 units");
 
     len = 0;
     for (int i = 0; i < CASEFOLD_UNIT_MAX + 1; i++)
         len += utf8_put(wide + len, 0x6587);
     wide[len] = '\0';
     if (create_in(dir, wide) == -ENAMETOOLONG)
-        ok();
+        host_ok();
     else
-        fail("a 256-unit name is refused",
-             "the per-name limit is not 255 UTF-16 units");
+        host_fail("a 256-unit name is refused",
+                  "the per-name limit is not 255 UTF-16 units");
 
     /* The worst case the encoder can produce, created for real. */
     char guest[CASEFOLD_GUEST_NAME_MAX + 1];
@@ -822,15 +818,14 @@ static void section_volume(const char *root)
     fill(guest, CASEFOLD_GUEST_NAME_MAX, 'Q');
     if (casefold_escape(guest, host, sizeof(host)) == 0 &&
         create_in(dir, host) == 0)
-        ok();
+        host_ok();
     else
-        fail("the longest encoded name is creatable",
-             "the symbol tier does not fit the budget");
+        host_fail("the longest encoded name is creatable",
+                  "the symbol tier does not fit the budget");
 }
 
 int main(int argc, char **argv)
 {
-    const char *base = argc > 1 ? argv[1] : getenv("TMPDIR");
     char root[4096];
 
     section_golden();
@@ -839,23 +834,14 @@ int main(int argc, char **argv)
     section_utf8();
     section_i18n();
 
-    if (!base || base[0] == '\0')
-        base = "/tmp";
-    snprintf(root, sizeof(root), "%s/elfuse-casefold-XXXXXX", base);
-    if (!mkdtemp(root)) {
-        fprintf(stderr,
-                "test-casefold-host: cannot create a scratch directory in "
-                "%s: %s\n",
-                base, strerror(errno));
+    if (host_scratch_root(argv[0], "elfuse-casefold", argc > 1 ? argv[1] : NULL,
+                          root, sizeof(root)) < 0)
         return 1;
-    }
 
     section_alphabet(root);
     section_accept(root);
     section_volume(root);
     remove_tree(root);
 
-    printf("test-casefold-host: %d passed, %d failed - %s\n", passes, fails,
-           fails ? "FAIL" : "PASS");
-    return fails ? 1 : 0;
+    return host_summary("test-casefold-host");
 }

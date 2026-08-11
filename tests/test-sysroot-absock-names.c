@@ -48,24 +48,6 @@ int passes = 0, fails = 0;
 
 #define DIR_S "/sockdir"
 
-static int bind_listener(const char *path)
-{
-    struct sockaddr_un sa;
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-
-    if (fd < 0)
-        return -1;
-    memset(&sa, 0, sizeof(sa));
-    sa.sun_family = AF_UNIX;
-    snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", path);
-    if (bind(fd, (struct sockaddr *) &sa, sizeof(sa)) != 0 ||
-        listen(fd, 4) != 0) {
-        close(fd);
-        return -1;
-    }
-    return fd;
-}
-
 /* Connect to @path, send @token, report what the peer heard through
  * @accepted on the listener side.
  */
@@ -81,23 +63,6 @@ static int connect_send(const char *path, char token)
     snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", path);
     if (connect(fd, (struct sockaddr *) &sa, sizeof(sa)) != 0 ||
         write(fd, &token, 1) != 1) {
-        close(fd);
-        return -1;
-    }
-    return fd;
-}
-
-static int bind_dgram(const char *path)
-{
-    struct sockaddr_un sa;
-    int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
-
-    if (fd < 0)
-        return -1;
-    memset(&sa, 0, sizeof(sa));
-    sa.sun_family = AF_UNIX;
-    snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", path);
-    if (bind(fd, (struct sockaddr *) &sa, sizeof(sa)) != 0) {
         close(fd);
         return -1;
     }
@@ -135,7 +100,7 @@ int main(void)
      */
     TEST("bind creates a socket inside the sysroot");
     snprintf(path, sizeof(path), "%s/My.Sock", DIR_S);
-    lfd = bind_listener(path);
+    lfd = unix_bind(path, SOCK_STREAM, 4);
     EXPECT_TRUE(lfd >= 0, "bind + listen");
 
     TEST("getsockname returns the exact guest bytes");
@@ -188,8 +153,8 @@ int main(void)
 
         snprintf(lower, sizeof(lower), "%s/sock", DIR_S);
         snprintf(upper, sizeof(upper), "%s/Sock", DIR_S);
-        lfd2 = bind_listener(lower);
-        lfd3 = bind_listener(upper);
+        lfd2 = unix_bind(lower, SOCK_STREAM, 4);
+        lfd3 = unix_bind(upper, SOCK_STREAM, 4);
         if (lfd2 < 0 || lfd3 < 0) {
             FAIL("bind pair");
         } else {
@@ -231,8 +196,8 @@ int main(void)
 
         snprintf(path, sizeof(path), "%s/Recv.Sock", DIR_S);
         snprintf(sender, sizeof(sender), "%s/Sender.Sock", DIR_S);
-        rfd = bind_dgram(path);
-        sfd = bind_dgram(sender);
+        rfd = unix_bind(path, SOCK_DGRAM, 0);
+        sfd = unix_bind(sender, SOCK_DGRAM, 0);
         if (rfd < 0 || sfd < 0) {
             FAIL("bind dgram pair");
         } else {
@@ -288,7 +253,7 @@ int main(void)
             snprintf(path, sizeof(path),
                      "%s/Very.Long.Mixed.Case.Directory.For.Escapes/S.sock",
                      DIR_S);
-            lfd4 = bind_listener(path);
+            lfd4 = unix_bind(path, SOCK_STREAM, 4);
             if (lfd4 < 0) {
                 FAIL("bind");
             } else {
@@ -375,7 +340,7 @@ int main(void)
 
         snprintf(path, sizeof(path),
                  "%s/Very.Long.Mixed.Case.Directory.For.Escapes/F.sock", DIR_S);
-        lfd5 = bind_listener(path);
+        lfd5 = unix_bind(path, SOCK_STREAM, 4);
         if (lfd5 < 0) {
             FAIL("bind");
         } else {

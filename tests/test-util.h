@@ -13,28 +13,16 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <unistd.h>
 
+#include "linux-openat2.h"
 #include "raw-syscall.h"
-
-/* openat2(2) scaffolding for tests that drive the second walker directly.
- * Static libcs predate the syscall's wrapper and uapi header, so the number,
- * the struct, and the resolve bits have to be spelled out by hand; they live
- * here once so every test that needs them agrees on the ABI.
- */
-#ifndef SYS_openat2
-#define SYS_openat2 437
-#endif
-
-struct open_how {
-    unsigned long long flags, mode, resolve;
-};
-
-#define RESOLVE_NO_XDEV 0x01
-#define RESOLVE_NO_SYMLINKS 0x04
 
 static inline ssize_t read_fd_all_nul(int fd, char *buf, size_t bufsz)
 {
@@ -137,6 +125,38 @@ static inline int file_content_is(const char *path, const char *want)
     return strcmp(buf, want) ? -1 : 0;
 }
 
+/* Dirfd-relative siblings of file_write and file_content_is, for lanes that
+ * address fixtures through a descriptor rather than a full path.
+ */
+static inline int file_write_at(int dirfd, const char *name, const char *text)
+{
+    int fd = openat(dirfd, name, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    int rc;
+
+    if (fd < 0)
+        return -1;
+    rc = write_fd_all(fd, text, strlen(text));
+    close(fd);
+    return rc;
+}
+
+static inline int file_content_at_is(int dirfd,
+                                     const char *name,
+                                     const char *want)
+{
+    char buf[256];
+    int fd = openat(dirfd, name, O_RDONLY);
+    ssize_t n;
+
+    if (fd < 0)
+        return -1;
+    n = read_fd_all_nul(fd, buf, sizeof(buf));
+    close(fd);
+    if (n < 0)
+        return -1;
+    return strcmp(buf, want) ? -1 : 0;
+}
+
 /* 0 when @path begins with @want. For fixtures staged by a shell recipe, which
  * appends a newline that the assertion is not about.
  */
@@ -166,6 +186,10 @@ static inline int dir_entry_count(const char *dir)
     return n;
 }
 
+/* Membership only; an unopenable @dir reads as absent, so a negative-only
+ * assertion must pair with a positive one or use dir_count_name, whose -1
+ * keeps "cannot read" distinct from "not present".
+ */
 static inline bool dir_contains(const char *dir, const char *name)
 {
     DIR *d = opendir(dir);
@@ -182,6 +206,59 @@ static inline bool dir_contains(const char *dir, const char *name)
     }
     closedir(d);
     return found;
+}
+
+/* Occurrences of @name in @dir, or -1 if it cannot be opened. dir_contains
+ * answers membership only; a collapse regression needs the count, because the
+ * decoded spelling of one entry can equal the literal spelling of another.
+ */
+static inline int dir_count_name(const char *dir, const char *name)
+{
+    DIR *d = opendir(dir);
+    struct dirent *de;
+    int n = 0;
+
+    if (!d)
+        return -1;
+    while ((de = readdir(d)))
+        if (!strcmp(de->d_name, name))
+            n++;
+    closedir(d);
+    return n;
+}
+
+/* Bind a pathname AF_UNIX socket of @type at @path, listening with @backlog
+ * when it is positive. Returns the descriptor, or -1 with the socket closed
+ * and no socket file created by this call left behind.
+ * An over-long @path is truncated into sun_path exactly as the lanes did by
+ * hand; the bind then addresses the truncated name, which the caller's own
+ * assertions catch.
+ */
+static inline int unix_bind(const char *path, int type, int backlog)
+{
+    struct sockaddr_un sa;
+    int fd = socket(AF_UNIX, type, 0);
+
+    if (fd < 0)
+        return -1;
+    memset(&sa, 0, sizeof(sa));
+    sa.sun_family = AF_UNIX;
+    snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", path);
+    if (bind(fd, (struct sockaddr *) &sa, sizeof(sa)) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (backlog > 0 && listen(fd, backlog) != 0) {
+        /* bind created the file, so a rerun would get EADDRINUSE from it.
+         * Only this branch unlinks: on a bind failure the file is not this
+         * call's, and removing it would break whoever owns it. sun_path,
+         * not @path, because the file carries the truncated name.
+         */
+        unlink(sa.sun_path);
+        close(fd);
+        return -1;
+    }
+    return fd;
 }
 
 static inline void test_unreachable(void)

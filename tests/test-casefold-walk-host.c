@@ -58,21 +58,8 @@ bool proc_sysroot_casefold_enabled(void)
     return true;
 }
 
-static int passes;
-static int fails;
 static char root[PATH_MAX];
 static bool volume_folds;
-
-static void ok(void)
-{
-    passes++;
-}
-
-static void fail(const char *label, const char *detail)
-{
-    fails++;
-    fprintf(stderr, "FAIL %s: %s\n", label, detail);
-}
 
 static void stage_file(const char *rel)
 {
@@ -109,7 +96,7 @@ static void check(const char *label,
     got = casefold_resolve_at(AT_FDCWD, root, guest, false, out, sizeof(out),
                               &walk);
     if (got != want_verdict) {
-        fail(label, "wrong verdict");
+        host_fail(label, "wrong verdict");
         fprintf(stderr, "  guest %s -> verdict %d, expected %d (host %s)\n",
                 guest, (int) got, (int) want_verdict,
                 got == CASEFOLD_ERROR ? strerror(errno) : out);
@@ -118,12 +105,12 @@ static void check(const char *label,
     snprintf(want, sizeof(want), "%s%s%s", root, want_rel[0] ? "/" : "",
              want_rel);
     if (strcmp(out, want)) {
-        fail(label, "wrong host spelling");
+        host_fail(label, "wrong host spelling");
         fprintf(stderr, "  guest    %s\n  got      %s\n  expected %s\n", guest,
                 out, want);
         return;
     }
-    ok();
+    host_ok();
 }
 
 static void check_parent_found(const char *label, const char *guest, bool want)
@@ -133,15 +120,15 @@ static void check_parent_found(const char *label, const char *guest, bool want)
 
     if (casefold_resolve_at(AT_FDCWD, root, guest, false, out, sizeof(out),
                             &walk) == CASEFOLD_ERROR) {
-        fail(label, strerror(errno));
+        host_fail(label, strerror(errno));
         return;
     }
     if (walk.parent_found != want) {
-        fail(label, want ? "parent should have been found"
-                         : "parent should not have been found");
+        host_fail(label, want ? "parent should have been found"
+                              : "parent should not have been found");
         return;
     }
-    ok();
+    host_ok();
 }
 
 /* Names the codec escapes, spelled here so the expectations read literally. */
@@ -278,10 +265,10 @@ static void section_symlink(void)
                 "inner.txt") &&
         !strcmp("/link.to.lowdir/inner.txt" + walk.link_guest_offset,
                 "link.to.lowdir/inner.txt"))
-        ok();
+        host_ok();
     else
-        fail("an intermediate link stops the walk",
-             "expected CASEFOLD_SYMLINK");
+        host_fail("an intermediate link stops the walk",
+                  "expected CASEFOLD_SYMLINK");
 
     /* A dangling link exists as a link. Asking about its target stops the walk
      * at the link too: whether the target is there is a question about a guest
@@ -289,16 +276,16 @@ static void section_symlink(void)
      */
     if (casefold_resolve_at(AT_FDCWD, root, "/dangling", false, out,
                             sizeof(out), &walk) == CASEFOLD_FOUND)
-        ok();
+        host_ok();
     else
-        fail("dangling link exists without following", "expected found");
+        host_fail("dangling link exists without following", "expected found");
     if (casefold_resolve_at(AT_FDCWD, root, "/dangling", true, out, sizeof(out),
                             &walk) == CASEFOLD_SYMLINK &&
         walk.link_rest_offset == strlen("/dangling"))
-        ok();
+        host_ok();
     else
-        fail("following a dangling link stops at the link",
-             "expected CASEFOLD_SYMLINK with nothing left to resolve");
+        host_fail("following a dangling link stops at the link",
+                  "expected CASEFOLD_SYMLINK with nothing left to resolve");
 
     /* A second hard link to a symlink is that same link under another name,
      * and it resolves by the name the caller used. The volume reports the
@@ -347,15 +334,15 @@ static void section_limits(void)
             if (errno == ENAMETOOLONG)
                 saw_toolong = true;
             else
-                fail("deep path", strerror(errno));
+                host_fail("deep path", strerror(errno));
             break;
         }
         if (casefold_escape(comp, want_leaf, sizeof(want_leaf)) < 0) {
-            fail("deep path", "could not spell the expected leaf");
+            host_fail("deep path", "could not spell the expected leaf");
             break;
         }
         if (strcmp(out + walk.leaf_offset, want_leaf)) {
-            fail("deep path", "last component was truncated");
+            host_fail("deep path", "last component was truncated");
             fprintf(stderr, "  depth %d, got %s\n", depth,
                     out + walk.leaf_offset);
             break;
@@ -364,20 +351,20 @@ static void section_limits(void)
     }
 
     if (saw_toolong && last_ok > 0)
-        ok();
+        host_ok();
     else
-        fail("over-long host path", saw_toolong
-                                        ? "no depth resolved at all"
-                                        : "never reported ENAMETOOLONG");
+        host_fail("over-long host path", saw_toolong
+                                             ? "no depth resolved at all"
+                                             : "never reported ENAMETOOLONG");
 
     /* A caller buffer smaller than the prefix is the same class of failure. */
     char tiny[8];
     if (casefold_resolve_at(AT_FDCWD, root, "/plain.txt", false, tiny,
                             sizeof(tiny), &walk) == CASEFOLD_ERROR &&
         errno == ENAMETOOLONG)
-        ok();
+        host_ok();
     else
-        fail("caller buffer too small", "expected ENAMETOOLONG");
+        host_fail("caller buffer too small", "expected ENAMETOOLONG");
 }
 
 /* Forged getattrlist replies. No real volume produces these here, and
@@ -412,34 +399,34 @@ static void section_reply_bounds(void)
 
     got = casefold_attr_stored_name(&f, sizeof(f), ref_off);
     if (got && !strcmp(got, "hello"))
-        ok();
+        host_ok();
     else
-        fail("reply bounds", "well-formed reply rejected");
+        host_fail("reply bounds", "well-formed reply rejected");
 
     f.name_ref.attr_dataoffset = -8;
     if (!casefold_attr_stored_name(&f, sizeof(f), ref_off))
-        ok();
+        host_ok();
     else
-        fail("reply bounds", "negative attr_dataoffset accepted");
+        host_fail("reply bounds", "negative attr_dataoffset accepted");
 
     f.name_ref.attr_dataoffset = (int32_t) sizeof(f);
     if (!casefold_attr_stored_name(&f, sizeof(f), ref_off))
-        ok();
+        host_ok();
     else
-        fail("reply bounds", "attr_dataoffset past the reply accepted");
+        host_fail("reply bounds", "attr_dataoffset past the reply accepted");
 
     f.name_ref.attr_dataoffset = name_off;
     f.name_ref.attr_length = 0;
     if (!casefold_attr_stored_name(&f, sizeof(f), ref_off))
-        ok();
+        host_ok();
     else
-        fail("reply bounds", "zero attr_length accepted");
+        host_fail("reply bounds", "zero attr_length accepted");
 
     f.name_ref.attr_length = (u_int32_t) sizeof(f);
     if (!casefold_attr_stored_name(&f, sizeof(f), ref_off))
-        ok();
+        host_ok();
     else
-        fail("reply bounds", "attr_length past the reply accepted");
+        host_fail("reply bounds", "attr_length past the reply accepted");
 
     /* The kernel claims fewer bytes than the reference needs: the documented
      * truncation shape, where the attribute data lies beyond what was copied.
@@ -447,9 +434,10 @@ static void section_reply_bounds(void)
     f.name_ref.attr_length = 6;
     f.length = (u_int32_t) sizeof(u_int32_t);
     if (!casefold_attr_stored_name(&f, sizeof(f), ref_off))
-        ok();
+        host_ok();
     else
-        fail("reply bounds", "reference beyond the claimed length accepted");
+        host_fail("reply bounds",
+                  "reference beyond the claimed length accepted");
 
     /* A claimed length larger than the buffer must be capped at the buffer:
      * the kernel never writes more than attrBufSize, whatever length says.
@@ -457,17 +445,17 @@ static void section_reply_bounds(void)
     f.length = (u_int32_t) sizeof(f) + 64;
     f.name_ref.attr_length = (u_int32_t) sizeof(f);
     if (!casefold_attr_stored_name(&f, sizeof(f), ref_off))
-        ok();
+        host_ok();
     else
-        fail("reply bounds", "claimed length past the buffer accepted");
+        host_fail("reply bounds", "claimed length past the buffer accepted");
 
     f.length = sizeof(f);
     f.name_ref.attr_length = 6;
     memset(f.name, 'x', sizeof(f.name));
     if (!casefold_attr_stored_name(&f, sizeof(f), ref_off))
-        ok();
+        host_ok();
     else
-        fail("reply bounds", "name without a terminator accepted");
+        host_fail("reply bounds", "name without a terminator accepted");
 }
 
 /* Does this volume fold case? The resolver behaves the same either way from the
@@ -498,18 +486,12 @@ static bool probe_folds(void)
 
 int main(int argc, char **argv)
 {
-    const char *base = argc > 1 ? argv[1] : getenv("TMPDIR");
     char host[CASEFOLD_HOST_NAME_MAX + 1];
     char p[PATH_MAX];
 
-    if (!base || base[0] == '\0')
-        base = "/tmp";
-    snprintf(root, sizeof(root), "%s/elfuse-walk-XXXXXX", base);
-    if (!mkdtemp(root)) {
-        fprintf(stderr, "cannot create a scratch directory in %s: %s\n", base,
-                strerror(errno));
+    if (host_scratch_root(argv[0], "elfuse-walk", argc > 1 ? argv[1] : NULL,
+                          root, sizeof(root)) < 0)
         return 1;
-    }
     snprintf(stub_sysroot, sizeof(stub_sysroot), "%s", root);
     volume_folds = probe_folds();
 
@@ -573,7 +555,5 @@ int main(int argc, char **argv)
     section_reply_bounds();
 
     remove_tree(root);
-    printf("test-casefold-walk-host: %d passed, %d failed - %s\n", passes,
-           fails, fails ? "FAIL" : "PASS");
-    return fails ? 1 : 0;
+    return host_summary("test-casefold-walk-host");
 }

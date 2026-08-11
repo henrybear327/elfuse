@@ -60,35 +60,6 @@ typedef struct {
     char d_name[];
 } linux_dirent64_t;
 
-static int create_file(const char *path, const char *contents)
-{
-    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
-    if (fd < 0)
-        return -1;
-    size_t len = strlen(contents);
-    int rc = write_fd_all(fd, contents, len);
-    close(fd);
-    return rc;
-}
-
-static int dir_has_entry(const char *path, const char *needle)
-{
-    DIR *dir = opendir(path);
-    if (!dir)
-        return -1;
-
-    int found = 0;
-    struct dirent *de;
-    while ((de = readdir(dir)) != NULL) {
-        if (!strcmp(de->d_name, needle)) {
-            found = 1;
-            break;
-        }
-    }
-    closedir(dir);
-    return found;
-}
-
 static void build_long_name(char *out, size_t outsz, char first)
 {
     memset(out, 'a', outsz - 1);
@@ -100,7 +71,7 @@ static int xattr_supported(void)
 {
     const char *probe = "/tmp/elfuse-case-collision-xattr-probe";
     unlink(probe);
-    if (create_file(probe, "probe\n") < 0)
+    if (file_write(probe, "probe\n") < 0)
         return 0;
 
     int rc = setxattr(probe, "user.elfuse_probe", "x", 1, 0);
@@ -202,7 +173,7 @@ static void check_linkat(const char *base,
     unlink(link_path);
     unlink(target);
 
-    if (create_file(target, "linkat\n") < 0) {
+    if (file_write(target, "linkat\n") < 0) {
         FAIL("failed to create link target");
     } else if (symlink(absolute_target ? target : target_name, link_path) < 0) {
         FAIL("failed to create symlink");
@@ -246,11 +217,10 @@ int main(void)
 
         unlink(upper);
         unlink(lower);
-        if (create_file(upper, "upper\n") < 0 ||
-            create_file(lower, "lower\n") < 0) {
+        if (file_write(upper, "upper\n") < 0 ||
+            file_write(lower, "lower\n") < 0) {
             FAIL("failed to create colliding files");
-        } else if (dir_has_entry(base, "Foo") != 1 ||
-                   dir_has_entry(base, "foo") != 1) {
+        } else if (!dir_contains(base, "Foo") || !dir_contains(base, "foo")) {
             FAIL("readdir collapsed colliding names");
         } else {
             PASS();
@@ -291,8 +261,8 @@ int main(void)
         unlink(left);
         unlink(right);
 
-        if (create_file(left, "left\n") < 0 ||
-            create_file(right, "right\n") < 0) {
+        if (file_write(left, "left\n") < 0 ||
+            file_write(right, "right\n") < 0) {
             FAIL("failed to create cross-directory colliding files");
         } else if (syscall(SYS_renameat2, AT_FDCWD, left, AT_FDCWD, right,
                            LINUX_RENAME_EXCHANGE) < 0) {
@@ -319,7 +289,7 @@ int main(void)
         unlink(src);
         unlink(alias);
 
-        if (create_file(src, "inode\n") < 0) {
+        if (file_write(src, "inode\n") < 0) {
             FAIL("failed to create hardlink source");
         } else if (link(src, alias) < 0) {
             FAIL("linkat failed");
@@ -328,8 +298,8 @@ int main(void)
         } else if (st_src.st_ino != st_alias.st_ino || st_src.st_nlink < 2) {
             FAIL("colliding hardlinks do not share inode");
         } else if (unlink(src) < 0 || stat(alias, &st_alias) < 0 ||
-                   dir_has_entry(base, "hardlink") != 0 ||
-                   dir_has_entry(base, "HARDLINK") != 1) {
+                   dir_contains(base, "hardlink") ||
+                   !dir_contains(base, "HARDLINK")) {
             FAIL("unlink removed wrong hardlink entry");
         } else {
             PASS();
@@ -426,8 +396,7 @@ int main(void)
             FAIL("renamed colliding spelling has unexpected contents");
         } else if (raw_open_rdonly(untouched_path) < 0) {
             FAIL("rename disturbed untouched colliding entry");
-        } else if (dir_has_entry(base, "foo") != 0 ||
-                   dir_has_entry(base, "bar") != 1) {
+        } else if (dir_contains(base, "foo") || !dir_contains(base, "bar")) {
             FAIL("directory listing did not reflect the rename");
         } else {
             PASS();
@@ -538,8 +507,8 @@ int main(void)
         unlink(path_a);
         unlink(path_b);
 
-        if (create_file(path_a, "long-a\n") < 0 ||
-            create_file(path_b, "long-b\n") < 0) {
+        if (file_write(path_a, "long-a\n") < 0 ||
+            file_write(path_b, "long-b\n") < 0) {
             FAIL("failed to create long colliding names");
         } else if (raw_open_rdonly(path_a) < 0 || raw_open_rdonly(path_b) < 0) {
             FAIL("failed to reopen long colliding names");

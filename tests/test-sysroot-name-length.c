@@ -84,16 +84,9 @@ static void build_utf8(char *buf, size_t bytes, const char *unit)
 static int create(const char *name, const char *text)
 {
     char path[PATH_MAX];
-    int fd;
-    ssize_t n;
 
     snprintf(path, sizeof(path), "%s/%s", DIR_L, name);
-    fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    if (fd < 0)
-        return -1;
-    n = write(fd, text, strlen(text));
-    close(fd);
-    return n == (ssize_t) strlen(text) ? 0 : -1;
+    return file_write(path, text);
 }
 
 /* One name of a given length: create it, read it back, and require a listing

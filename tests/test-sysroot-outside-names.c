@@ -24,6 +24,12 @@
  * recipe asserts host-side that the control file the guest creates inside
  * the sysroot was stored escaped, so a pass on a byte-exact volume cannot be
  * vacuous.
+ *
+ * argv[2] = "nosysroot" runs the same assertions with no sysroot configured
+ * at all, where nothing decodes anywhere: the other half of the scoping
+ * contract, reached through path_dirent_dir_holds_escapes, which refuses
+ * every directory once there is no sysroot to snapshot. The in-sysroot
+ * control is skipped, there being no sysroot to hold it.
  */
 
 #include <dirent.h>
@@ -44,25 +50,6 @@ int passes = 0, fails = 0;
 #define ESCAPE_SHAPED ".ef=464f4f"
 #define DECODES_TO "FOO"
 
-/* dir_contains answers membership only; the collapse regression needs the
- * count, because the decoded spelling of one entry equals the literal
- * spelling of another.
- */
-static int dir_count_name(const char *dir, const char *name)
-{
-    DIR *d = opendir(dir);
-    struct dirent *de;
-    int n = 0;
-
-    if (!d)
-        return -1;
-    while ((de = readdir(d)))
-        if (!strcmp(de->d_name, name))
-            n++;
-    closedir(d);
-    return n;
-}
-
 int main(int argc, char **argv)
 {
     char path[PATH_MAX];
@@ -73,9 +60,17 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    printf("test-sysroot-outside-names: literal names outside the sysroot\n");
+    bool with_sysroot = !(argc > 2 && !strcmp(argv[2], "nosysroot"));
+    /* Both legs run the same assertions, so the summary has to say which one
+     * reported them.
+     */
+    const char *lane = with_sysroot ? "test-sysroot-outside-names"
+                                    : "test-sysroot-outside-names (nosysroot)";
 
-    TEST("an escape-shaped name outside the sysroot lists as its own bytes");
+    printf("%s: literal names %s\n", lane,
+           with_sysroot ? "outside the sysroot" : "without a sysroot");
+
+    TEST("an escape-shaped name lists as its own bytes");
     EXPECT_TRUE(dir_contains(argv[1], ESCAPE_SHAPED),
                 "should appear as written");
 
@@ -118,15 +113,17 @@ int main(int argc, char **argv)
      * folds and the sysroot scope still decodes, proving the assertions
      * above did not pass merely because nothing was escaping anywhere.
      */
-    TEST("a control name inside the sysroot still escapes");
-    fd = open("/Ctrl", O_CREAT | O_WRONLY, 0644);
-    EXPECT_TRUE(fd >= 0, "create /Ctrl in the sysroot");
-    if (fd >= 0) {
-        close(fd);
-        EXPECT_TRUE(dir_contains("/", "Ctrl"),
-                    "the sysroot listing still decodes");
+    if (with_sysroot) {
+        TEST("a control name inside the sysroot still escapes");
+        fd = open("/Ctrl", O_CREAT | O_WRONLY, 0644);
+        EXPECT_TRUE(fd >= 0, "create /Ctrl in the sysroot");
+        if (fd >= 0) {
+            close(fd);
+            EXPECT_TRUE(dir_contains("/", "Ctrl"),
+                        "the sysroot listing still decodes");
+        }
     }
 
-    SUMMARY("test-sysroot-outside-names");
+    SUMMARY(lane);
     return fails > 0 ? 1 : 0;
 }

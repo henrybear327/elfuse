@@ -5,8 +5,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * The encoding itself: which guest names have to be escaped, what their escaped
- * spelling is, and how to read one back. Deliberately free of project
- * dependencies so it links on its own; casefold.h states the contract.
+ * spelling is, and how to read one back. Depends only on the header-only
+ * utils.h, so it still links on its own; casefold.h states the contract.
  */
 
 #include <errno.h>
@@ -14,6 +14,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+#include "utils.h"
 
 #include "syscall/casefold.h"
 
@@ -38,11 +40,6 @@ _Static_assert(CASEFOLD_SYM_BASE + CASEFOLD_SYM_COUNT <= 0x9FFFu + 1u,
 static bool is_hex_digit(char c)
 {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-}
-
-static unsigned hex_value(char c)
-{
-    return c <= '9' ? (unsigned) (c - '0') : (unsigned) (c - 'a' + 10);
 }
 
 bool casefold_needs_escape(const char *name)
@@ -125,8 +122,8 @@ static int decode_payload(const char *host, unsigned char *out)
                 return -1;
         }
         for (size_t i = 0; i < n; i++) {
-            out[i] = (unsigned char) ((hex_value((char) tail[i * 2]) << 4) |
-                                      hex_value((char) tail[i * 2 + 1]));
+            out[i] = (unsigned char) ((hex_nibble(tail[i * 2]) << 4) |
+                                      hex_nibble(tail[i * 2 + 1]));
         }
         return (int) n;
     }
@@ -216,7 +213,6 @@ bool casefold_is_escaped(const char *host)
 
 int casefold_escape(const char *guest, char *out, size_t outsz)
 {
-    static const char hex[] = "0123456789abcdef";
     const unsigned char *g = (const unsigned char *) guest;
     size_t n;
 
@@ -246,11 +242,7 @@ int casefold_escape(const char *guest, char *out, size_t outsz)
             return -1;
         }
         memcpy(out, CASEFOLD_PREFIX, CASEFOLD_PREFIX_LEN);
-        for (size_t i = 0; i < n; i++) {
-            out[CASEFOLD_PREFIX_LEN + i * 2] = hex[g[i] >> 4];
-            out[CASEFOLD_PREFIX_LEN + i * 2 + 1] = hex[g[i] & 0x0Fu];
-        }
-        out[need] = '\0';
+        bytes_to_hex(out + CASEFOLD_PREFIX_LEN, g, n);
         return 0;
     }
 

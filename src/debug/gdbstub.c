@@ -1223,9 +1223,28 @@ static void *listener_thread_fn(void *arg)
         int fd =
             accept(gdb.listen_fd, (struct sockaddr *) &client_addr, &addr_len);
         if (fd < 0) {
-            if (errno == EINTR)
+            /* A peer that resets between poll() and accept() leaves nothing to
+             * dequeue, and listen_fd is non-blocking so that this returns
+             * rather than parking in accept() where the shutdown pipe cannot
+             * reach it. None of these are reasons to stop serving, so retry
+             * instead of leaving the loop; accept(2) lists ECONNABORTED as the
+             * aborted-connection case.
+             */
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK ||
+                errno == ECONNABORTED)
                 continue;
             break;
+        }
+
+        /* macOS gives the accepted socket the listener's O_NONBLOCK, which
+         * POSIX leaves unspecified and Linux does not do. The packet loop
+         * relies on blocking reads, so clear it explicitly.
+         */
+        if (fd_update_status_flag(fd, O_NONBLOCK, false) < 0) {
+            log_warn("gdb: failed to clear O_NONBLOCK on client socket: %s",
+                     strerror(errno));
+            close(fd);
+            continue;
         }
 
         if (fd_set_cloexec(fd) < 0) {
@@ -1326,6 +1345,15 @@ int gdb_stub_init(int port, guest_t *g)
 
     if (listen(fd, 1) < 0) {
         perror("elfuse: gdb: listen");
+        close(fd);
+        return -1;
+    }
+
+    /* The accept loop polls before accepting, so a connection withdrawn in
+     * between must fail rather than park the listener in accept(2).
+     */
+    if (fd_set_nonblock(fd) < 0) {
+        perror("elfuse: gdb: fcntl(O_NONBLOCK)");
         close(fd);
         return -1;
     }

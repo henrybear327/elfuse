@@ -235,11 +235,14 @@ $(BUILD_DIR)/test-absock-names-host: $(BUILD_DIR)/test-absock-names-host.o \
 # Only used when GUEST_TEST_BINARIES is not set.
 
 ifndef GUEST_TEST_BINARIES
-$(BUILD_DIR)/test-hello: tests/hello.S tests/simple.ld | $(BUILD_DIR)
-	@echo "  AS      tests/hello.S"
-	$(Q)$(BAREMETAL_CROSS)as -o $(BUILD_DIR)/test-hello.o tests/hello.S
+# Assembly guests: tests/<name>.S becomes $(BUILD_DIR)/test-<name>. The C
+# guests below match tests/%.c, and a stem only ever resolves through one of
+# the two, so the .S sources need no separate naming convention.
+$(BUILD_DIR)/test-%: tests/%.S tests/simple.ld | $(BUILD_DIR)
+	@echo "  AS      tests/$*.S"
+	$(Q)$(BAREMETAL_CROSS)as -o $(BUILD_DIR)/test-$*.o tests/$*.S
 	@echo "  LD      $@"
-	$(Q)$(BAREMETAL_CROSS)ld -T tests/simple.ld -o $@ $(BUILD_DIR)/test-hello.o
+	$(Q)$(BAREMETAL_CROSS)ld -T tests/simple.ld -o $@ $(BUILD_DIR)/test-$*.o
 
 # Pattern rule: cross-compile tests/*.c to static aarch64-linux binaries
 # -D_GNU_SOURCE exposes pipe2/dup3/O_DIRECT/etc. on glibc (musl exposes them by default)

@@ -987,7 +987,7 @@ test-timeout-disable: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
 	@$(ELFUSE_BIN) --timeout 0 $(TEST_DIR)/test-hello > /dev/null
 
 ## Run GDB stub integration tests (LLDB <-> elfuse gdbstub)
-test-gdbstub: $(ELFUSE_BIN) $(TEST_DIR)/test-hello
+test-gdbstub: $(ELFUSE_BIN) $(TEST_DIR)/test-hello $(TEST_SLEEP_DEP)
 	@bash tests/test-gdbstub.sh -e $(ELFUSE_BIN) -v
 
 ## Run Rosetta CLI gating regressions without requiring Rosetta runtime support

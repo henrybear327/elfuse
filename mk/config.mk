@@ -39,12 +39,14 @@ ifdef GUEST_TEST_BINARIES
   TEST_DIR  := $(GUEST_TEST_BINARIES)/bin
   TEST_DEPS :=
   TEST_HELLO_DEP :=
+  TEST_SLEEP_DEP :=
 else
   TEST_DIR  := $(BUILD_DIR)
   TEST_C_SRCS := $(filter-out $(NATIVE_TESTS) $(SPECIAL_TEST_SRCS) $(ROSETTA_X86_64_SRCS),$(wildcard tests/*.c))
   TEST_C_BINS := $(patsubst tests/%.c,$(BUILD_DIR)/%,$(TEST_C_SRCS))
-  TEST_DEPS := $(BUILD_DIR)/test-hello $(TEST_C_BINS) $(SPECIAL_TEST_BINS)
+  TEST_DEPS := $(BUILD_DIR)/test-hello $(BUILD_DIR)/test-sleep $(TEST_C_BINS) $(SPECIAL_TEST_BINS)
   TEST_HELLO_DEP := $(BUILD_DIR)/test-hello
+  TEST_SLEEP_DEP := $(BUILD_DIR)/test-sleep
 endif
 
 # Colors (used by test output)

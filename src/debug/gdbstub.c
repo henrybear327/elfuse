@@ -139,6 +139,8 @@ static struct {
     gdb_rsp_ctx_t *rsp_ctx;     /* Active per-connection transport state */
     guest_t *guest;             /* Guest memory context */
     pthread_t listener_thread;  /* Accepts connections + processes packets */
+    bool shutting_down;         /* gdb_stub_shutdown has begun; do not park */
+    int shutdown_pipe[2];       /* Wakes the listener out of poll() at exit */
     pthread_mutex_t lock;       /* Protects all mutable state */
     pthread_cond_t stop_cond;   /* Signaled when a thread stops */
     pthread_cond_t resume_cond; /* Signaled when GDB resumes threads */
@@ -162,6 +164,7 @@ static struct {
     .initialized = 0,
     .listen_fd = -1,
     .client_fd = -1,
+    .shutdown_pipe = {-1, -1},
     .rsp_ctx = NULL,
     .lock = PTHREAD_MUTEX_INITIALIZER,
 };
@@ -1112,6 +1115,56 @@ static void handle_packet(const char *pkt, int pkt_len)
 
 /* GDB client session. */
 
+static void gdb_shutdown_pipe_close(void)
+{
+    if (gdb.shutdown_pipe[0] < 0)
+        return;
+    close(gdb.shutdown_pipe[0]);
+    close(gdb.shutdown_pipe[1]);
+    gdb.shutdown_pipe[0] = gdb.shutdown_pipe[1] = -1;
+}
+
+/* Block until @fd is readable or gdb_stub_shutdown signals shutdown_pipe.
+ * Returns 1 when @fd is readable, 0 when the caller must leave its loop
+ * (shutdown requested, or @fd is in an error state).
+ *
+ * Both the accept loop and the packet loop wait this way so that the two
+ * cannot drift apart on how a poll() result is classified. Note the wakeup
+ * only covers threads that are actually here: a thread already inside
+ * gdb_rsp_recv or gdb_rsp_send does not reach this function, which is why
+ * gdb_stub_shutdown also calls shutdown(2) on the client socket.
+ */
+static int gdb_wait_readable(int fd)
+{
+    for (;;) {
+        struct pollfd pfd[2] = {
+            {.fd = fd, .events = POLLIN},
+            {.fd = gdb.shutdown_pipe[0], .events = POLLIN},
+        };
+
+        if (poll(pfd, 2, -1) < 0) {
+            if (errno == EINTR)
+                continue;
+            return 0;
+        }
+
+        /* Shutdown wins over a pending packet: handle_packet reads guest
+         * memory the caller is about to unmap.
+         */
+        if (pfd[1].revents)
+            return 0;
+
+        /* Anything other than readability is terminal. Treating it as
+         * "not readable, try again" would spin: poll() reports the same
+         * revents immediately, forever.
+         */
+        if (pfd[0].revents & (POLLERR | POLLHUP | POLLNVAL))
+            return 0;
+        if (pfd[0].revents & POLLIN)
+            return 1;
+    }
+}
+
 /* Main loop for servicing a connected GDB client. Runs on the listener thread.
  * Reads packets and dispatches them.
  *
@@ -1130,22 +1183,10 @@ static void gdb_client_session(void)
     gdb.rsp_ctx = &rsp_ctx;
 
     while (gdb.client_fd >= 0) {
-        /* Wait for either a packet from GDB or a stop event from a vCPU. Use
-         * poll() so the GDB stub can wake up when a thread stops.
+        /* Wait for either a packet from GDB or a stop event from a vCPU, so
+         * the GDB stub can wake up when a thread stops.
          */
-        struct pollfd pfd = {
-            .fd = gdb.client_fd,
-            .events = POLLIN,
-        };
-
-        int pr = poll(&pfd, 1, -1);
-        if (pr <= 0) {
-            if (pr < 0 && errno == EINTR)
-                continue;
-            break;
-        }
-
-        if (pfd.revents & (POLLERR | POLLHUP))
+        if (!gdb_wait_readable(gdb.client_fd))
             break;
 
         int pkt_len =
@@ -1168,6 +1209,15 @@ static void *listener_thread_fn(void *arg)
     pthread_setname_np("gdb-stub");
 
     while (gdb.listen_fd >= 0) {
+        /* Wait on the listener socket and the shutdown pipe together rather
+         * than blocking in accept(). close(2) on a descriptor another thread
+         * is already blocked on does not portably wake that thread, and on
+         * macOS an accept() blocked before the close can stay parked, so the
+         * join below would never return. The pipe makes the wakeup explicit.
+         */
+        if (!gdb_wait_readable(gdb.listen_fd))
+            break;
+
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(client_addr);
         int fd =
@@ -1280,7 +1330,21 @@ int gdb_stub_init(int port, guest_t *g)
         return -1;
     }
 
+    if (pipe(gdb.shutdown_pipe) < 0) {
+        perror("elfuse: gdb: pipe");
+        close(fd);
+        return -1;
+    }
+    if (fd_set_cloexec(gdb.shutdown_pipe[0]) < 0 ||
+        fd_set_cloexec(gdb.shutdown_pipe[1]) < 0) {
+        perror("elfuse: gdb: fcntl(FD_CLOEXEC)");
+        gdb_shutdown_pipe_close();
+        close(fd);
+        return -1;
+    }
+
     gdb.listen_fd = fd;
+    gdb.shutting_down = false;
     gdb.initialized = 1;
 
     log_info("GDB stub listening on localhost:%d", port);
@@ -1294,6 +1358,7 @@ int gdb_stub_init(int port, guest_t *g)
         0) {
         perror("elfuse: gdb: pthread_create");
         close(fd);
+        gdb_shutdown_pipe_close();
         gdb.listen_fd = -1;
         gdb.initialized = 0;
         return -1;
@@ -1358,7 +1423,11 @@ int gdb_stub_is_active(void)
 
 int gdb_stub_handle_stop(int stop_reason, uint64_t stop_addr)
 {
-    if (!gdb.initialized || gdb.client_fd < 0)
+    /* gdb.shutting_down outlives the resume_cond broadcast in
+     * gdb_stub_shutdown(), so a worker arriving after it does not park on a
+     * condition variable nobody will signal again.
+     */
+    if (!gdb.initialized || gdb.client_fd < 0 || gdb.shutting_down)
         return 0;
 
     int64_t my_tid = current_thread ? current_thread->guest_tid : 1;
@@ -1447,24 +1516,73 @@ void gdb_stub_shutdown(void)
     if (!gdb.initialized)
         return;
 
-    /* Close listener socket to break accept() in listener thread */
-    if (gdb.listen_fd >= 0) {
-        close(gdb.listen_fd);
-        gdb.listen_fd = -1;
+    /* Order matters, because the caller unmaps the guest slab as soon as this
+     * returns and handle_packet reads guest memory:
+     *
+     *   run loop returns
+     *     gdb_stub_shutdown()
+     *       write(shutdown_pipe) ------->  gdb_wait_readable() returns 0, both
+     *       shutdown(client_fd) ------->   loops break; a thread already inside
+     *       broadcast(resume_cond)         gdb_rsp_recv/gdb_rsp_send instead
+     *                     |                fails its read/write, thread returns
+     *       pthread_join -+-----------> (thread gone)
+     *     guest_destroy()   <-- no packet can be in flight past this point
+     *
+     * Signalling without the join would leave the listener free to service one
+     * more packet against a freed mapping.
+     *
+     * The pipe alone is not enough to make the join terminate. It is only read
+     * at the gdb_wait_readable() sites, while the listener spends the rest of
+     * its time blocked in gdb_rsp_recv's read(2) (any packet fragment or lone
+     * ack byte parks it there) or gdb_rsp_send's writev(2). shutdown(2) is what
+     * reaches those: it makes the pending read return 0 and the write fail,
+     * whereas close(2) on a descriptor another thread is already blocked on
+     * does not portably wake it. Hence shutdown(2) here and close(2) after the
+     * join.
+     */
+    if (gdb.shutdown_pipe[1] >= 0) {
+        uint8_t byte = 1;
+        ssize_t w;
+        do {
+            w = write(gdb.shutdown_pipe[1], &byte, 1);
+        } while (w < 0 && errno == EINTR);
     }
+    if (gdb.client_fd >= 0)
+        shutdown(gdb.client_fd, SHUT_RDWR);
 
-    /* Close client if connected */
-    if (gdb.client_fd >= 0) {
-        close(gdb.client_fd);
-        gdb.client_fd = -1;
-    }
-
-    /* Resume any stopped threads so they can exit */
+    /* Resume any stopped threads so they can exit, and refuse any further
+     * parking: a worker that reaches gdb_stub_handle_stop() after this
+     * broadcast would wait on resume_cond with no signaler left, since the
+     * listener is being joined right below. Set under the lock so a worker
+     * cannot read it between the broadcast and the store.
+     */
     pthread_mutex_lock(&gdb.lock);
+    gdb.shutting_down = true;
     gdb.all_stopped = 0;
     gdb.stop_requested = 0;
     pthread_cond_broadcast(&gdb.resume_cond);
     pthread_mutex_unlock(&gdb.lock);
+
+    pthread_join(gdb.listener_thread, NULL);
+
+    /* The fds are closed only now. Closing them before the join would hand
+     * their numbers back to the allocator while the listener could still name
+     * them, so an unrelated open() in another thread could be read or written
+     * as if it were the GDB connection. Worker threads reach gdb.client_fd
+     * through rsp_reply() and are joined later still, in elfuse_launch(), so
+     * clear it before the close rather than after: a worker then sees -1 and
+     * sends nothing, instead of writing a stop reply into a recycled number.
+     */
+    if (gdb.client_fd >= 0) {
+        int client_fd = gdb.client_fd;
+        gdb.client_fd = -1;
+        close(client_fd);
+    }
+    if (gdb.listen_fd >= 0) {
+        close(gdb.listen_fd);
+        gdb.listen_fd = -1;
+    }
+    gdb_shutdown_pipe_close();
 
     gdb.initialized = 0;
 }

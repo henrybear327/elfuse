@@ -515,6 +515,140 @@ fi
 report "QStartNoAckMode: final ack then packet-only replies" $ok
 stop_elfuse
 
+# Test 18: teardown with a client still attached
+#
+# gdb_stub_shutdown() runs on the main thread the moment the guest exits, and
+# the caller unmaps the guest slab right after it returns. It therefore has to
+# wake the listener thread and join it, since a listener still parked in
+# poll() is free to accept a packet and let handle_packet read that mapping.
+#
+# The join needs a wakeup that works: close(2) on a descriptor another thread
+# is blocked on does not portably wake it, so without the shutdown pipe the
+# join blocks forever and elfuse never exits. That hang is what this pins.
+# The use-after-unmap itself is a race and cannot be forced from here, so on
+# that axis this is a regression guard rather than a reproduction.
+start_elfuse "$GUEST"
+# `continue` and nothing else: LLDB stays attached while the guest runs to
+# exit, which is the ordering the shutdown path has to survive.
+LLDB_TIMEOUT=20 run_lldb -o "continue"
+ok=0
+# Bounded wait for elfuse itself, so a join that never returns fails here
+# instead of hanging the suite.
+waited=0
+while kill -0 "$elfuse_pid" 2> /dev/null && [ "$waited" -lt 100 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+done
+if kill -0 "$elfuse_pid" 2> /dev/null; then
+    [ "$VERBOSE" -eq 1 ] && echo "elfuse still alive 10s after guest exit" >&2
+else
+    wait "$elfuse_pid" 2> /dev/null
+    elfuse_rc=$?
+    # The guest must have run to completion, and elfuse must report its exit
+    # rather than a signal (>= 128) from faulting on the unmapped slab.
+    if [ "$elfuse_rc" -lt 128 ] && echo "$LLDB_OUT" | grep -qi "exited with status"; then
+        ok=1
+    fi
+fi
+report "teardown with a client attached exits cleanly" $ok
+stop_elfuse
+
+# Test 19: teardown while the listener is blocked mid-packet
+#
+# gdb_stub_shutdown() wakes the listener through shutdown_pipe, but that pipe
+# is only read at the two poll() sites. gdb_rsp_recv blocks in read(2) once it
+# has consumed a packet fragment without reaching the "#" trailer, and the
+# client socket stays open until after pthread_join by design (closing it
+# earlier would recycle the descriptor number under the listener). A listener
+# parked in that read(2) therefore never reaches poll() again, so the join
+# cannot complete and elfuse never exits.
+#
+# The Linux contract being leaned on is the shutdown(2)/close(2) asymmetry:
+# shutdown(fd, SHUT_RDWR) makes a concurrent read(2) on that socket return 0,
+# whereas close(2) on a descriptor another thread is already blocked on does
+# not portably wake it. The fix calls shutdown(2) before the join and keeps
+# close(2) after it.
+#
+# The regression this pins is a permanent hang, so the lane waits for elfuse
+# with a bounded loop rather than blocking on wait(1). test-sleep is the guest
+# because test-hello exits within microseconds of the continue packet, leaving
+# no window in which the fragment is certain to arrive while the guest runs.
+SLEEP_GUEST="$TESTDIR/test-sleep"
+if [ ! -f "$SLEEP_GUEST" ]; then
+    echo "note: $SLEEP_GUEST not built, skipping mid-packet teardown lane" >&2
+else
+    start_elfuse "$SLEEP_GUEST"
+    # Hold the connection open from a background helper: if the socket closed,
+    # read(2) would return 0 on its own and the hang would not reproduce.
+    RAW_HOLD_OUT=$(mktemp "${TMPDIR:-/tmp}/elfuse-gdb-hold.XXXXXX")
+    python3 - "$GDB_PORT" > "$RAW_HOLD_OUT" 2>&1 << 'PY' &
+import socket
+import sys
+import time
+
+port = int(sys.argv[1])
+sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+sock.settimeout(5)
+
+# Give gdb_stub_wait_for_attach time to reach its stopped state before
+# resuming it. A "c" that wins the race against the gdb.all_stopped store
+# there clears the flag before it is set, and the guest never starts at all;
+# elfuse would then hang for a reason that has nothing to do with the teardown
+# path under test. The window is the microseconds the main thread needs to
+# reacquire gdb.lock after the stop_cond broadcast, so this sleep makes losing
+# it vanishingly unlikely without being able to rule it out. build_stop_reply
+# ignores gdb.all_stopped, so the reply below cannot serve as that barrier.
+time.sleep(0.5)
+sock.sendall(b"$?#3f")
+reply = sock.recv(200)
+if not reply.startswith(b"+$T") and not reply.startswith(b"+$S"):
+    print(f"unexpected stop reply: {reply!r}")
+    sys.exit(1)
+print("stop reply received")
+
+# Resume the guest: it now runs for the length of test-sleep's nanosleep.
+sock.sendall(b"$c#63")
+if sock.recv(1) != b"+":
+    print("continue was not acknowledged")
+    sys.exit(1)
+print("continue acked")
+
+# A fragment with no "#" trailer. The stub consumes these bytes and blocks in
+# read(2) waiting for the rest of the packet, which never arrives.
+time.sleep(0.3)
+sock.sendall(b"$m0,4")
+print("fragment sent")
+
+# Outlive the bounded wait below without closing the socket.
+time.sleep(15)
+PY
+    hold_pid=$!
+    ok=0
+    # Bounded wait: a join that never returns must fail here, not hang the suite.
+    waited=0
+    while kill -0 "$elfuse_pid" 2> /dev/null && [ "$waited" -lt 80 ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    if kill -0 "$elfuse_pid" 2> /dev/null; then
+        [ "$VERBOSE" -eq 1 ] &&
+            echo "elfuse still alive 8s after a mid-packet shutdown" >&2
+    else
+        wait "$elfuse_pid" 2> /dev/null
+        elfuse_rc=$?
+        # Exit status, not a signal (>= 128) from faulting on the unmapped slab.
+        [ "$elfuse_rc" -lt 128 ] && ok=1
+    fi
+    if [ "$VERBOSE" -eq 1 ]; then
+        RAW_RSP_OUT=$(cat "$RAW_HOLD_OUT" 2> /dev/null)
+    fi
+    kill "$hold_pid" 2> /dev/null
+    wait "$hold_pid" 2> /dev/null || true
+    rm -f "$RAW_HOLD_OUT"
+    report "teardown while the listener is mid-packet exits" $ok
+    stop_elfuse
+fi
+
 # Summary
 echo ""
 if [ "$fails" -eq 0 ]; then

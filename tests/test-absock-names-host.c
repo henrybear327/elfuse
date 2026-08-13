@@ -226,5 +226,25 @@ int main(void)
                    "digest tail", "last 16 chars must be the hex digest");
     }
 
+    {
+        char fit[104];
+        size_t budget = (sizeof(fit) - strlen(dir) - 2) / 2;
+        /* Spelled from the budget so the hex capacity is exactly even: an odd
+         * capacity can never equal an even hex length, and the equality is
+         * the boundary being pinned.
+         */
+        size_t out_sz = strlen(dir) + 2 + budget * 2;
+        uint8_t raw[104] = {0};
+
+        absock_encode_name(dir, raw, (uint32_t) budget, fit, out_sz);
+        host_check(strlen(fit) == strlen(dir) + 1 + budget * 2,
+                   "literal arm boundary",
+                   "a name at the hex budget must encode literally");
+        absock_encode_name(dir, raw, (uint32_t) budget + 1, fit, out_sz);
+        host_check(strspn(fit + strlen(fit) - 16, "0123456789abcdef") == 16,
+                   "digest arm boundary",
+                   "one byte past the budget must take the digest arm");
+    }
+
     return host_summary("test-absock-names-host");
 }

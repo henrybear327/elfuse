@@ -150,7 +150,10 @@ void absock_encode_name(const char *dir,
                         size_t out_sz)
 {
     size_t dir_len = strlen(dir);
-    size_t max_hex = out_sz - dir_len - 2;
+    /* Saturating: an out_sz shorter than the directory prefix would wrap the
+     * budget and admit every name to the literal arm below.
+     */
+    size_t max_hex = out_sz > dir_len + 2 ? out_sz - dir_len - 2 : 0;
     size_t hex_needed = (size_t) len * 2;
 
     size_t pos = (size_t) snprintf(out, out_sz, "%s/", dir);

@@ -1,0 +1,11 @@
+// gVisor lane timeouts and the one VM sizing constant.
+{
+  "schema_version": 1,
+  // Whole-binary batch budget; isolated reruns get case_timeout_s each.
+  "suite_timeout_s": 600,
+  "case_timeout_s": 30,
+  // ReadvTestNoFixture.TruncatedAtMax allocates about 2 GiB in one
+  // read buffer, so the reference VM boots with headroom above it.
+  "qemu_mem_mib": 6144,
+  "per_binary": {},
+}

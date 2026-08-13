@@ -49,7 +49,9 @@ ELFUSE_HOST_NOFILE_MIN ?= $(shell bash "$(CURDIR)/tests/test-config.sh" --host-n
         test-usage-synopsis \
         probe-volume-naming perf \
         conformance-audit build-gvisor-payload build-ltp-payload \
-        test-conformance-harness
+        test-conformance-harness conformance-lint \
+        test-gvisor-elfuse test-gvisor-qemu test-ltp-elfuse test-ltp-qemu \
+        test-conformance
 
 ## Build and run the assembly hello world test
 test-hello: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
@@ -1533,6 +1535,44 @@ build-gvisor-payload:
 build-ltp-payload:
 	@CROSS_COMPILE="$(CROSS_COMPILE)" python3 tests/conformance/payload/ltp.py
 
-## Run the conformance harness selftests (hermetic)
+CONF_RESULTS_DIR ?= $(BUILD_DIR)/conformance
+CONF_TIER ?=
+CONF_FILTER ?=
+CONF_WORKERS ?=
+CONF_RUN = python3 tests/conformance/cli.py run \
+	--results "$(CONF_RESULTS_DIR)" \
+	$(if $(CONF_TIER),--tier "$(CONF_TIER)") \
+	$(if $(CONF_FILTER),--filter "$(CONF_FILTER)") \
+	$(if $(CONF_WORKERS),--jobs "$(CONF_WORKERS)")
+
+## Run the conformance harness selftests and lint the expectations (hermetic)
 test-conformance-harness:
 	@python3 -m unittest discover -s tests/conformance/selftest -t tests
+	@python3 tests/conformance/cli.py lint-expectations
+
+## Lint the conformance expectation files
+conformance-lint:
+	@python3 tests/conformance/cli.py lint-expectations
+
+## Run the gVisor syscall suite through elfuse against the expectations
+test-gvisor-elfuse: $(ELFUSE_BIN)
+	$(call RUN_OPTIONAL_SKIP77,$(CONF_RUN) --suite gvisor --backend elfuse,test-gvisor-elfuse)
+
+## Run the gVisor syscall suite on the QEMU Linux reference
+test-gvisor-qemu:
+	$(call RUN_OPTIONAL_SKIP77,$(CONF_RUN) --suite gvisor --backend qemu,test-gvisor-qemu)
+
+## Run the selected LTP tier through elfuse under kirk
+test-ltp-elfuse: $(ELFUSE_BIN)
+	$(call RUN_OPTIONAL_SKIP77,$(CONF_RUN) --suite ltp --backend elfuse,test-ltp-elfuse)
+
+## Run the selected LTP tier on the QEMU Linux reference under kirk
+test-ltp-qemu:
+	$(call RUN_OPTIONAL_SKIP77,$(CONF_RUN) --suite ltp --backend qemu,test-ltp-qemu)
+
+## Run both conformance suites on both backends (reference first)
+test-conformance:
+	+$(MAKE) --no-print-directory test-gvisor-qemu
+	+$(MAKE) --no-print-directory test-ltp-qemu
+	+$(MAKE) --no-print-directory test-gvisor-elfuse
+	+$(MAKE) --no-print-directory test-ltp-elfuse

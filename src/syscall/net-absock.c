@@ -143,6 +143,31 @@ void absock_set_namespace_id(uint64_t namespace_id)
     atomic_store(&absock_namespace_id, namespace_id);
 }
 
+/* Emit at @pos as many leading bytes of @bytes as the budget allows, then the
+ * full 16-hex-digit FNV-1a-64 of the whole input. The prefix is debuggability
+ * and shrinks to fit; the digest is the only collision resistance a long name
+ * gets and never truncates, which holds because absock_link_name refuses a
+ * buffer too small for it and absock_encode_name's output is sun_path-sized.
+ */
+static void absock_hex_digest_tail(char *out,
+                                   size_t out_sz,
+                                   size_t pos,
+                                   const uint8_t *bytes,
+                                   size_t len)
+{
+    size_t avail = out_sz > pos + ABSOCK_DIGEST_HEX + 1
+                       ? out_sz - pos - ABSOCK_DIGEST_HEX - 1
+                       : 0;
+    size_t prefix_bytes =
+        avail / 2 < ABSOCK_PREFIX_MAX ? avail / 2 : ABSOCK_PREFIX_MAX;
+
+    if (prefix_bytes > len)
+        prefix_bytes = len;
+    pos += bytes_to_hex(out + pos, bytes, prefix_bytes);
+    snprintf(out + pos, out_sz - pos, "%016llx",
+             (unsigned long long) fnv1a64(bytes, len));
+}
+
 void absock_encode_name(const char *dir,
                         const uint8_t *name,
                         uint32_t len,
@@ -151,34 +176,16 @@ void absock_encode_name(const char *dir,
 {
     size_t dir_len = strlen(dir);
     /* Saturating: an out_sz shorter than the directory prefix would wrap the
-     * budget and admit every name to the literal arm below.
+     * budget, and the literal arm below no longer bounds its own writes.
      */
     size_t max_hex = out_sz > dir_len + 2 ? out_sz - dir_len - 2 : 0;
     size_t hex_needed = (size_t) len * 2;
 
     size_t pos = (size_t) snprintf(out, out_sz, "%s/", dir);
-    if (hex_needed <= max_hex) {
-        for (uint32_t i = 0; i < len && pos + 2 < out_sz; i++)
-            pos += (size_t) snprintf(out + pos, out_sz - pos, "%02x", name[i]);
-    } else {
-        /* The digest never truncates: the literal prefix shrinks to fit
-         * instead, because the prefix is debuggability while the digest is the
-         * only collision resistance a long name gets.
-         */
-        size_t avail = out_sz > pos + ABSOCK_DIGEST_HEX + 1
-                           ? out_sz - pos - ABSOCK_DIGEST_HEX - 1
-                           : 0;
-        uint32_t prefix_bytes = avail / 2 < ABSOCK_PREFIX_MAX
-                                    ? (uint32_t) (avail / 2)
-                                    : ABSOCK_PREFIX_MAX;
-
-        if (prefix_bytes > len)
-            prefix_bytes = len;
-        for (uint32_t i = 0; i < prefix_bytes; i++)
-            pos += (size_t) snprintf(out + pos, out_sz - pos, "%02x", name[i]);
-        snprintf(out + pos, out_sz - pos, "%016llx",
-                 (unsigned long long) fnv1a64(name, len));
-    }
+    if (hex_needed <= max_hex)
+        bytes_to_hex(out + pos, name, len);
+    else
+        absock_hex_digest_tail(out, out_sz, pos, name, len);
 }
 
 int absock_link_name(const char *dir,
@@ -186,7 +193,6 @@ int absock_link_name(const char *dir,
                      char *out,
                      size_t out_sz)
 {
-    size_t len = strlen(host_path);
     int n = snprintf(out, out_sz, "%s/p%d-", dir, (int) getpid());
 
     if (n < 0 || (size_t) n >= out_sz ||
@@ -195,18 +201,8 @@ int absock_link_name(const char *dir,
         return -1;
     }
 
-    size_t pos = (size_t) n;
-    size_t avail = out_sz - pos - ABSOCK_DIGEST_HEX - 1;
-    size_t prefix_bytes =
-        avail / 2 < ABSOCK_PREFIX_MAX ? avail / 2 : ABSOCK_PREFIX_MAX;
-
-    if (prefix_bytes > len)
-        prefix_bytes = len;
-    for (size_t i = 0; i < prefix_bytes; i++)
-        pos += (size_t) snprintf(out + pos, out_sz - pos, "%02x",
-                                 (unsigned char) host_path[i]);
-    snprintf(out + pos, out_sz - pos, "%016llx",
-             (unsigned long long) fnv1a64(host_path, len));
+    absock_hex_digest_tail(out, out_sz, (size_t) n, (const uint8_t *) host_path,
+                           strlen(host_path));
     return 0;
 }
 

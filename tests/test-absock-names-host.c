@@ -226,6 +226,16 @@ int main(void)
                    "digest tail", "last 16 chars must be the hex digest");
     }
 
+    /* The premise the shared tail's never-truncates claim rests on: a buffer
+     * that cannot hold the digest is refused before anything is derived.
+     */
+    {
+        char refuse[24];
+
+        host_check(absock_link_name(dir, a, refuse, sizeof(refuse)) < 0,
+                   "digest room refused",
+                   "a buffer too small for the digest must be refused");
+    }
     {
         char fit[104];
         size_t budget = (sizeof(fit) - strlen(dir) - 2) / 2;

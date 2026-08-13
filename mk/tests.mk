@@ -48,7 +48,7 @@ ELFUSE_HOST_NOFILE_MIN ?= $(shell bash "$(CURDIR)/tests/test-config.sh" --host-n
         check-name-caseexact test-sysroot-path-matrix \
         test-usage-synopsis \
         probe-volume-naming perf \
-        conformance-audit \
+        conformance-audit build-gvisor-payload \
         test-conformance-harness
 
 ## Build and run the assembly hello world test
@@ -1524,6 +1524,10 @@ test-gva-contracts: $(BUILD_DIR)/test-gva-contracts
 ## Audit the gVisor roster against the pinned BUILD file (skips without a checkout)
 conformance-audit:
 	$(call RUN_OPTIONAL_SKIP77,python3 tests/conformance/audit.py,conformance-audit)
+
+## Build the pinned gVisor syscall test payload (network; Docker on macOS)
+build-gvisor-payload:
+	@python3 tests/conformance/payload/gvisor.py
 
 ## Run the conformance harness selftests (hermetic)
 test-conformance-harness:

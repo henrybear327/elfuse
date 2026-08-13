@@ -1,0 +1,6 @@
+// Leaf for suite=ltp backend=elfuse. Later actions win.
+{
+  "actions": [
+    { "include": "ltp.jsonc" },
+  ],
+}

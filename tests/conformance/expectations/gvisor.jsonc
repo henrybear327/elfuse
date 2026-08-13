@@ -1,0 +1,7 @@
+// Shared gvisor expectations, true on both backends. Later actions win;
+// backend-only divergences belong in the gvisor_<backend>.jsonc leaves.
+{
+  "actions": [
+    { "type": "expect_pass", "matchers": ["*"] },
+  ],
+}

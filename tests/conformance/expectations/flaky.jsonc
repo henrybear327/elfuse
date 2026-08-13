@@ -1,0 +1,17 @@
+// Flaky quarantine, appended by the loader after every leaf: retries
+// are legal only for tests matched here. Entries carry the evidence in
+// "reason".
+{
+  "actions": [
+    {
+      "type": "quarantine",
+      "reason": "wakeup-latency assertions overshoot under virtualized timers on both backends, recorded across repeated reference runs",
+      "matchers": [
+        "ltp:nanosleep01",
+        "ltp:poll02",
+        "ltp:pselect01",
+        "ltp:select02",
+      ],
+    },
+  ],
+}

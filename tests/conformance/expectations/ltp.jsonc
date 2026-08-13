@@ -1,0 +1,7 @@
+// Shared ltp expectations, true on both backends. Later actions win;
+// backend-only divergences belong in the ltp_<backend>.jsonc leaves.
+{
+  "actions": [
+    { "type": "expect_pass", "matchers": ["*"] },
+  ],
+}

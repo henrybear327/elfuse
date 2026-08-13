@@ -84,8 +84,13 @@ def load_test_corpora() -> tuple[str, str]:
     """
     c_chunks: list[str] = []
     other_chunks: list[str] = []
+    # tests/conformance/helpers are guest-side infrastructure compiled
+    # into the LTP payload (the supervisor really calls chroot, inside
+    # the reference VM under a real kernel); they exercise nothing in
+    # elfuse and must not claim syscall coverage.
+    helpers = TESTS / "conformance" / "helpers"
     for path in sorted(TESTS.rglob("*")):
-        if not path.is_file():
+        if not path.is_file() or helpers in path.parents:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         if path.suffix in C_SUFFIXES:

@@ -1,0 +1,365 @@
+// LTP selection: curated tiers (fast/extended/nightly) plus the sweep
+// rules. The sweep manifest itself is generated at payload build from
+// the pinned runtest/syscalls file, so it cannot drift from the pin;
+// overrides name the entries whose binary or build directory the
+// generator's conventions cannot resolve. timeout_seconds above the
+// sweep default promotes a generated entry to the sweep-slow tier.
+{
+  "schema_version": 1,
+  // The staged sweep rootfs is ~1.3 GiB and is copied into the guest's
+  // /tmp tmpfs, so the reference VM needs RAM above the 2 GiB default.
+  "qemu_mem_mib": 4096,
+  "sweep": {
+    "runtest_file": "runtest/syscalls",
+    "default_timeout_seconds": 60,
+    "overrides": {
+      "inotify_init1_01": {
+        "source_dir": "kernel/syscalls/inotify_init",
+        "notes": "shortening at the underscore lands in inotify/",
+      },
+      "inotify_init1_02": {
+        "source_dir": "kernel/syscalls/inotify_init",
+        "notes": "shortening at the underscore lands in inotify/",
+      },
+      "dirtyc0w": {
+        "source_dir": "kernel/security/dirtyc0w",
+        "notes": "lives under kernel/security",
+      },
+      "dirtyc0w_shmem": {
+        "source_dir": "kernel/security/dirtyc0w_shmem",
+        "notes": "lives under kernel/security",
+      },
+      "dirtypipe": {
+        "source_dir": "kernel/security/dirtypipe",
+        "notes": "lives under kernel/security",
+      },
+      "epoll01": {
+        "source_dir": "kernel/syscalls/epoll",
+        "notes": "binary epoll-ltp, legacy epoll suite",
+      },
+      "leapsec01": {
+        "source_dir": "kernel/syscalls/clock_gettime",
+        "notes": "leap-second coverage built from the clock_gettime sources",
+      },
+      "pipeio_1": {
+        "source_dir": "kernel/ipc/pipeio",
+        "notes": "lives under kernel/ipc",
+      },
+      "pipeio_2": {
+        "source_dir": "kernel/ipc/pipeio",
+        "notes": "lives under kernel/ipc",
+      },
+      "pipeio_3": {
+        "source_dir": "kernel/ipc/pipeio",
+        "notes": "lives under kernel/ipc",
+      },
+      "pipeio_4": {
+        "source_dir": "kernel/ipc/pipeio",
+        "notes": "lives under kernel/ipc",
+      },
+      "pipeio_5": {
+        "source_dir": "kernel/ipc/pipeio",
+        "notes": "lives under kernel/ipc",
+      },
+      "pipeio_6": {
+        "source_dir": "kernel/ipc/pipeio",
+        "notes": "lives under kernel/ipc",
+      },
+      "pipeio_7": {
+        "source_dir": "kernel/ipc/pipeio",
+        "notes": "lives under kernel/ipc",
+      },
+      "pipeio_8": {
+        "source_dir": "kernel/ipc/pipeio",
+        "notes": "lives under kernel/ipc",
+      },
+      "pkey01": {
+        "source_dir": "kernel/syscalls/pkeys",
+        "notes": "directory uses the plural",
+      },
+      "posix_fadvise01": {
+        "source_dir": "kernel/syscalls/fadvise",
+        "notes": "posix_ prefix is not the directory name",
+      },
+      "posix_fadvise01_64": {
+        "source_dir": "kernel/syscalls/fadvise",
+        "notes": "posix_ prefix is not the directory name",
+      },
+      "posix_fadvise02": {
+        "source_dir": "kernel/syscalls/fadvise",
+        "notes": "posix_ prefix is not the directory name",
+      },
+      "posix_fadvise02_64": {
+        "source_dir": "kernel/syscalls/fadvise",
+        "notes": "posix_ prefix is not the directory name",
+      },
+      "posix_fadvise03": {
+        "source_dir": "kernel/syscalls/fadvise",
+        "notes": "posix_ prefix is not the directory name",
+      },
+      "posix_fadvise03_64": {
+        "source_dir": "kernel/syscalls/fadvise",
+        "notes": "posix_ prefix is not the directory name",
+      },
+      "posix_fadvise04": {
+        "source_dir": "kernel/syscalls/fadvise",
+        "notes": "posix_ prefix is not the directory name",
+      },
+      "posix_fadvise04_64": {
+        "source_dir": "kernel/syscalls/fadvise",
+        "notes": "posix_ prefix is not the directory name",
+      },
+      "process_vm_readv01": {
+        "source_dir": "kernel/syscalls/cma",
+        "notes": "process_vm tests build in cma",
+      },
+      "process_vm_readv02": {
+        "source_dir": "kernel/syscalls/cma",
+        "notes": "process_vm tests build in cma",
+      },
+      "process_vm_readv03": {
+        "source_dir": "kernel/syscalls/cma",
+        "notes": "process_vm tests build in cma",
+      },
+      "process_vm_writev01": {
+        "source_dir": "kernel/syscalls/cma",
+        "notes": "process_vm tests build in cma",
+      },
+      "process_vm_writev02": {
+        "source_dir": "kernel/syscalls/cma",
+        "notes": "process_vm tests build in cma",
+      },
+      "prot_hsymlinks": {
+        "source_dir": "kernel/security/prot_hsymlinks",
+        "notes": "lives under kernel/security",
+      },
+      "switch01": {
+        "source_dir": "kernel/syscalls/switch",
+        "notes": "binary endian_switch01",
+      },
+      "ioctl02": {
+        "source": "testcases/kernel/syscalls/ioctl/test_ioctl",
+        "notes": "POSIX shell script installed via INSTALL_TARGETS",
+      },
+      "nftw01": {
+        "source": "testcases/kernel/syscalls/nftw/nftw.c",
+        "notes": "multi-source legacy binary; nftw.c drives the suite",
+      },
+      "nftw6401": {
+        "source": "testcases/kernel/syscalls/nftw/nftw64.c",
+        "notes": "multi-source legacy binary; nftw64.c drives the suite",
+      },
+      "sethostname01": {
+        "source": "testcases/kernel/syscalls/setdomainname/setdomainname01.c",
+        "source_dir": "kernel/syscalls/sethostname",
+        "notes": "compiled from the setdomainname source with -DTEST_SETHOSTNAME",
+      },
+      "sethostname02": {
+        "source": "testcases/kernel/syscalls/setdomainname/setdomainname02.c",
+        "source_dir": "kernel/syscalls/sethostname",
+        "notes": "compiled from the setdomainname source with -DTEST_SETHOSTNAME",
+      },
+      "sethostname03": {
+        "source": "testcases/kernel/syscalls/setdomainname/setdomainname03.c",
+        "source_dir": "kernel/syscalls/sethostname",
+        "notes": "compiled from the setdomainname source with -DTEST_SETHOSTNAME",
+      },
+    },
+  },
+  "tests": [
+    {
+      "id": "readv01",
+      "tier": "fast",
+      "group": "readv",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Basic readv success coverage",
+    },
+    {
+      "id": "readv02",
+      "tier": "fast",
+      "group": "readv",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "High-signal readv errno coverage",
+    },
+    {
+      "id": "writev01",
+      "tier": "fast",
+      "group": "writev",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Basic writev coverage",
+    },
+    {
+      "id": "preadv02",
+      "tier": "fast",
+      "group": "preadv",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "High-signal preadv errno coverage",
+    },
+    {
+      "id": "pwritev02",
+      "tier": "fast",
+      "group": "pwritev",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "High-signal pwritev errno coverage",
+    },
+    {
+      "id": "recv01",
+      "tier": "fast",
+      "group": "recv",
+      "timeout_seconds": 120,
+      "result_format": "legacy-exit",
+      "notes": "Legacy recv errno coverage; not comprehensive recv semantics",
+    },
+    {
+      "id": "futex_wait01",
+      "tier": "fast",
+      "group": "futex",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Bounded futex wait coverage",
+    },
+    {
+      "id": "futex_wake01",
+      "tier": "fast",
+      "group": "futex",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Bounded futex wake coverage",
+    },
+    {
+      "id": "epoll_ctl01",
+      "tier": "fast",
+      "group": "epoll_ctl",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Basic epoll_ctl add modify delete coverage",
+    },
+    {
+      "id": "epoll_wait03",
+      "tier": "fast",
+      "group": "epoll_wait",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "High-signal epoll_wait errno coverage",
+    },
+    {
+      "id": "setpgid01",
+      "tier": "fast",
+      "group": "setpgid",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Basic process-group behavior with normalized session layout",
+    },
+    {
+      "id": "times01",
+      "tier": "fast",
+      "group": "times",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Basic times syscall coverage",
+    },
+    {
+      "id": "alarm02",
+      "tier": "fast",
+      "group": "alarm",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Bounded alarm scheduling coverage",
+    },
+    {
+      "id": "recvmsg01",
+      "tier": "extended",
+      "group": "recvmsg",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Extended recvmsg errno coverage",
+    },
+    {
+      "id": "futex_wait02",
+      "tier": "extended",
+      "group": "futex",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Futex wait observing a sleeping parent through procfs",
+    },
+    {
+      "id": "futex_wait03",
+      "tier": "extended",
+      "group": "futex",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Threaded futex wait observing process state in /proc/self/stat",
+    },
+    {
+      "id": "setitimer01",
+      "tier": "extended",
+      "group": "setitimer",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Interval timer signal coverage",
+    },
+    {
+      "id": "execve01",
+      "tier": "extended",
+      "group": "execve",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Exec argument and environment propagation",
+      "helpers": ["execve01_child"],
+    },
+    {
+      "id": "exit_group01",
+      "tier": "extended",
+      "group": "exit_group",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Multithreaded exit_group coverage",
+    },
+    {
+      "id": "setpgid02",
+      "tier": "extended",
+      "group": "setpgid",
+      "timeout_seconds": 120,
+      "result_format": "new-api",
+      "notes": "Process-group errno coverage reading /proc/sys/kernel/pid_max",
+    },
+    {
+      "id": "fcntl34",
+      "tier": "nightly",
+      "group": "fcntl",
+      "timeout_seconds": 300,
+      "result_format": "new-api",
+      "notes": "Stateful open-file-description lock coverage",
+    },
+    {
+      "id": "fcntl36",
+      "tier": "nightly",
+      "group": "fcntl",
+      "timeout_seconds": 300,
+      "result_format": "new-api",
+      "notes": "Timed open-file-description lock coverage",
+    },
+    {
+      "id": "times03",
+      "tier": "nightly",
+      "group": "times",
+      "timeout_seconds": 300,
+      "result_format": "new-api",
+      "notes": "Stateful child process times coverage",
+    },
+    {
+      "id": "setpgid03",
+      "tier": "nightly",
+      "group": "setpgid",
+      "timeout_seconds": 300,
+      "result_format": "new-api",
+      "notes": "Stateful process-group error coverage with helper",
+      "helpers": ["setpgid03_child"],
+    },
+  ],
+}

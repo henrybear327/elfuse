@@ -48,7 +48,7 @@ ELFUSE_HOST_NOFILE_MIN ?= $(shell bash "$(CURDIR)/tests/test-config.sh" --host-n
         check-name-caseexact test-sysroot-path-matrix \
         test-usage-synopsis \
         probe-volume-naming perf \
-        conformance-audit build-gvisor-payload \
+        conformance-audit build-gvisor-payload build-ltp-payload \
         test-conformance-harness
 
 ## Build and run the assembly hello world test
@@ -1528,6 +1528,10 @@ conformance-audit:
 ## Build the pinned gVisor syscall test payload (network; Docker on macOS)
 build-gvisor-payload:
 	@python3 tests/conformance/payload/gvisor.py
+
+## Download, verify, cross-build, and stage the pinned LTP and kirk payload
+build-ltp-payload:
+	@CROSS_COMPILE="$(CROSS_COMPILE)" python3 tests/conformance/payload/ltp.py
 
 ## Run the conformance harness selftests (hermetic)
 test-conformance-harness:

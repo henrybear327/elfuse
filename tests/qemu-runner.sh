@@ -228,33 +228,50 @@ qemu_stop()
     _QR_CTL=""
 }
 
-# When sourced, register a cleanup trap that does not clobber the caller's
-# existing trap chain.  When executed directly, the EXIT trap fires on
-# script exit.
-trap 'qemu_stop' EXIT
-
 # CLI driver: when run directly, support 'qemu-runner.sh start|exec|stop'.
+# No EXIT trap is installed when sourced: bash 'trap' replaces the
+# caller's handler, and sourcing callers (tests/test-matrix.sh) already
+# call qemu_stop from their own traps. Only 'exec' cleans up on exit;
+# 'start --state-file' deliberately leaves the VM running for a driver
+# process that reads the state file and later runs 'stop --state-file'.
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
     cmd="${1:-help}"
     shift || true
+    state_file=""
+    if [ "${1:-}" = "--state-file" ]; then
+        state_file="${2:?--state-file needs a path}"
+        shift 2
+    fi
     case "$cmd" in
         start)
+            [ -n "$state_file" ] || {
+                echo "start requires --state-file PATH: without it the" >&2
+                echo "VM would outlive the script with no handle to it" >&2
+                exit 2
+            }
             qemu_start
-            echo "PORT=$QEMU_PORT KEY=$QEMU_SSH_KEY"
+            printf 'port=%s\nkey=%s\npidfile=%s\n' \
+                "$QEMU_PORT" "$QEMU_SSH_KEY" "$_QR_PIDFILE" > "$state_file"
             ;;
         exec)
+            trap 'qemu_stop' EXIT
             qemu_start
             qemu_exec "$@"
             ;;
         stop)
+            if [ -n "$state_file" ]; then
+                _QR_PIDFILE=$(sed -n 's/^pidfile=//p' "$state_file")
+            fi
             qemu_stop
             ;;
         *)
             cat << EOF
-Usage: $0 <start|exec ARGS...|stop>
+Usage: $0 <start --state-file PATH|exec ARGS...|stop [--state-file PATH]>
 
 Boots qemu-system-aarch64 with the test fixtures and exposes ssh.
 The host repo is shared into the VM at /mnt/host (read-only).
+'start' writes port=/key=/pidfile= lines to PATH and leaves the VM
+running; 'stop --state-file PATH' shuts that VM down.
 
 Environment overrides:
   QEMU_BIN, QEMU_MEM, QEMU_SMP, QEMU_CPU,

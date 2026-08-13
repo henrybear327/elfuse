@@ -48,6 +48,7 @@ ELFUSE_HOST_NOFILE_MIN ?= $(shell bash "$(CURDIR)/tests/test-config.sh" --host-n
         check-name-caseexact test-sysroot-path-matrix \
         test-usage-synopsis \
         probe-volume-naming perf \
+        conformance-audit \
         test-conformance-harness
 
 ## Build and run the assembly hello world test
@@ -1518,6 +1519,11 @@ test-shebang-host: $(BUILD_DIR)/test-shebang-host
 ## Run the proved/gva.h call-site precondition checks (skips without the flag)
 test-gva-contracts: $(BUILD_DIR)/test-gva-contracts
 	$(BUILD_DIR)/test-gva-contracts
+
+# Conformance harness (gVisor syscall tests + LTP)
+## Audit the gVisor roster against the pinned BUILD file (skips without a checkout)
+conformance-audit:
+	$(call RUN_OPTIONAL_SKIP77,python3 tests/conformance/audit.py,conformance-audit)
 
 ## Run the conformance harness selftests (hermetic)
 test-conformance-harness:

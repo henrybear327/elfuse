@@ -47,7 +47,8 @@ ELFUSE_HOST_NOFILE_MIN ?= $(shell bash "$(CURDIR)/tests/test-config.sh" --host-n
         test-sysroot-name-soak check-soak \
         check-name-caseexact test-sysroot-path-matrix \
         test-usage-synopsis \
-        probe-volume-naming perf
+        probe-volume-naming perf \
+        test-conformance-harness
 
 ## Build and run the assembly hello world test
 test-hello: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
@@ -250,6 +251,7 @@ check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage check-eintr-contract ch
 	$(call run-lane,test-launch-flags,launch flags)
 	$(call run-lane,test-rosetta-cli,rosetta CLI gating)
 	$(call run-lane,test-bench-guardrail,hot-syscall guardrail)
+	$(call run-lane,test-conformance-harness,conformance harness selftests)
 
 ## Hot-syscall performance guardrail: ensure getpid, libc clock_gettime,
 ## and 1-byte /dev/urandom reads stay under their TODO ns/op ceilings.
@@ -1516,3 +1518,7 @@ test-shebang-host: $(BUILD_DIR)/test-shebang-host
 ## Run the proved/gva.h call-site precondition checks (skips without the flag)
 test-gva-contracts: $(BUILD_DIR)/test-gva-contracts
 	$(BUILD_DIR)/test-gva-contracts
+
+## Run the conformance harness selftests (hermetic)
+test-conformance-harness:
+	@python3 -m unittest discover -s tests/conformance/selftest -t tests

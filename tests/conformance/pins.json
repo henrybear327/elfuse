@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "gvisor": {
+    "repository": "https://github.com/google/gvisor.git",
+    "commit": "c30a6d1b6f26b353ca5d6ff5a288d96ed820e89c",
+    "tree": "7141ebac4057dcddfec04566063b538907c52d10",
+    "date": "2026-07-15",
+    "subject": "use official docker:dind image for basic/docker image."
+  },
+  "ltp": {
+    "project": "linux-test-project/ltp",
+    "release": "20260529",
+    "commit": "3a64d78f58bdceba93ed321e91215fb969a047ed",
+    "archive_url": "https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz",
+    "archive_sha256": "685d83c6e370ac09201fb79593412f868fe031ee2890e204b5727fedcf51fb47",
+    "sha256_url": "https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz.sha256",
+    "source_date_epoch": 1780048197
+  },
+  "kirk": {
+    "project": "linux-test-project/kirk",
+    "tag": "v4.1.0",
+    "archive_url": "https://github.com/linux-test-project/kirk/archive/refs/tags/v4.1.0.tar.gz",
+    "archive_sha256": "dabc33925c2b4451afecfd63f880bc93e3aacd6994878cfa0b8d7870e7170f5b"
+  },
+  "license_boundary": "The gVisor checkout, the downloaded LTP and kirk trees, and everything generated from them are external fixtures under GPL or Apache upstream licenses. They stay under externals/, are ignored by Git, and must not be committed or distributed without a license and source-offer review."
+}

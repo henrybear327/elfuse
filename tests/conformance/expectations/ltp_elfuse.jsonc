@@ -1,6 +1,42 @@
-// Leaf for suite=ltp backend=elfuse. Later actions win.
+// Leaf for suite=ltp backend=elfuse. Later actions win. Recorded from
+// the fast-tier bootstrap against the pinned LTP 20260529; the QEMU
+// reference passes all of these, so each entry is a genuine elfuse
+// divergence.
 {
   "actions": [
     { "include": "ltp.jsonc" },
+
+    // Vectored-IO argument validation: invalid iovecs succeed where
+    // Linux returns EINVAL or EFAULT.
+    {
+      "type": "expect_failure",
+      "reason": "readv/preadv/pwritev with an invalid iovec or argument succeed where Linux returns EINVAL or EFAULT",
+      "matchers": [
+        "ltp:preadv02",
+        "ltp:pwritev02",
+        "ltp:readv02",
+      ],
+    },
+    {
+      "type": "expect_failure",
+      "reason": "writev accepts an oversized iov_len that Linux rejects with EINVAL, then the test dies on SIGPIPE",
+      "matchers": [
+        "ltp:writev01",
+      ],
+    },
+    {
+      "type": "expect_failure",
+      "reason": "the MSG_ERRQUEUE recv flag is dropped, so recv returns 0 where Linux returns -1",
+      "matchers": [
+        "ltp:recv01",
+      ],
+    },
+    {
+      "type": "expect_failure",
+      "reason": "epoll_wait returns 1 where Linux reflects the registered event mask",
+      "matchers": [
+        "ltp:epoll_wait03",
+      ],
+    },
   ],
 }

@@ -107,7 +107,16 @@ endef
 .PHONY: all elfuse
 .PHONY: gen-syscall-dispatch check-syscall-dispatch
 
+# elfuse-oci joins `make all` only when a Go toolchain is on PATH, so a
+# Go-less host still builds elfuse; `make elfuse-oci` fails loudly instead.
+HAVE_GO := $(shell command -v $(GO) > /dev/null 2>&1 && echo yes)
+
+ifeq ($(HAVE_GO),yes)
+all: elfuse elfuse-oci
+else
 all: elfuse
+	@echo "  NOTE    elfuse-oci skipped: no '$(GO)' toolchain on PATH"
+endif
 
 ## Regenerate build/dispatch.h from src/syscall/dispatch.tbl
 gen-syscall-dispatch:
@@ -131,6 +140,32 @@ elfuse: $(ELFUSE_BIN)
 
 $(ELFUSE_BIN): $(OBJS) | $(BUILD_DIR)
 	$(call link-and-sign,$@,$(OBJS))
+
+# OCI image CLI (Go). Pure Go, no HVF entitlement or codesigning required,
+# so it also builds under Linux for spec-conformance / interop CI.
+OCI_BIN := $(BUILD_DIR)/elfuse-oci
+OCI_SRCS := $(shell find cmd/elfuse-oci -type f -name '*.go' ! -name '*_test.go' 2>/dev/null)
+
+.PHONY: elfuse-oci
+elfuse-oci: $(OCI_BIN)
+
+# Go unit tests for the OCI image CLI (offline). They join `make check`
+# only when the toolchain exists, mirroring the `all` gate above.
+.PHONY: oci-test
+oci-test:
+	$(Q)$(GO) test -race ./cmd/elfuse-oci/
+
+ifeq ($(HAVE_GO),yes)
+check: oci-test
+endif
+
+# rm -f first: `go build -o` follows an existing symlink at the output path,
+# so a stale build/elfuse-oci symlink would clobber build/elfuse.
+$(OCI_BIN): go.mod go.sum $(OCI_SRCS) $(VERSION_DEPS) | $(BUILD_DIR)
+	@echo "  GO      $@"
+	$(Q)rm -f $@
+	$(Q)$(GO) build -ldflags "-X main.version=$(VERSION)" \
+		-o $@ ./cmd/elfuse-oci
 
 # Native test binaries (macOS, Hypervisor.framework)
 

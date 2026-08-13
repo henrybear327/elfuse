@@ -81,6 +81,7 @@ Longer version in [docs/internals.md](docs/internals.md#language-choice).
 - Xcode Command Line Tools, `clang`, `codesign`, and GNU `make`
 - GNU `objcopy` or `llvm-objcopy`
 - Hypervisor entitlement: `com.apple.security.hypervisor`
+- Go, optional, only to build the `elfuse-oci` OCI CLI
 
 To build only (`make elfuse`) without running tests, just the
 Xcode Command Line Tools and `objcopy` (`brew install binutils`) suffice.
@@ -133,8 +134,8 @@ The build signs `build/elfuse` before use. Override the signing identity with
 ## Documentation
 
 - [docs/usage.md](docs/usage.md): command-line options, x86_64 via
-  Rosetta, dynamic linking via `--sysroot`, and attaching `gdb` /
-  `lldb` to the built-in stub.
+  Rosetta, dynamic linking via `--sysroot`, OCI images, and attaching
+  `gdb` / `lldb` to the built-in stub.
 - [docs/testing.md](docs/testing.md): build prerequisites, the
   `make check` flow, the QEMU and Rosetta cross-check matrices, and
   fixture handling.
@@ -145,6 +146,8 @@ The build signs `build/elfuse` before use. Override the signing identity with
   reference -- runtime lifecycle, HVF constraints, EL1 shim and HVC
   protocol, page-table splitting, syscall translation tables, threads
   / futex, fork / clone IPC, signals, ptrace, and the GDB stub.
+- [docs/oci-design.md](docs/oci-design.md): how elfuse-oci and the
+  image store fit into elfuse.
 - [CONTRIBUTING.md](CONTRIBUTING.md): the coding style, the formatters
   and what each gate enforces, and the commit-message rules.
 
@@ -157,6 +160,7 @@ make elfuse        # build and codesign build/elfuse
 make check         # quick unit suite + BusyBox applet smoke
 make test-gdbstub  # debugger integration
 make test-matrix   # cross-check elfuse against QEMU on the same corpus
+make oci-test      # elfuse-oci unit tests
 make lint          # clang-tidy
 ```
 

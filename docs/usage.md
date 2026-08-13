@@ -299,3 +299,52 @@ That has a few direct implications:
   work entirely inside the VM. Programs that link against `libfuse`
   (sshfs, ntfs-3g, AppImage runtimes) run without macFUSE, FUSE-T, or
   FSKit on the host.
+
+## OCI Images
+
+elfuse consumes OCI images as a distribution vehicle for Linux root
+filesystems. All image work is handled by `build/elfuse-oci` (Go); `elfuse`
+itself has no OCI commands.
+
+```sh
+build/elfuse-oci <command> [flags]
+```
+
+This consumes the OCI image format for distribution; it is not a container
+runtime. There are no namespaces, cgroups, port mapping, daemon, `docker exec`,
+or image build/push. See
+[oci-design.md](oci-design.md#scope-and-limitations) for the exact list of what
+is and is not implemented, and for the design model.
+
+### Store And Platform
+
+`elfuse-oci` stores images in an OCI image-layout directory. The default
+store is `$ELFUSE_OCI_STORE` when set, otherwise `~/.local/share/elfuse/oci`.
+Use `--store DIR` on any subcommand to override it.
+
+Pulls default to `linux/arm64`. Use `--platform os/arch[/variant]` to select
+another platform, such as `linux/amd64` for a Rosetta-backed guest:
+
+```sh
+build/elfuse-oci pull --platform linux/amd64 alpine:3
+```
+
+Pins are per reference and platform, so the pull above lands beside an
+earlier `linux/arm64` pull of `alpine:3` rather than replacing it.
+
+### Commands
+
+```sh
+build/elfuse-oci pull [--store DIR] [--platform os/arch[/variant]] [--timeout DUR] <ref>
+```
+
+Pull `<ref>` into the local store and pin it by its original reference and
+platform. `--timeout` bounds the whole pull, registry transfer included
+(default `0`, no limit).
+
+```sh
+build/elfuse-oci inspect [--store DIR] [--platform os/arch[/variant]] [--json] <ref>
+```
+
+Print the stored image's manifest and config summary for the selected
+platform (default `linux/arm64`). `--json` prints the raw config JSON.

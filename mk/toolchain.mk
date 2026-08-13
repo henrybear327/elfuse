@@ -42,3 +42,6 @@ SHIM_ASFLAGS ?= -arch arm64
 
 # clang-format
 CLANG_FORMAT ?= clang-format
+
+# Go toolchain for build/elfuse-oci; pure Go, so Linux CI builds it too.
+GO ?= go

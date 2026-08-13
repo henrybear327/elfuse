@@ -3,6 +3,8 @@
 #   build-macos   : compile + entitlement check on macOS Apple Silicon
 #   runtime-macos : HVF runtime tests on self-hosted Apple Silicon,
 #                   including release, ASAN, UBSAN, and TSAN variants
+#   oci-linux     : vet + tests for the pure-Go elfuse-oci CLI, on a Linux
+#                   runner since the package needs no HVF or codesigning
 #
 # Runtime and sanitizer tests require Hypervisor.framework, which
 # GitHub-hosted macOS runners do not expose. Those tests run on self-hosted
@@ -125,6 +127,29 @@ jobs:
           path: build/elfuse
           retention-days: 7
           if-no-files-found: warn
+
+  # The Go CLI is pure Go with no HVF entitlement or codesigning, so a
+  # hosted Linux runner covers it; `make oci-test` also runs on the macOS
+  # runtime hosts via `make check` when a Go toolchain is present.
+  oci-linux:
+    name: elfuse-oci (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Vet and test elfuse-oci
+        run: |
+          set -euo pipefail
+          go version
+          go vet ./cmd/elfuse-oci/
+          make oci-test
 
   runtime-macos:
     name: Runtime (${{ matrix.name }})

@@ -120,6 +120,16 @@ func insideStore(storeRoot, path string) bool {
 	return abs == absStore || strings.HasPrefix(abs, absStore+string(filepath.Separator))
 }
 
+// refuseRootfsInStore rejects an explicit --rootfs inside the store: it
+// would fill a digest-keyed cache slot under a spelling that need not
+// match the digest, and a later run would boot it as that digest's tree.
+func refuseRootfsInStore(cmd, storeRoot, rootfs string) error {
+	if rootfs != "" && insideStore(storeRoot, rootfs) {
+		return fmt.Errorf("%s: --rootfs %s is inside the store; drop --rootfs for the managed cache", cmd, rootfs)
+	}
+	return nil
+}
+
 // resolvedAbs returns the symlink-resolved absolute form of path, or ""
 // when that is undecidable. Components that do not exist yet ride on the
 // longest existing prefix, resolved: EvalSymlinks fails on a missing

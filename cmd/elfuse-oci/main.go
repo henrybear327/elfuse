@@ -43,6 +43,8 @@ func flagsOnly[T any](build func(*commonFlags) (*flag.FlagSet, T)) func(*commonF
 var commands = []command{
 	{"pull", "<ref>", "Pull an image reference into the local OCI store",
 		cmdPull, flagsOnly(pullFlagSet)},
+	{"unpack", "<ref>", "Unpack a stored image's layers into a rootfs directory",
+		cmdUnpack, flagsOnly(unpackFlagSet)},
 	{"inspect", "<ref>", "Print a stored image's manifest + config",
 		cmdInspect, flagsOnly(inspectFlagSet)},
 }

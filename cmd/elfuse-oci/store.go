@@ -120,9 +120,10 @@ func insideStore(storeRoot, path string) bool {
 	return abs == absStore || strings.HasPrefix(abs, absStore+string(filepath.Separator))
 }
 
-// refuseRootfsInStore rejects an explicit --rootfs inside the store: it
-// would fill a digest-keyed cache slot under a spelling that need not
-// match the digest, and a later run would boot it as that digest's tree.
+// refuseRootfsInStore rejects an explicit --rootfs inside the store: a
+// cache slot filled under a spelling that need not match its digest
+// would boot as that digest's tree, and blobs/ or refs.json would be
+// overwritten by image content.
 func refuseRootfsInStore(cmd, storeRoot, rootfs string) error {
 	if rootfs != "" && insideStore(storeRoot, rootfs) {
 		return fmt.Errorf("%s: --rootfs %s is inside the store; drop --rootfs for the managed cache", cmd, rootfs)

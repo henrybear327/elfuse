@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +109,57 @@ func TestManifestAndConfigRoundTrip(t *testing.T) {
 	}
 	if cfg.OS != "linux" || cfg.Architecture != "arm64" {
 		t.Fatalf("config platform = %s/%s", cfg.OS, cfg.Architecture)
+	}
+}
+
+// replaceFile removes its temp file when the create or the rename fails.
+func TestReplaceFileLeavesNoLitterOnFailure(t *testing.T) {
+	cases := []struct {
+		name        string
+		skipAsRoot  bool
+		setup       func(t *testing.T, dir string)
+		wantEntries []string
+	}{
+		{"create fails in read-only dir", true, func(t *testing.T, dir string) {
+			if err := os.Chmod(dir, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		}, nil},
+		{"rename fails onto non-empty dir", false, func(t *testing.T, dir string) {
+			if err := os.MkdirAll(filepath.Join(dir, "resolv.conf", "x"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}, []string{"resolv.conf"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.skipAsRoot && os.Geteuid() == 0 {
+				t.Skip("directory write permissions do not bind as root")
+			}
+			dir := t.TempDir()
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			tc.setup(t, dir)
+
+			if err := replaceFile(root, "resolv.conf", []byte("nameserver 8.8.8.8\n")); err == nil {
+				t.Fatal("replaceFile succeeded, want error")
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			if !slices.Equal(names, tc.wantEntries) {
+				t.Fatalf("entries after failed write = %v, want %v", names, tc.wantEntries)
+			}
+		})
 	}
 }
 

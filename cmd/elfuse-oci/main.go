@@ -47,12 +47,14 @@ var commands = []command{
 		cmdUnpack, flagsOnly(unpackFlagSet)},
 	{"inspect", "<ref>", "Print a stored image's manifest + config",
 		cmdInspect, flagsOnly(inspectFlagSet)},
+	{"run", "<ref> [args...]", "Pull + unpack + exec the image's entrypoint under elfuse",
+		cmdRun, flagsOnly(runFlagSet)},
 }
 
 func usage() {
 	fmt.Fprint(os.Stderr, "usage: elfuse-oci <command> [flags] [args...]\n\ncommands:\n")
 	for _, c := range commands {
-		fmt.Fprintf(os.Stderr, "  %-8s %-6s %s\n", c.name, c.args, c.summary)
+		fmt.Fprintf(os.Stderr, "  %-8s %-15s %s\n", c.name, c.args, c.summary)
 	}
 	fmt.Fprint(os.Stderr, `  help            Show this help
   version         Print the elfuse-oci version

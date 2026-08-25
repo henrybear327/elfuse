@@ -156,12 +156,18 @@ func pushBlob(t *testing.T, s *store, mediaType string, b []byte) ocispec.Descri
 func storeWithImage(t *testing.T, ref string, img testImage) (*store, string) {
 	t.Helper()
 	s := tempStore(t)
+	return s, pushAndPin(t, s, ref, img)
+}
+
+// pushAndPin is what a pull leaves behind: the blobs and the pin.
+func pushAndPin(t *testing.T, s *store, ref string, img testImage) string {
+	t.Helper()
 	if img.platform.OS == "" {
 		img.platform = defaultPlatform
 	}
 	d := pushTestImage(t, s, img)
 	pinImage(t, s, ref, img.platform, d)
-	return s, d
+	return d
 }
 
 // pinImage pins under the store lock, as pullImage does.

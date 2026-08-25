@@ -348,6 +348,7 @@ MAKEFILE_PROOF_INCLUDES = {
 }
 MAKEFILE_INERT_INCLUDES = {
     "mk/shim.mk",
+    "mk/oci.mk",
     "mk/tests.mk",
     "mk/lint.mk",
     "mk/format.mk",

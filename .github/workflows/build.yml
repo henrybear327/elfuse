@@ -126,6 +126,28 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  # The Go CLI is pure Go: no HVF entitlement, no codesigning, so the
+  # cheapest runner covers vet and the race-detected test suite.
+  oci-linux:
+    name: elfuse-oci (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Lint and test elfuse-oci
+        run: |
+          set -euo pipefail
+          go version
+          make oci-lint
+          make oci-test
+
   runtime-macos:
     name: Runtime (${{ matrix.name }})
     needs: build-macos

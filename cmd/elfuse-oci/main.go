@@ -54,6 +54,8 @@ var commands = []command{
 		cmdInspect, flagsOnly(inspectFlagSet)},
 	{"run", "<ref> [args...]", "Pull + unpack + run the image's entrypoint under elfuse",
 		cmdRun, flagsOnly(runFlagSet)},
+	{"clean", "", "Remove unpacked caches (--cache) or the whole store",
+		cmdClean, flagsOnly(cleanFlagSet)},
 }
 
 func usage() {

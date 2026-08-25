@@ -8,6 +8,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -69,5 +70,36 @@ func TestDarwinCSRealHdiutil(t *testing.T) {
 	}
 	if isMountPoint(mount) {
 		t.Fatal("still mounted after detach")
+	}
+}
+
+// TestDarwinCSOrphanSweep reproduces the leak a store removed under a
+// live mount leaves: the bundle directory is gone, the volume is still
+// attached, and no store can reach it. The sweep must detach it.
+func TestDarwinCSOrphanSweep(t *testing.T) {
+	if os.Getenv("ELFUSE_OCI_DARWIN_CS") == "" {
+		t.Skip("set ELFUSE_OCI_DARWIN_CS=1 to run the real hdiutil round-trip")
+	}
+	bundle := filepath.Join(t.TempDir(), "cs", "sha256", strings.Repeat("c", 64))
+	mount, err := provisionCaseSensitive(bundle, "1g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = detachForce(mount) })
+	if err := os.RemoveAll(filepath.Join(bundle, "rootfs.sparsebundle")); err != nil {
+		t.Fatal(err)
+	}
+	if !isMountPoint(mount) {
+		t.Fatal("removing the bundle must leave the volume attached")
+	}
+	n, err := detachOrphanBundles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Fatalf("detached %d, want at least the planted orphan", n)
+	}
+	if isMountPoint(mount) {
+		t.Fatal("orphan still mounted after the sweep")
 	}
 }

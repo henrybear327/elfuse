@@ -57,12 +57,17 @@ func TestBadFlagIsError(t *testing.T) {
 	mustContain(t, stderr, "usage: elfuse-oci inspect")
 }
 
-// An empty arg list trips each command's own positional validation,
-// which only its handler produces, so dispatch is proved per entry.
+// Each command's own positional validation, which only its handler
+// produces, proves dispatch per entry: an empty arg list for the
+// ref-taking commands, a stray positional for clean.
 func TestEveryCommandReachesItsHandler(t *testing.T) {
 	for _, c := range commands {
+		var args []string
+		if c.name == "clean" {
+			args = []string{"stray"}
+		}
 		var err error
-		captureOutput(t, func() { err = dispatch(c.name, nil) })
+		captureOutput(t, func() { err = dispatch(c.name, args) })
 		if err == nil || !strings.Contains(err.Error(), c.name+":") {
 			t.Errorf("%s: want its own arg error, got %v", c.name, err)
 		}

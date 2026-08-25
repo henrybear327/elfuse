@@ -54,9 +54,10 @@ func TestParseMountpoint(t *testing.T) {
 }
 
 // installFakeHdiutil puts an hdiutil stub first on PATH that logs each
-// invocation and answers attach with $ELFUSE_TEST_HDIUTIL_ATTACH or a
-// plist naming the requested mountpoint, so provision proceeds against a
-// plain directory.
+// invocation, answers attach with $ELFUSE_TEST_HDIUTIL_ATTACH or a plist
+// naming the requested mountpoint (so provision proceeds against a plain
+// directory), and answers info with $ELFUSE_TEST_HDIUTIL_INFO or an
+// empty images list.
 func installFakeHdiutil(t *testing.T) (logPath string) {
 	t.Helper()
 	logPath = filepath.Join(t.TempDir(), "hdiutil.log")
@@ -504,4 +505,161 @@ func TestSparseSizeIgnoredOnWarmBundleIsReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustContain(t, stderr, "--sparse-size ignored")
+}
+
+// clean force-detaches a still mounted bundle volume before removing
+// its directory.
+func TestCleanDetachesMountedBundle(t *testing.T) {
+	log := installFakeHdiutil(t)
+	s := tempStore(t)
+	mnt := filepath.Join(s.root, "cs", "sha256", strings.Repeat("c", 64), "mnt")
+	if err := os.MkdirAll(mnt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := isMountPointFn
+	isMountPointFn = func(p string) bool { return p == mnt }
+	t.Cleanup(func() { isMountPointFn = old })
+
+	var err error
+	captureOutput(t, func() { err = cmdClean([]string{"--store", s.root, "--cache"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	mustContain(t, string(b), "detach", "-force", mnt)
+	if _, err := os.Lstat(filepath.Join(s.root, "cs")); !os.IsNotExist(err) {
+		t.Fatal("cs/ must be removed")
+	}
+}
+
+// A trimmed capture of real hdiutil info -plist output: two store
+// bundles attached, one listing an extra entity with no mount point and
+// one at a path with an escaped &, plus a foreign image.
+var infoPlistFixture = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>images</key>
+	<array>
+		<dict>
+			<key>image-path</key>
+			<string>/Volumes/Other/scratch.dmg</string>
+			<key>system-entities</key>
+			<array>
+				<dict>
+					<key>dev-entry</key>
+					<string>/dev/disk2s1</string>
+					<key>mount-point</key>
+					<string>/Volumes/scratch</string>
+				</dict>
+			</array>
+		</dict>
+		<dict>
+			<key>image-path</key>
+			<string>/tmp/gone/cs/sha256/` + strings.Repeat("a", 64) + `/rootfs.sparsebundle</string>
+			<key>image-type</key>
+			<string>sparse bundle disk image</string>
+			<key>system-entities</key>
+			<array>
+				<dict>
+					<key>content-hint</key>
+					<string>GUID_partition_scheme</string>
+					<key>dev-entry</key>
+					<string>/dev/disk4</string>
+				</dict>
+				<dict>
+					<key>dev-entry</key>
+					<string>/dev/disk5s1</string>
+					<key>mount-point</key>
+					<string>/tmp/gone/cs/sha256/` + strings.Repeat("a", 64) + `/mnt</string>
+				</dict>
+			</array>
+		</dict>
+		<dict>
+			<key>image-path</key>
+			<string>/tmp/a&amp;b/cs/sha256/` + strings.Repeat("b", 64) + `/rootfs.sparsebundle</string>
+			<key>system-entities</key>
+			<array>
+				<dict>
+					<key>dev-entry</key>
+					<string>/dev/disk7s1</string>
+					<key>mount-point</key>
+					<string>/tmp/a&amp;b/cs/sha256/` + strings.Repeat("b", 64) + `/mnt</string>
+				</dict>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
+`
+
+func TestParseAttachedBundlesKeepsStoreBundlesOnly(t *testing.T) {
+	got, err := parseAttachedBundles([]byte(infoPlistFixture), isStoreBundlePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []bundleMount{
+		{image: "/tmp/gone/cs/sha256/" + strings.Repeat("a", 64) + "/rootfs.sparsebundle",
+			mount: "/tmp/gone/cs/sha256/" + strings.Repeat("a", 64) + "/mnt"},
+		{image: "/tmp/a&b/cs/sha256/" + strings.Repeat("b", 64) + "/rootfs.sparsebundle",
+			mount: "/tmp/a&b/cs/sha256/" + strings.Repeat("b", 64) + "/mnt"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("parsed %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	got, err = parseAttachedBundles([]byte(`<plist version="1.0"><dict><key>images</key><array/></dict></plist>`), isStoreBundlePath)
+	if err != nil || got != nil {
+		t.Fatalf("empty images list = %+v, %v; must parse to nothing", got, err)
+	}
+}
+
+// writeInfoFixture points the stub's info verb at a plist in which the
+// digest-a bundle sits under a directory that does not exist and the
+// digest-b bundle under root, which does.
+func writeInfoFixture(t *testing.T, root string) {
+	t.Helper()
+	plist := strings.ReplaceAll(infoPlistFixture, "/tmp/a&amp;b", root)
+	if err := os.MkdirAll(filepath.Join(root, "cs", "sha256", strings.Repeat("b", 64), "rootfs.sparsebundle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "info.plist")
+	if err := os.WriteFile(path, []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ELFUSE_TEST_HDIUTIL_INFO", path)
+}
+
+func TestDetachOrphanBundlesSkipsLiveStores(t *testing.T) {
+	log := installFakeHdiutil(t)
+	writeInfoFixture(t, t.TempDir())
+	n, err := detachOrphanBundles()
+	if err != nil || n != 1 {
+		t.Fatalf("n, err = %d, %v", n, err)
+	}
+	b, _ := os.ReadFile(log)
+	mustContain(t, string(b), "detach /tmp/gone/cs/sha256/"+strings.Repeat("a", 64)+"/mnt -force")
+	if strings.Contains(string(b), strings.Repeat("b", 64)) {
+		t.Fatalf("a bundle whose store exists was detached:\n%s", b)
+	}
+}
+
+// The sweep does not hang off the store: a missing store still detaches
+// the orphan.
+func TestCleanSweepsOrphansEvenWithoutStore(t *testing.T) {
+	log := installFakeHdiutil(t)
+	writeInfoFixture(t, t.TempDir())
+	var err error
+	_, stderr := captureOutput(t, func() {
+		err = cmdClean([]string{"--store", filepath.Join(t.TempDir(), "never")})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, stderr, "Nothing to clean", "Detached 1 orphaned")
+	b, _ := os.ReadFile(log)
+	mustContain(t, string(b), "detach /tmp/gone/")
 }

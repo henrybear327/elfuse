@@ -18,3 +18,7 @@ const csAvailable = false
 func runCaseSensitive(ctx context.Context, rc *runContext) error {
 	return fmt.Errorf("case-sensitive sparsebundle rootfs requires macOS; pass --plain-rootfs for a plain directory")
 }
+
+// No sparsebundles exist off darwin: nothing to detach, nothing to sweep.
+func detachStoreBundles(s *store) error { return nil }
+func detachOrphanBundles() (int, error) { return 0, nil }

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,7 +35,7 @@ const defaultSparseSize = "16g"
 // runCaseSensitive is the darwin default: a per-digest case-sensitive
 // sparsebundle (a case-folding directory cannot hold case-colliding image
 // names), unpacked once and run out of a per-run COW clone. The mount
-// stays attached so the next run is warm.
+// stays attached so the next run is warm; clean owns the detach.
 func runCaseSensitive(ctx context.Context, rc *runContext) (err error) {
 	bundleDir, err := rc.s.cacheDir(cacheCS, rc.digest)
 	if err != nil {
@@ -195,7 +196,7 @@ func ensureBundleImage(image, size string) error {
 			return fmt.Errorf("sparsebundle %s is a symlink, refusing to use it", image)
 		}
 		if size != defaultSparseSize {
-			fmt.Fprintf(os.Stderr, "elfuse-oci: sparsebundle exists; --sparse-size ignored\n")
+			fmt.Fprintf(os.Stderr, "elfuse-oci: sparsebundle exists; --sparse-size ignored (clean --cache to recreate)\n")
 		}
 		return nil
 	} else if !os.IsNotExist(err) {
@@ -342,4 +343,73 @@ func parseAttachedBundles(out []byte, keep func(image string) bool) ([]bundleMou
 		}
 	}
 	return mounts, nil
+}
+
+// detachStoreBundles force-detaches every mounted bundle volume under the
+// store's cs/ tree, so clean can remove the bundles.
+func detachStoreBundles(s *store) error {
+	base := s.cacheBase(cacheCS)
+	entries, err := os.ReadDir(base)
+	// Nothing is mounted under an absent or non-directory base, and clean
+	// is the recovery path for a malformed store.
+	if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		mnt := csMountPath(filepath.Join(base, e.Name()))
+		if err := rejectSymlink(mnt, "detach it"); err != nil {
+			return err
+		}
+		if !isMountPointFn(mnt) {
+			continue
+		}
+		if err := detachForce(mnt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isStoreBundlePath recognizes <store>/cs/sha256/<hex>/rootfs.sparsebundle.
+func isStoreBundlePath(p string) bool {
+	slot := filepath.Dir(p)
+	if p != csBundleImage(slot) {
+		return false
+	}
+	if _, err := digestHex("sha256:" + filepath.Base(slot)); err != nil {
+		return false
+	}
+	algo := filepath.Dir(slot)
+	return filepath.Base(algo) == "sha256" && filepath.Base(filepath.Dir(algo)) == cacheCS
+}
+
+// detachOrphanBundles force-detaches every attached store bundle whose
+// image is gone: a store removed under a live mount (a killed test's
+// TempDir, an rm -rf) leaves the volume attached with no store to clean
+// it through. Bundles whose store exists belong to that store's clean.
+func detachOrphanBundles() (int, error) {
+	out, err := hdiutil("info", "-plist")
+	if err != nil {
+		return 0, err
+	}
+	bundles, err := parseAttachedBundles(out, isStoreBundlePath)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, b := range bundles {
+		if _, err := os.Lstat(b.image); !os.IsNotExist(err) {
+			continue
+		}
+		if err := detachForce(b.mount); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }

@@ -14,7 +14,12 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	var code exitStatus
+	if errors.As(err, &code) {
+		os.Exit(int(code))
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "elfuse-oci: %s\n", err)
 		os.Exit(1)
 	}
@@ -47,7 +52,7 @@ var commands = []command{
 		cmdUnpack, flagsOnly(unpackFlagSet)},
 	{"inspect", "<ref>", "Print a stored image's manifest + config",
 		cmdInspect, flagsOnly(inspectFlagSet)},
-	{"run", "<ref> [args...]", "Pull + unpack + exec the image's entrypoint under elfuse",
+	{"run", "<ref> [args...]", "Pull + unpack + run the image's entrypoint under elfuse",
 		cmdRun, flagsOnly(runFlagSet)},
 }
 

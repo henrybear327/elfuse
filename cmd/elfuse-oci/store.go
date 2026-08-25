@@ -75,6 +75,10 @@ func digestHex(dgst string) (string, error) {
 	return d.Encoded(), nil
 }
 
+func csBundleImage(bundleDir string) string { return filepath.Join(bundleDir, "rootfs.sparsebundle") }
+func csMountPath(bundleDir string) string   { return filepath.Join(bundleDir, "mnt") }
+func csBaseTree(mount string) string        { return filepath.Join(mount, "rootfs") }
+
 // cacheDir maps a manifest digest to its slot under kind. A symlink at
 // a managed parent is refused, or a planted link would move a cache
 // fill outside the store.
@@ -157,9 +161,10 @@ func resolvedAbs(path string) string {
 }
 
 // withLock runs fn while holding the store lock, which serializes whole
-// pulls (the shared ingest/ directory and the refs.json read-modify-write)
-// and clean against each other; nothing guards readers or live runs. The
-// wait for the lock ends with ctx, so a pull's --timeout covers it.
+// pulls (the shared ingest/ directory and the refs.json read-modify-write),
+// sparsebundle provisioning, and clean against each other; nothing guards
+// readers or live runs. The wait for the lock ends with ctx, so a pull's
+// --timeout covers it.
 func (s *store) withLock(ctx context.Context, fn func() error) error {
 	l, err := acquireFlock(ctx, s.lockPath())
 	if err != nil {

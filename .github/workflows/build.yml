@@ -148,6 +148,33 @@ jobs:
           make oci-lint
           make oci-test
 
+  # Hosted macOS gives hdiutil and case-sensitive APFS but no HVF: this
+  # is the only place the race detector sees the darwin sparsebundle and
+  # clone code, and the only hosted runner that can run the real hdiutil
+  # round-trip.
+  oci-image-macos:
+    name: OCI image CLI (macOS Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test elfuse-oci on darwin
+        run: |
+          set -euo pipefail
+          go version
+          make oci-lint
+          make oci-test
+
+      - name: Real hdiutil sparsebundle round-trip
+        run: make oci-test-hdiutil
+
   runtime-macos:
     name: Runtime (${{ matrix.name }})
     needs: build-macos

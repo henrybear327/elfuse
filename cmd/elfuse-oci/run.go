@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"syscall"
 
@@ -19,6 +21,13 @@ var execElfuseForRun = execElfuse
 
 // pullForRun is cmdRun's auto-pull, swappable so tests stay offline.
 var pullForRun = pullImage
+
+// exitStatus is the guest's exit status, carried out of a spawn-and-wait
+// run as an error so every teardown on the way out still runs; main
+// exits with it.
+type exitStatus int
+
+func (e exitStatus) Error() string { return fmt.Sprintf("guest exited %d", int(e)) }
 
 // runContext is one resolved run invocation: the store, the pinned
 // image, the parsed flags, the guest argv tail, and the elfuse binary.
@@ -45,9 +54,14 @@ func cmdRun(args []string) error {
 		return fmt.Errorf("run: expected <ref> [args...]")
 	}
 	ref, tail := rest[0], rest[1:]
+	// csAvailable is the build-tag seam (csrootfs_darwin.go and its stub).
+	useCS := csAvailable && rf.rootfs == "" && !rf.plainRootfs
 	// Everything decidable from the flags and the host is refused before
 	// any network work: a typo must not cost a multi-hundred-MB pull.
 	if err := validateRunFlags(*rf); err != nil {
+		return err
+	}
+	if err := refuseCSFlags(rf.cs, useCS); err != nil {
 		return err
 	}
 	bin, err := resolveElfuseBin()
@@ -80,6 +94,9 @@ func cmdRun(args []string) error {
 		return err
 	}
 	rc := &runContext{s: s, ref: ref, digest: digest, m: m, cfg: cfg, rf: *rf, tail: tail, bin: bin}
+	if useCS {
+		return runCaseSensitive(ctx, rc)
+	}
 	return runPlainRootfs(ctx, rc)
 }
 
@@ -96,7 +113,27 @@ func runFlagSet(cf *commonFlags) (*flag.FlagSet, *runFlags) {
 	fs.StringVar(&rf.user, "user", "", "run as UID[:GID]; symbolic names resolve against the image /etc/passwd and /etc/group")
 	fs.StringVar(&rf.workdir, "workdir", "", "guest-absolute initial working directory")
 	fs.StringVar(&rf.rootfs, "rootfs", "", "use an explicit rootfs directory (plain dir)")
+	fs.BoolVar(&rf.plainRootfs, "plain-rootfs", false, "use a plain directory rootfs instead of the macOS sparsebundle")
+	fs.StringVar(&rf.cs.sparseSize, "sparse-size", "", "sparsebundle virtual size (default 16g; sparsebundle path, macOS)")
+	fs.BoolVar(&rf.cs.noClone, "no-clone", false, "run against the base tree without a per-run COW clone (sparsebundle path, macOS)")
+	fs.BoolVar(&rf.cs.keepRootfs, "keep", false, "keep the per-run COW clone and mount for inspection (sparsebundle path, macOS)")
 	return fs, rf
+}
+
+// refuseCSFlags rejects a sparsebundle-only flag on a path that cannot
+// honor it, and --keep without a clone to keep, before any network work;
+// parse-and-ignore misleads.
+func refuseCSFlags(c csFlags, useCS bool) error {
+	if name := c.set(); name != "" && !useCS {
+		if csAvailable {
+			return fmt.Errorf("run: --%s needs the sparsebundle path; drop --plain-rootfs/--rootfs", name)
+		}
+		return fmt.Errorf("run: --%s needs the sparsebundle path, which requires macOS", name)
+	}
+	if c.keepRootfs && c.noClone {
+		return fmt.Errorf("run: --keep needs a clone; drop --no-clone")
+	}
+	return nil
 }
 
 // repeatedString collects every occurrence of a repeatable string flag.
@@ -183,6 +220,51 @@ func elfuseArgv(rootfs string, spec *runSpec) []string {
 	argv = append(argv, "--")
 	argv = append(argv, spec.Args...)
 	return argv
+}
+
+// spawnElfuseWait runs elfuse as a child and returns its exit status the
+// way a shell would (exit code, or 128+signal), forwarding signals
+// delivered to this wrapper; the caller stays alive to tear down.
+func spawnElfuseWait(bin, rootfs string, spec *runSpec) (int, error) {
+	// exec.Command supplies bin as argv[0] itself.
+	cmd := exec.Command(bin, elfuseArgv(rootfs, spec)[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Intercepted before Start, so no window exists where a signal kills
+	// this wrapper between launching the child and the forward loop;
+	// SIGHUP included so a terminal hangup still tears the clone down.
+	sigCh := make(chan os.Signal, 4)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT,
+		syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("spawn %s: %w", bin, err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	for {
+		select {
+		case err := <-done:
+			state := cmd.ProcessState
+			if state == nil {
+				return 0, err
+			}
+			ws := state.Sys().(syscall.WaitStatus)
+			if ws.Signaled() {
+				return 128 + int(ws.Signal()), nil
+			}
+			return ws.ExitStatus(), nil
+		case sig := <-sigCh:
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(sig)
+			}
+		}
+	}
 }
 
 // execElfuse replaces this process with elfuse: the plain-rootfs path

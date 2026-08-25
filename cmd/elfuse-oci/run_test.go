@@ -101,6 +101,51 @@ func writeElfuseStub(t *testing.T, body string) string {
 	return p
 }
 
+// The guest's exit status travels through unchanged (exit 42 must not
+// flatten to 0 or 1), and a signaled guest reports shell-style.
+func TestSpawnElfuseWaitExitStatus(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want int
+	}{{"exit 42", 42}, {"kill -TERM $$", 143}} {
+		stub := writeElfuseStub(t, tc.body)
+		code, err := spawnElfuseWait(stub, t.TempDir(), &runSpec{Args: []string{"/x"}, Workdir: "/"})
+		if err != nil || code != tc.want {
+			t.Errorf("%q: code = %d, %v; want %d", tc.body, code, err, tc.want)
+		}
+	}
+}
+
+// The child receives exactly elfuseArgv minus the leading program name.
+func TestSpawnElfuseWaitArgv(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "argv.txt")
+	t.Setenv("ELFUSE_ARGV_OUT", outPath)
+	stub := writeElfuseStub(t, `printf '%s\n' "$@" > "$ELFUSE_ARGV_OUT"`)
+	rootfs := t.TempDir()
+	spec := &runSpec{Args: []string{"/bin/echo", "hi"}, Env: []string{"A=1"}, Workdir: "/w", UID: 3, GID: 4}
+	code, err := spawnElfuseWait(stub, rootfs, spec)
+	if err != nil || code != 0 {
+		t.Fatalf("spawn = %d, %v", code, err)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	want := elfuseArgv(rootfs, spec)[1:]
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("argv:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestSpawnElfuseWaitMissingBinary(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "absent")
+	if _, err := spawnElfuseWait(bin, t.TempDir(), &runSpec{Args: []string{"/x"}, Workdir: "/"}); err == nil ||
+		!strings.Contains(err.Error(), "spawn "+bin) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 // An existing --rootfs that is not a directory is refused by name before
 // anything is written into it: os.OpenRoot would follow a symlink out
 // of the tree the user named.

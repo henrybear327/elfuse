@@ -11,7 +11,7 @@ HAVE_GO := $(shell GOTOOLCHAIN=local $(GO) list -m > /dev/null 2>&1 && echo yes)
 OCI_BIN  := $(BUILD_DIR)/elfuse-oci
 OCI_SRCS := $(shell find cmd/elfuse-oci -type f -name '*.go' ! -name '*_test.go' 2>/dev/null)
 
-.PHONY: elfuse-oci oci-test oci-vet oci-fmt-check oci-lint
+.PHONY: elfuse-oci oci-test oci-test-hdiutil oci-vet oci-fmt-check oci-lint
 
 ifeq ($(HAVE_GO),yes)
 all: elfuse-oci
@@ -46,3 +46,8 @@ oci-fmt-check:
 
 ## Check elfuse-oci formatting and vet both GOOS targets
 oci-lint: oci-fmt-check oci-vet
+
+## Run the real-hdiutil sparsebundle round-trip (macOS, a few seconds of
+## disk arbitration)
+oci-test-hdiutil:
+	$(Q)ELFUSE_OCI_DARWIN_CS=1 $(GO) test -run TestDarwinCS -v ./cmd/elfuse-oci/

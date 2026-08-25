@@ -250,6 +250,11 @@ func TestValidateRunFlags(t *testing.T) {
 		{runFlags{env: []string{"=VAL"}}, "empty variable name"},
 		{runFlags{env: []string{""}}, "empty variable name"},
 		{runFlags{workdir: "/ok", env: []string{"A=1", "B"}}, ""},
+		{runFlags{cs: csFlags{sparseSize: "16GB"}}, "invalid --sparse-size"},
+		{runFlags{cs: csFlags{sparseSize: "g"}}, "invalid --sparse-size"},
+		{runFlags{cs: csFlags{sparseSize: "1.5g"}}, ""},
+		{runFlags{cs: csFlags{sparseSize: "32g"}}, ""},
+		{runFlags{cs: csFlags{sparseSize: "4096"}}, ""},
 	} {
 		err := validateRunFlags(tc.rf)
 		if tc.want == "" && err != nil {
@@ -520,5 +525,33 @@ func TestResolveUserErrorBranches(t *testing.T) {
 				t.Fatalf("resolveUser(%q) err = %v, want %q", tc.user, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// refuseCSFlags: a sparsebundle-only flag off that path is refused with
+// the reason this host gives, and --keep without a clone has nothing to
+// keep.
+func TestRefuseCSFlags(t *testing.T) {
+	for _, c := range []struct {
+		cs    csFlags
+		useCS bool
+		want  string
+	}{
+		{csFlags{}, false, ""},
+		{csFlags{noClone: true}, true, ""},
+		{csFlags{noClone: true}, false, "needs the sparsebundle path"},
+		{csFlags{keepRootfs: true, noClone: true}, true, "--keep needs a clone"},
+	} {
+		err := refuseCSFlags(c.cs, c.useCS)
+		if c.want == "" && err != nil {
+			t.Errorf("%+v useCS=%v: unexpected %v", c.cs, c.useCS, err)
+		} else if c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%+v useCS=%v: err = %v, want %q", c.cs, c.useCS, err, c.want)
+		}
+	}
+	if !csAvailable {
+		if err := refuseCSFlags(csFlags{noClone: true}, false); err == nil || !strings.Contains(err.Error(), "requires macOS") {
+			t.Errorf("off darwin the refusal must name the OS: %v", err)
+		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -44,6 +45,30 @@ type runFlags struct {
 	user          string
 	workdir       string
 	rootfs        string
+
+	plainRootfs bool // --plain-rootfs: a plain directory, not the sparsebundle
+	cs          csFlags
+}
+
+// csFlags are the sparsebundle-only flags; refuseCSFlags rejects them on
+// a path that cannot honor them.
+type csFlags struct {
+	sparseSize string // --sparse-size: virtual size at creation (default 16g)
+	noClone    bool   // --no-clone: run the base tree, no per-run COW clone
+	keepRootfs bool   // --keep: leave the clone for inspection
+}
+
+// set names one of the flags carrying a non-default value, or "".
+func (c csFlags) set() string {
+	switch {
+	case c.keepRootfs:
+		return "keep"
+	case c.noClone:
+		return "no-clone"
+	case c.sparseSize != "":
+		return "sparse-size"
+	}
+	return ""
 }
 
 // computeRunSpec resolves Entrypoint/Cmd/Env/WorkingDir/User with
@@ -120,10 +145,19 @@ func validateRunFlags(rf runFlags) error {
 		}
 	}
 	if rf.workdir != "" {
-		return guestAbs(rf.workdir)
+		if err := guestAbs(rf.workdir); err != nil {
+			return err
+		}
+	}
+	// hdiutil's size grammar, checked here rather than by hdiutil create
+	// after the pull.
+	if s := rf.cs.sparseSize; s != "" && !sparseSizeRe.MatchString(s) {
+		return fmt.Errorf("invalid --sparse-size %q: want a number with an optional b|k|m|g|t|p|e suffix", s)
 	}
 	return nil
 }
+
+var sparseSizeRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[bkmgtpe]?$`)
 
 func guestAbs(workdir string) error {
 	if !filepath.IsAbs(workdir) {

@@ -47,7 +47,7 @@ func TestCmdRunColdCachePipeline(t *testing.T) {
 	got := swapExecSeam(t)
 	var err error
 	_, stderr := captureOutput(t, func() {
-		err = cmdRun([]string{"--store", s.root, "app:1", "extra-arg"})
+		err = cmdRun([]string{"--store", s.root, "--plain-rootfs", "app:1", "extra-arg"})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestCmdRunWarmCacheNotReunpacked(t *testing.T) {
 	rootfs, _ := s.cacheDir(cacheRootfs, d)
 	swapExecSeam(t)
 	var err error
-	captureOutput(t, func() { err = cmdRun([]string{"--store", s.root, "app:1"}) })
+	captureOutput(t, func() { err = cmdRun([]string{"--store", s.root, "--plain-rootfs", "app:1"}) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestCmdRunWarmCacheNotReunpacked(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stderr string
-	_, stderr = captureOutput(t, func() { err = cmdRun([]string{"--store", s.root, "app:1"}) })
+	_, stderr = captureOutput(t, func() { err = cmdRun([]string{"--store", s.root, "--plain-rootfs", "app:1"}) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestCmdRunAutoPullOnlyOnNotPulled(t *testing.T) {
 	swapExecSeam(t)
 
 	var err error
-	captureOutput(t, func() { err = cmdRun([]string{"--store", s.root, "fresh:1"}) })
+	captureOutput(t, func() { err = cmdRun([]string{"--store", s.root, "--plain-rootfs", "fresh:1"}) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestCmdRunAutoPullOnlyOnNotPulled(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls = 0
-	captureOutput(t, func() { err = cmdRun([]string{"--store", s.root, "other:1"}) })
+	captureOutput(t, func() { err = cmdRun([]string{"--store", s.root, "--plain-rootfs", "other:1"}) })
 	if err == nil || calls != 0 {
 		t.Fatalf("corrupt store: err = %v, pulls = %d (want error, 0)", err, calls)
 	}

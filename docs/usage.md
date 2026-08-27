@@ -299,3 +299,144 @@ That has a few direct implications:
   work entirely inside the VM. Programs that link against `libfuse`
   (sshfs, ntfs-3g, AppImage runtimes) run without macFUSE, FUSE-T, or
   FSKit on the host.
+
+## OCI Images
+
+`build/elfuse-oci` pulls an OCI image, unpacks it into a sysroot, and
+runs it as `elfuse --sysroot <rootfs> ...`. It is a separate Go binary;
+elfuse itself has no OCI awareness. It is not a container runtime or an
+image manager: no isolation, no push or build, no per-image lifecycle
+beyond `clean`.
+[oci-images.md](oci-images.md#scope-not-a-full-oci-toolchain) records
+what is absent and why.
+
+### Build
+
+```sh
+make elfuse elfuse-oci        # needs the Go toolchain go.mod names
+```
+
+`make all`, `check`, and `lint` include the Go targets only when a `go`
+new enough for `go.mod` is on `PATH`; without one, `make elfuse` still
+builds.
+
+### Quick Start
+
+```sh
+build/elfuse-oci run alpine:3 /bin/sh -c 'echo hello from elfuse'
+build/elfuse-oci pull debian:stable-slim
+build/elfuse-oci inspect debian:stable-slim
+build/elfuse-oci clean --cache
+```
+
+`run` on a cold store pulls and unpacks first, so the first line alone
+is a complete session.
+
+### Commands
+
+| Command | Meaning |
+|---------|---------|
+| `pull <ref>` | Fetch the image into the store and pin `(ref, platform)` to its manifest digest |
+| `unpack <ref>` | Unpack the layers into the store cache, or into `--rootfs DIR` (an existing directory is merged in place) |
+| `inspect <ref>` | Print a summary of the pinned image, or its config JSON verbatim with `--json` |
+| `run <ref> [args...]` | Pull if not pinned, unpack if cold, launch under elfuse; exits with the guest's status |
+| `clean` | Remove the whole store, or with `--cache` only the unpacked trees and sparsebundles; either form also detaches orphaned `elfuse_sysroot` volumes |
+| `help`, `version` | Usage on stderr; `elfuse-oci <version>` on stdout. `<cmd> -h` prints one command's flags |
+
+References follow Docker's grammar: `alpine:3` is
+`docker.io/library/alpine:3`, an untagged reference gets `:latest`, and
+a `@sha256:` digest is accepted in place of a tag.
+
+### Flags
+
+| Option | Commands | Meaning |
+|--------|----------|---------|
+| `--store DIR` | all | Store directory; default `$ELFUSE_OCI_STORE`, else `~/.local/share/elfuse/oci` |
+| `--platform OS/ARCH[/VARIANT]` | `pull`, `unpack`, `inspect`, `run` | Default `linux/arm64`; `linux/amd64` runs under Rosetta; the OS must be `linux`; `aarch64`, `arm64/v8`, and `x86_64` normalize |
+| `--timeout DURATION` | `pull` | Fail the whole pull, the wait for the store lock included, after this long; default `0`, no limit |
+| `--rootfs DIR` | `unpack`, `run` | Use DIR instead of the store cache; a DIR inside the store is refused; `run` unpacks into it only when it is absent |
+| `--json` | `inspect` | Print the stored config blob verbatim |
+| `--entrypoint CMD` | `run` | Replace the image Entrypoint and drop its Cmd; `""` clears the Entrypoint so the tail or the image Cmd runs alone |
+| `--env KEY=VALUE` | `run` | Set a guest variable; repeatable; a bare `KEY` copies the host value |
+| `--clear-env` | `run` | Drop the image Env; `--env` entries still apply, and Docker's default `PATH` is appended when none is set |
+| `--user UID[:GID]` | `run` | Numeric or symbolic; names resolve against the image `/etc/passwd` and `/etc/group`; a bare uid uses the same number as gid |
+| `--workdir DIR` | `run` | Guest-absolute working directory; created if the image lacks it |
+| `--plain-rootfs` | `run` | A plain directory in the store instead of the macOS sparsebundle |
+| `--sparse-size SIZE` | `run` | Ceiling for a new sparsebundle (default `16g`); inert once the bundle exists |
+| `--no-clone` | `run` | Run the base tree instead of a per-run copy-on-write clone, so guest writes persist |
+| `--keep` | `run` | Keep the per-run clone after exit, also after a failed launch, and print where it is |
+| `--cache` | `clean` | Keep blobs and pins; remove only the unpacked trees and sparsebundles |
+
+`--keep` with `--no-clone` is refused, since there is no clone to keep;
+`--sparse-size`, `--no-clone`, and `--keep` are refused with `--rootfs`
+or `--plain-rootfs`, and off macOS. Everything after `run`'s `<ref>` is
+passed to the guest; a bare command name is searched along the merged
+`PATH` inside the image and rewritten to the absolute path found, and
+one that misses is refused. How Entrypoint, Cmd, Env, WorkingDir, and
+User combine follows Docker; the rules are in
+[oci-images.md](oci-images.md#runtime-configuration).
+
+### Environment
+
+| Variable | Meaning |
+|----------|---------|
+| `ELFUSE_OCI_STORE` | Default store directory |
+| `ELFUSE_BIN` | The elfuse binary `run` launches; default is the `elfuse` beside `elfuse-oci` |
+| `DOCKER_CONFIG` | Directory holding `config.json` for registry credentials; default `~/.docker` |
+
+Credentials are looked up as `docker login` stores them: the helper
+named in `credHelpers` for the registry, else the `credsStore` helper,
+else the inline `auths` entry; a helper that has not answered within
+ten seconds is killed and the pull fails. With no entry the pull is
+anonymous, which is how Docker Hub's public images pull.
+
+### What `run` Does
+
+On macOS the rootfs is a per-digest case-sensitive APFS sparsebundle in
+the store, and each run executes from a copy-on-write clone of it that
+is removed on exit; the volume stays attached until `clean`. With
+`--rootfs` or `--plain-rootfs` the rootfs is a plain directory. Before
+launch, `run` writes the host's hostname, a minimal `/etc/hosts`, and
+the host's `/etc/resolv.conf` into the rootfs, and creates the working
+directory if the image lacks it. On the plain path `elfuse-oci` execs
+`elfuse`; on the sparsebundle path it stays as the parent, forwards
+`SIGINT`, `SIGTERM`, `SIGQUIT`, and `SIGHUP`, and reports a signalled
+guest as `128 + signal`. Progress and warnings go to stderr; stdout
+carries only `inspect` and `version` output.
+
+### Cleanup
+
+`clean --cache` removes the unpacked trees and sparsebundles and keeps
+blobs and pins, so the next run re-unpacks without downloading; `clean`
+removes the whole store. Both detach the store's attached volumes first
+and sweep volumes whose store is already gone. Nothing guards a running
+guest: stop guests, then clean.
+
+### Two Hazards
+
+The rootfs is a root for absolute paths, not a boundary: an absolute
+path the image lacks resolves on the host. `run` refuses a bare command
+that misses in the image `PATH`, but a search done inside the guest by
+its shell inherits the fallback (Alpine's `PATH` tries `/usr/bin` before
+`/bin`, and the host's `/usr/bin/gzip` is a Mach-O), so prefer absolute
+in-image paths or set `--env PATH=...`
+([oci-images.md](oci-images.md#why-the-rootfs-is-a-root-not-a-boundary)).
+Plain directories fold case on the usual APFS volume, so an image
+shipping `Foo` and `foo` loses one under `unpack` or `--rootfs`; the
+sparsebundle default does not fold.
+
+### Running The Lanes Locally
+
+```sh
+make elfuse elfuse-oci
+export ELFUSE_OCI_STORE=/tmp/oci-scratch ELFUSE_OCI_BIN=$PWD/build/elfuse-oci
+scripts/ci/oci-lib-selftest.sh      # shell library checks; no binary or store needed
+scripts/ci/oci-run-smoke.sh         # alpine and debian guests, exit status, clone isolation
+scripts/ci/oci-exec-checks.sh       # unix sockets, cold and warm boot, dynamic interpreter
+scripts/ci/oci-workload.sh python   # one image; keys: python node go jvm c redis
+build/elfuse-oci clean --store /tmp/oci-scratch
+```
+
+The guest lanes need `build/elfuse`, macOS with Hypervisor.framework,
+and a network for a cold store; what each proves is in
+[oci-images.md](oci-images.md#testing).

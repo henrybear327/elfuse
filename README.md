@@ -11,7 +11,8 @@ Native aarch64-linux executes directly on the CPU. x86_64-linux
 executes through Apple's embedded Rosetta translator hosted inside the
 same VM; the architecture is auto-detected from the ELF header. Both
 static and dynamically linked guests are supported, with the dynamic
-linker resolved against an external sysroot via `--sysroot`.
+linker resolved against an external sysroot via `--sysroot`; an OCI
+image can supply that sysroot (see [OCI Images](#oci-images)).
 
 ## Features
 
@@ -36,6 +37,18 @@ linker resolved against an external sysroot via `--sysroot`.
 - Built-in GDB Remote Serial Protocol stub usable from `gdb` or `lldb`
 - Self-contained test matrix that cross-checks elfuse against QEMU
   and exercises a separate Rosetta acceptance suite
+
+## OCI Images
+
+`elfuse-oci` (a separate Go binary) pulls OCI images and runs them under
+elfuse: `build/elfuse-oci pull alpine:3`, then
+`build/elfuse-oci run alpine:3 /bin/sh -c 'echo hi'`. It unpacks the
+image into a sysroot (on macOS a case-sensitive APFS sparsebundle with a
+per-run copy-on-write clone) and runs `elfuse --sysroot` against it. It
+is not a container runtime or an image manager: it provides no isolation
+and no image lifecycle beyond `clean`. Commands are in
+[docs/usage.md](docs/usage.md#oci-images); the decisions behind them are
+in [docs/oci-images.md](docs/oci-images.md).
 
 ## Positioning
 
@@ -111,6 +124,9 @@ For dynamically linked guests:
 build/elfuse --sysroot /path/to/sysroot ./path/to/program
 ```
 
+`elfuse-oci` builds a sysroot from an OCI image and runs it this way; see
+[OCI Images](#oci-images).
+
 For x86_64-linux guests, Rosetta is on by default. To disable:
 
 ```sh
@@ -138,6 +154,9 @@ The build signs `build/elfuse` before use. Override the signing identity with
 - [docs/testing.md](docs/testing.md): build prerequisites, the
   `make check` flow, the QEMU and Rosetta cross-check matrices, and
   fixture handling.
+- [docs/oci-images.md](docs/oci-images.md): the decisions behind
+  `elfuse-oci`, what a full OCI toolchain has that it leaves out, and
+  what each of its CI lanes proves.
 - [docs/filenames.md](docs/filenames.md): how a guest filename becomes a
   name on disk and back: case folding and normalization on the sysroot
   volume, the escape encoding, and the length limits both systems impose.

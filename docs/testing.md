@@ -442,6 +442,7 @@ Suggested minimum validation:
 
 | Change area | Recommended validation |
 |-------------|------------------------|
+| `cmd/elfuse-oci/` or `scripts/ci/oci-*` | `make oci-lint && make oci-test`, then the live lanes in `docs/oci-images.md` for a run-path change |
 | CLI, logging, docs-only build rules | `make elfuse` |
 | Filename codec, case-exact walk, sysroot resolvers | `make check` (runs the codec unit tests, name lanes, and byte-exact oracle lane), plus `make test-sysroot-name-soak` for resolver concurrency. A red golden vector in `test-casefold-host` means the on-disk format moved: see `docs/filenames.md` before touching `tests/casefold-vectors.h` |
 | General syscall or runtime logic | `make elfuse && make check && make test-matrix-elfuse-aarch64` |
@@ -449,3 +450,23 @@ Suggested minimum validation:
 | Rosetta hosting, x86_64 dispatch, VZ ioctls, AOT cache | `make elfuse && make test-rosetta-all` |
 | Broad behavioral changes | `make elfuse && make check && make test-matrix` |
 | Debugger or ptrace flow | `make elfuse && make test-gdbstub` |
+
+## OCI Image CLI
+
+The Go CLI has its own targets, all offline unless noted:
+
+```sh
+make oci-lint          # gofmt, then go vet for darwin/arm64 and linux
+make oci-test          # the suite under the race detector
+ELFUSE_OCI_NETTEST=1 make oci-test    # adds a registry round-trip
+make oci-test-hdiutil  # the real sparsebundle round-trip (macOS)
+go test ./cmd/elfuse-oci/ -run 'TestFilter' -count=1 -v   # one family
+```
+
+CI splits the lanes by capability: the Linux job lints, runs the shell
+library selftest, and race-tests,
+the hosted macOS job adds the darwin race run and the real hdiutil
+round-trip, and the self-hosted runners boot real guests through a run
+smoke, execution checks, and six per-image workload lanes. What each lane
+proves, how to run the live lanes locally, and how the suite avoids
+needing a registry or `hdiutil` are in [oci-images.md](oci-images.md#testing).

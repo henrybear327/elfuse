@@ -112,10 +112,7 @@ jobs:
           make elfuse
 
       - name: Verify HVF entitlement is embedded
-        run: |
-          set -euo pipefail
-          codesign -d --entitlements - build/elfuse 2>&1 \
-            | grep -q 'com\.apple\.security\.hypervisor'
+        run: .ci/hvf-verify-elfuse-binary.sh build/elfuse
 
       - name: Upload elfuse binary
         if: ${{ !cancelled() }}
@@ -273,18 +270,10 @@ jobs:
       MAKEFLAGS: -j8
 
     steps:
-      # Fail fast if this run targets a commit that is no longer the PR's
-      # HEAD. cancel-in-progress covers "commit 2 pushed while commit 1 is
-      # still running", but NOT a manual "Re-run jobs" on an old run: a
-      # re-run replays the original event payload (a frozen head.sha)
-      # against this single self-hosted runner, which would otherwise burn
-      # the full job timeout re-testing stale code. Compare the frozen
-      # head.sha against the live PR HEAD; when they differ, exit 1 with a
-      # clear "commit is no longer the latest" message. We fail (rather than
-      # cancel) because repo policy caps the token at actions: read, so the
-      # cancel API is unavailable. exit 1 also stops the job, so the later
-      # steps are skipped automatically -- no per-step guard needed. The
-      # lookup fails open: if HEAD can't be determined the job runs.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Why this fails instead of cancelling: .ci/hvf-check-superseded.sh.
       - name: Fail fast if superseded by a newer PR commit
         if: github.event_name == 'pull_request'
         env:
@@ -292,25 +281,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -uo pipefail
-          # curl and system python3 are always present on macOS; jq/gh are
-          # not guaranteed on a self-hosted runner, so don't depend on them.
-          latest=$(curl -fsSL \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER" \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])') \
-            || latest=""
-          echo "Run targets : $RUN_SHA"
-          echo "PR HEAD now : ${latest:-<unknown>}"
-          if [ -n "$latest" ] && [ "$latest" != "$RUN_SHA" ]; then
-            echo "::error::This run targets $RUN_SHA, but PR #$PR_NUMBER HEAD is now $latest -- the commit is no longer the latest. Failing instead of re-testing stale code on the self-hosted runner; re-run CI on the current commit."
-            exit 1
-          fi
-
-      - name: Checkout
-        uses: actions/checkout@v7
+        run: .ci/hvf-check-superseded.sh
 
       - name: Restore cached test fixtures
         # Only the release leg needs fixtures: the sanitizer legs run the
@@ -406,9 +377,7 @@ jobs:
           make EXTRA_CFLAGS="$EXTRA_CFLAGS" elfuse
 
       - name: Verify HVF entitlement is embedded
-        run: |
-          codesign -d --entitlements - build/elfuse 2>&1 \
-            | grep -q 'com\.apple\.security\.hypervisor'
+        run: .ci/hvf-verify-elfuse-binary.sh build/elfuse
 
       - name: test-hello
         run: |

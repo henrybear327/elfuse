@@ -1,8 +1,12 @@
 # Build elfuse and run the HVF runtime tests.
 #
-#   build-macos   : compile + entitlement check on macOS Apple Silicon
-#   runtime-macos : HVF runtime tests on self-hosted Apple Silicon,
-#                   including release, ASAN, UBSAN, and TSAN variants
+#   build-macos     : compile + entitlement check on macOS Apple Silicon
+#   oci-linux       : elfuse-oci unit tests on Linux (pure Go, no HVF)
+#   oci-image-macos : elfuse-oci unit tests plus the real hdiutil round trip
+#   runtime-macos   : HVF runtime tests on self-hosted Apple Silicon,
+#                     including release, ASAN, UBSAN, and TSAN variants;
+#                     the release leg also boots guests through elfuse-oci
+#   workload        : one real workload image per leg under elfuse-oci
 #
 # Runtime and sanitizer tests require Hypervisor.framework, which
 # GitHub-hosted macOS runners do not expose. Those tests run on self-hosted
@@ -143,6 +147,7 @@ jobs:
           set -euo pipefail
           go version
           make oci-lint
+          scripts/ci/oci-lib-selftest.sh
           make oci-test
 
   # Hosted macOS gives hdiutil and case-sensitive APFS but no HVF: this
@@ -198,7 +203,7 @@ jobs:
             ubsan_options: ''
             tsan_options: ''
             test_timeout: ''
-            job_timeout: 20
+            job_timeout: 30
             run_matrix: true
             check_target: check
             brew_pkgs: binutils qemu
@@ -387,6 +392,15 @@ jobs:
         run: |
           make EXTRA_CFLAGS="$EXTRA_CFLAGS" test-multi-vcpu
 
+      - name: Set up Go
+        # make check folds oci-test in only when the go on PATH meets
+        # go.mod's floor, so the toolchain is installed first rather than
+        # left to whatever the runner carries.
+        if: ${{ matrix.run_matrix }}
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
       - name: make check
         # Release runs the full check suite; sanitizer legs run check-sanitizer,
         # a representative internal-implementation subset (the release lane plus
@@ -398,6 +412,39 @@ jobs:
         if: ${{ matrix.run_matrix }}
         run: |
           bash tests/test-matrix.sh all
+
+      - name: Build elfuse-oci
+        # env: values do not expand $HOME, hence GITHUB_ENV. run-smoke and
+        # exec-checks share the store.
+        if: ${{ matrix.run_matrix }}
+        run: |
+          set -euo pipefail
+          make elfuse-oci
+          echo "OCI_STORE=$HOME/.cache/elfuse-ci/oci-store" >>"$GITHUB_ENV"
+
+      - name: Reset OCI store
+        # The store an earlier run left on this persistent disk is not
+        # reused: a pin-table format change stranded it once, and clean
+        # also detaches a bundle volume a cancelled run left attached.
+        if: ${{ matrix.run_matrix }}
+        run: build/elfuse-oci clean --store "$OCI_STORE"
+
+      - name: OCI run smoke (pull -> sparsebundle -> COW clone -> HVF boot)
+        # Release leg only: the sanitizer legs never boot a guest under
+        # elfuse-oci.
+        if: ${{ matrix.run_matrix }}
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$OCI_STORE"
+          scripts/ci/oci-run-smoke.sh
+
+      - name: OCI execution checks (unix sockets, cold/warm boot, dynamic interp)
+        # Release leg only; shares the smoke step's store, warm by then.
+        if: ${{ matrix.run_matrix }}
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$OCI_STORE"
+          scripts/ci/oci-exec-checks.sh
 
       - name: Upload runtime binary
         if: ${{ !cancelled() }}
@@ -425,3 +472,49 @@ jobs:
           else
             echo "No externals/test-fixtures to save"
           fi
+
+  # Per-image real workloads through elfuse-oci run under HVF. One leg
+  # per image, fail-fast off: one image regressing must not hide the
+  # state of the others. Each leg resets its per-key store first, so a
+  # run never inherits state from the one before.
+  workload:
+    name: Workload (${{ matrix.key }})
+    needs: build-macos
+    if: >
+      github.repository == 'sysprog21/elfuse' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group')
+    runs-on: [self-hosted, macOS, arm64]
+    timeout-minutes: ${{ matrix.timeout }}
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: workload-${{ matrix.key }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { key: python, timeout: 30 }
+          - { key: node, timeout: 30 }
+          - { key: go, timeout: 30 }
+          # jvm and c get 45: slower startup/compile bursts and the
+          # largest first pulls.
+          - { key: jvm, timeout: 45 }
+          - { key: c, timeout: 45 }
+          - { key: redis, timeout: 30 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: HVF elfuse setup
+        uses: ./.github/actions/hvf-elfuse-setup
+      - name: Reset OCI store
+        # As on the release leg: no state from an earlier run.
+        run: build/elfuse-oci clean --store "$HOME/.cache/elfuse-ci/oci-workload-${{ matrix.key }}"
+      - name: Run ${{ matrix.key }} workload
+        run: |
+          set -euo pipefail
+          export ELFUSE_OCI_STORE="$HOME/.cache/elfuse-ci/oci-workload-${{ matrix.key }}"
+          scripts/ci/oci-workload.sh ${{ matrix.key }}

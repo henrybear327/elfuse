@@ -1,0 +1,39 @@
+name: HVF elfuse setup
+description: >
+  Shared setup for the self-hosted HVF workload jobs: fail if the run is
+  superseded by a newer PR commit, then fetch the prebuilt elfuse binary from
+  the build-macos job and build the pure-Go elfuse-oci CLI. Assumes the repo is
+  already checked out.
+
+runs:
+  using: composite
+  steps:
+    # Why this fails instead of cancelling: .ci/hvf-check-superseded.sh.
+    - name: Fail fast if superseded by a newer PR commit
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        RUN_SHA: ${{ github.event.pull_request.head.sha }}
+      run: .ci/hvf-check-superseded.sh
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+
+    - name: Download prebuilt elfuse binary
+      uses: actions/download-artifact@v7
+      with:
+        name: elfuse-${{ runner.os }}-${{ runner.arch }}
+        path: build
+
+    - name: Restore execute bit + verify HVF entitlement
+      shell: bash
+      run: .ci/hvf-verify-elfuse-binary.sh build/elfuse
+
+    - name: Build elfuse-oci
+      shell: bash
+      run: make elfuse-oci

@@ -8,8 +8,8 @@ requiring a registry or a container daemon. This is separate from the OCI
 runtime specification, which describes how a container is started.
 
 `elfuse-oci` is a separate Go command that pulls images into such a local
-layout. At this point in the stack it does not unpack or run them, and it does
-not add namespaces, cgroups, or other container isolation. Command syntax is in
+layout and unpacks their filesystems. It does not run images or add namespaces,
+cgroups, or other container isolation. Command syntax is in
 [usage.md](usage.md#oci-images).
 
 ## Store
@@ -23,6 +23,7 @@ The store is an [OCI image layout](https://github.com/opencontainers/image-spec/
   oci-layout
   index.json
   blobs/<algorithm>/<digest>
+  rootfs/sha256/<hex>
 ```
 
 The marker records the elfuse store format. `oci-layout`, `index.json`, and
@@ -72,11 +73,33 @@ pinned as baseline `amd64`.
 The pull timeout covers the registry request, store publication, and the wait
 for another writer. The default value, zero, does not set a deadline.
 
+## Unpack
+
+Without `--rootfs`, `unpack` caches the rootfs by manifest digest. It extracts
+into a sibling temporary directory and renames the completed tree into place.
+Concurrent unpacks may do duplicate work, but only a completed tree is
+published. A symlink at a managed cache path is rejected.
+
+`--rootfs DIR` applies the image to `DIR`. An existing directory is updated in
+place; an absent directory is staged and renamed. A destination inside the
+store is rejected.
+
+`moby/go-archive` applies layers in manifest order. It handles whiteouts,
+hardlinks, path containment, file metadata, gzip, and zstd. Ownership is not
+applied, and unsupported extended attributes do not fail extraction.
+
+elfuse supplies host policy before each layer is applied:
+
+- Device and FIFO entries are removed. A replacement becomes a whiteout, and
+  hardlinks to a removed entry are omitted.
+- Absolute symlink targets are rewritten relative to the link.
+- On macOS, setuid, setgid, and sticky bits are cleared.
+
 ## Validation
 
 The offline tests create manifests and layers in temporary stores. They cover
 reference normalization, exact platform selection, index structure, blob
 validation, credential-helper resolution, concurrent pulls, stale temporary
 files, private permissions, legacy-store refusal, lock cancellation, CLI
-parsing, and the race detector. Set `ELFUSE_OCI_NETTEST=1` to add a Docker Hub
-round trip.
+parsing, layer application, cache publication, and the race detector. Set
+`ELFUSE_OCI_NETTEST=1` to add a Docker Hub round trip.

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,8 @@ const (
 	metadataLockName  = ".lock"
 	refNameAnnotation = "org.opencontainers.image.ref.name"
 )
+
+var errNotPulled = errors.New("not pulled")
 
 type store struct {
 	root string
@@ -52,6 +55,83 @@ func openStore(root string) (*store, error) {
 }
 
 func (s *store) lockPath() string { return filepath.Join(s.root, metadataLockName) }
+
+const cacheRootfs = "rootfs"
+
+func (s *store) cacheBase(kind string) string {
+	return filepath.Join(s.root, kind, "sha256")
+}
+
+func digestHex(dgst string) (string, error) {
+	d, err := v1.NewHash(dgst)
+	if err != nil || d.Algorithm != "sha256" {
+		return "", fmt.Errorf("store: unsupported digest %q for a cache key", dgst)
+	}
+	return d.Hex, nil
+}
+
+func (s *store) cacheDir(kind, dgst string) (string, error) {
+	hex, err := digestHex(dgst)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range []string{filepath.Join(s.root, kind), s.cacheBase(kind)} {
+		if err := rejectSymlink(p, "use it as a cache directory"); err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(s.cacheBase(kind), hex), nil
+}
+
+func rejectSymlink(path, action string) error {
+	li, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if li.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; refusing to %s", path, action)
+	}
+	return nil
+}
+
+func insideStore(storeRoot, path string) bool {
+	abs := resolvedAbs(path)
+	absStore := resolvedAbs(storeRoot)
+	if abs == "" || absStore == "" {
+		return true
+	}
+	_, inside := pathWithin(absStore, abs)
+	return inside
+}
+
+func refuseRootfsInStore(cmd, storeRoot, rootfs string) error {
+	if rootfs != "" && insideStore(storeRoot, rootfs) {
+		return fmt.Errorf("%s: --rootfs %s is inside the store; drop --rootfs for the managed cache", cmd, rootfs)
+	}
+	return nil
+}
+
+func resolvedAbs(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	rest := ""
+	for p := abs; ; {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return abs
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
+}
 
 func (s *store) withLock(ctx context.Context, fn func() error) error {
 	l, err := acquireFlock(ctx, s.lockPath())
@@ -240,6 +320,14 @@ func syncDirectory(path string) error {
 		err = closeErr
 	}
 	return err
+}
+
+func (s *store) blob(hash v1.Hash) (io.ReadCloser, error) {
+	r, err := layout.Path(s.root).Blob(hash)
+	if err != nil {
+		return nil, fmt.Errorf("store: read blob %s: %w", hash, err)
+	}
+	return r, nil
 }
 
 func (s *store) writeBlob(ctx context.Context, desc v1.Descriptor, r io.ReadCloser) error {
@@ -474,4 +562,73 @@ func platformKey(platform *v1.Platform) string {
 		return ""
 	}
 	return platform.String()
+}
+
+func (s *store) digestFor(ref string, platform ocispec.Platform) (string, error) {
+	parsed, err := normalizeRef(ref)
+	if err != nil {
+		return "", err
+	}
+	index, err := s.rootIndex()
+	if os.IsNotExist(err) {
+		return "", notPulledError(ref, platform)
+	}
+	if err != nil {
+		return "", err
+	}
+	for _, desc := range index.Manifests {
+		if desc.Annotations[refNameAnnotation] != parsed.Name() {
+			continue
+		}
+		b, err := s.blobBytes(desc.Digest)
+		if err != nil {
+			return "", err
+		}
+		var nested v1.IndexManifest
+		if err := json.Unmarshal(b, &nested); err != nil {
+			return "", fmt.Errorf("store: parse index for %s: %w", parsed.Name(), err)
+		}
+		for _, child := range nested.Manifests {
+			if samePlatform(child.Platform, platform) {
+				return child.Digest.String(), nil
+			}
+		}
+	}
+	return "", notPulledError(ref, platform)
+}
+
+func notPulledError(ref string, platform ocispec.Platform) error {
+	p := platformString(platform)
+	return fmt.Errorf("store: %q %w for %s (run elfuse-oci pull --platform %s %s first)", ref, errNotPulled, p, p, ref)
+}
+
+func (s *store) manifestFor(ctx context.Context, digest string) (ocispec.Manifest, error) {
+	var manifest ocispec.Manifest
+	if err := ctx.Err(); err != nil {
+		return manifest, err
+	}
+	hash, err := v1.NewHash(digest)
+	if err != nil {
+		return manifest, fmt.Errorf("store: manifest %s: %w", digest, err)
+	}
+	b, err := s.blobBytes(hash)
+	if err != nil {
+		return manifest, err
+	}
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		return manifest, fmt.Errorf("store: parse manifest %s: %w", digest, err)
+	}
+	if manifest.SchemaVersion != 2 || manifest.Config.Digest == "" {
+		return manifest, fmt.Errorf("store: invalid manifest %s", digest)
+	}
+	return manifest, nil
+}
+
+func (s *store) loadRef(ctx context.Context, ref string, platform ocispec.Platform) (string, ocispec.Manifest, error) {
+	d, err := s.digestFor(ref, platform)
+	if err != nil {
+		return "", ocispec.Manifest{}, err
+	}
+	m, err := s.manifestFor(ctx, d)
+	return d, m, err
 }

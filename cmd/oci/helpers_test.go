@@ -21,8 +21,12 @@ import (
 )
 
 type tarEntry struct {
-	Name string
-	Body string
+	Name  string
+	Body  string
+	Link  string
+	Mode  int64
+	Type  byte
+	Major int64
 }
 
 func buildLayerTar(t *testing.T, entries []tarEntry) []byte {
@@ -30,7 +34,27 @@ func buildLayerTar(t *testing.T, entries []tarEntry) []byte {
 	var b bytes.Buffer
 	tw := tar.NewWriter(&b)
 	for _, e := range entries {
-		hdr := &tar.Header{Name: e.Name, Mode: 0o644, Size: int64(len(e.Body)), Typeflag: tar.TypeReg}
+		hdr := &tar.Header{Name: e.Name, Mode: e.Mode, Size: int64(len(e.Body)), Typeflag: tar.TypeReg}
+		if hdr.Mode == 0 {
+			hdr.Mode = 0o644
+		}
+		switch {
+		case e.Type != 0:
+			hdr.Typeflag = e.Type
+			hdr.Size = 0
+			hdr.Linkname = e.Link
+			hdr.Devmajor = e.Major
+		case e.Link != "":
+			hdr.Typeflag = tar.TypeSymlink
+			hdr.Linkname = e.Link
+			hdr.Size = 0
+		case e.Name[len(e.Name)-1] == '/':
+			hdr.Typeflag = tar.TypeDir
+			if e.Mode == 0 {
+				hdr.Mode = 0o755
+			}
+			hdr.Size = 0
+		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatal(err)
 		}
@@ -219,4 +243,13 @@ func mustContain(t *testing.T, got string, wants ...string) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
 	}
+}
+
+func manifestOf(t *testing.T, s *store, digest string) ocispec.Manifest {
+	t.Helper()
+	manifest, err := s.manifestFor(context.Background(), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
 }

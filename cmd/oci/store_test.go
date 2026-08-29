@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -95,6 +96,44 @@ func TestRootIndexNamesNestedIndex(t *testing.T) {
 	}
 	if len(nested.Manifests) != 1 || nested.Manifests[0].Digest.String() != digest || !samePlatform(nested.Manifests[0].Platform, defaultPlatform) {
 		t.Fatalf("nested index = %+v", nested)
+	}
+}
+
+func TestDigestForErrorKinds(t *testing.T) {
+	s := tempStore(t)
+	_, err := s.digestFor("absent:1", defaultPlatform)
+	if !errors.Is(err, errNotPulled) || !strings.Contains(err.Error(), "elfuse-oci pull") {
+		t.Fatalf("missing image error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(s.root, "index.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.digestFor("absent:1", defaultPlatform); err == nil || errors.Is(err, errNotPulled) {
+		t.Fatalf("corrupt index error = %v", err)
+	}
+}
+
+func TestManifestRoundTrip(t *testing.T) {
+	s, digest := storeWithImage(t, "fix:1", testImage{})
+	manifest, err := s.manifestFor(context.Background(), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Layers) != 1 || manifest.Config.MediaType != ocispec.MediaTypeImageConfig {
+		t.Fatalf("manifest = %+v", manifest)
+	}
+}
+
+func TestManifestForRejectsInvalidManifest(t *testing.T) {
+	s := tempStore(t)
+	for _, body := range [][]byte{
+		[]byte(`{}`),
+		[]byte(`{"schemaVersion":1,"config":{"digest":"sha256:` + strings.Repeat("0", 64) + `"}}`),
+	} {
+		desc := pushBlob(t, s, types.OCIManifestSchema1, body)
+		if _, err := s.manifestFor(context.Background(), desc.Digest.String()); err == nil {
+			t.Fatalf("manifest %s must fail validation", body)
+		}
 	}
 }
 
@@ -328,5 +367,21 @@ func TestWithLockRefusesExpiredContext(t *testing.T) {
 	err := s.withLock(ctx, func() error { ran = true; return nil })
 	if !errors.Is(err, context.Canceled) || ran {
 		t.Fatalf("error = %v, ran = %v", err, ran)
+	}
+}
+
+func TestCacheDirRejectsSymlinkedParent(t *testing.T) {
+	good := "sha256:" + strings.Repeat("a", 64)
+	for _, rel := range []string{cacheRootfs, filepath.Join(cacheRootfs, "sha256")} {
+		s := tempStore(t)
+		p := filepath.Join(s.root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.Symlink(t.TempDir(), p); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.cacheDir(cacheRootfs, good)
+		if err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Errorf("%s: err = %v, want a symlink refusal", rel, err)
+		}
 	}
 }

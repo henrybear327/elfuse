@@ -468,9 +468,28 @@ scripts/conformance run SUITE --case 'SUITE:GROUP/*' --backend qemu
 scripts/conformance report RESULTS --format markdown
 ```
 
+The LTP commands are:
+
+```sh
+scripts/conformance list ltp --scope pr
+scripts/conformance run ltp --backend elfuse
+scripts/conformance run ltp --backend qemu --require
+scripts/conformance run ltp --case ltp:setpgid01
+scripts/conformance payload fingerprint ltp
+scripts/conformance payload build ltp
+scripts/conformance payload verify ltp
+scripts/conformance selection check ltp
+scripts/conformance selection update ltp
+scripts/conformance expectations check ltp
+scripts/conformance expectations seed ltp RESULTS
+scripts/conformance pins check ltp
+scripts/conformance pins update ltp
+scripts/conformance report RESULTS --format markdown
+```
+
 The Make aliases are `test-conformance-harness`, `test-conformance`,
 `test-conformance-full`, `conformance-payloads`, `clean-payloads`, and
-`update-pins`. `BACKEND`, `CONF_SCOPE`, `TEST`, `CONF_JOBS`, and
+`update-pins`. LTP adds `ltp-payload`, `test-ltp`, and `test-ltp-full`. `BACKEND`, `CONF_SCOPE`, `TEST`, `CONF_JOBS`, and
 `CONF_RESULTS` configure the run targets. See [conformance.md](conformance.md)
 for result, expectation, payload, and suite interfaces.
 

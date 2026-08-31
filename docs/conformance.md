@@ -91,6 +91,25 @@ The elfuse backend starts one `build/elfuse --timeout 0` process for each
 command. The QEMU backend starts one VM through `tests/qemu-runner.sh`, shares
 the repository read-only at `/mnt/host`, and executes commands over SSH.
 
+## gVisor
+
+The gVisor payload contains one static AArch64 gtest binary for each enabled
+group in `data/targets.jsonc`. The builder checks out the pinned commit and
+tree. Linux uses Bazel or Bazelisk. macOS uses gVisor's Bazel container.
+
+`selection check gvisor` compares enabled and declined groups with `*_test`
+`cc_binary` targets in the pinned `test/syscalls/linux/BUILD`. A missing or new
+target returns `3`.
+
+Discovery executes each binary with `--gtest_list_tests` through the selected
+backend. IDs have the form `gvisor:<binary>/<Suite.Case>`. A listing failure
+produces `gvisor:<binary>/Harness.ListingFailed`.
+
+A binary runs its selected cases as one batch. The harness uses the shorter
+include or exclude gtest filter. It accepts XML only when the process exit
+agrees with the reported failures. Cases omitted after a batch interruption
+run alone.
+
 ## Make and CI
 
 The Make targets take their suite list from the registry through

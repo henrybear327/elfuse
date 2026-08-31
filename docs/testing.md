@@ -474,6 +474,17 @@ The Make aliases are `test-conformance-harness`, `test-conformance`,
 `CONF_RESULTS` configure the run targets. See [conformance.md](conformance.md)
 for result, expectation, payload, and suite interfaces.
 
+On the gVisor branch:
+
+```sh
+scripts/conformance payload build gvisor
+scripts/conformance payload verify gvisor
+scripts/conformance selection check gvisor
+scripts/conformance list gvisor --scope pr
+scripts/conformance run gvisor --backend qemu --require
+scripts/conformance run gvisor --backend elfuse --require
+```
+
 ## Validation Strategy By Change Type
 
 Suggested minimum validation:

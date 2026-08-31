@@ -144,7 +144,7 @@ The build signs `build/elfuse` before use. Override the signing identity with
   `make check` flow, the QEMU and Rosetta cross-check matrices,
   fixture handling, and conformance commands.
 - [docs/conformance.md](docs/conformance.md): the conformance harness,
-  expectations, payloads, and CI workflow.
+  expectations, payloads, gVisor, and CI workflow.
 - [docs/filenames.md](docs/filenames.md): how a guest filename becomes a
   name on disk and back: case folding and normalization on the sysroot
   volume, the escape encoding, and the length limits both systems impose.

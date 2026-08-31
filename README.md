@@ -156,8 +156,10 @@ The build signs `build/elfuse` before use. Override the signing identity with
   Rosetta, dynamic linking via `--sysroot`, and attaching `gdb` /
   `lldb` to the built-in stub.
 - [docs/testing.md](docs/testing.md): build prerequisites, the
-  `make check` flow, the QEMU and Rosetta cross-check matrices, and
-  fixture handling.
+  `make check` flow, the QEMU and Rosetta cross-check matrices,
+  fixture handling, and conformance commands.
+- [docs/conformance.md](docs/conformance.md): the conformance harness,
+  expectations, payloads, and CI workflow.
 - [docs/oci-images.md](docs/oci-images.md): the `elfuse-oci` store,
   pull behavior, and validation.
 - [docs/filenames.md](docs/filenames.md): how a guest filename becomes a

@@ -1,0 +1,11 @@
+{
+  "gvisor": {
+    "commit": "09329f4f5677c3b2492a40ea816a6899d03bcbd1",
+    "date": "2026-08-18",
+    "repository": "https://github.com/google/gvisor.git",
+    "subject": "nvproxy: Add support for NV2080_CTRL_CMD_NVLINK_GET_UPDATE_NVLE_LIDS_V3",
+    "tree": "f5714e427eb5e9d93e2b7e4e5a994dec5a90bcfb"
+  },
+  "license_boundary": "The gVisor checkout and the binaries built from it are Apache-2.0 upstream material under externals/, ignored by git, and are not committed or distributed.",
+  "schema_version": 1
+}

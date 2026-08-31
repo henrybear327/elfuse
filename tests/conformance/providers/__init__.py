@@ -9,7 +9,9 @@ from typing import Dict, Type, Union
 
 from conformance.providers.base import Provider, ProviderError
 
-REGISTRY: Dict[str, Union[str, Type[Provider]]] = {}
+REGISTRY: Dict[str, Union[str, Type[Provider]]] = {
+    "gvisor": "conformance.gvisor:GvisorProvider",
+}
 
 
 def make(name: str, repo_root: Path) -> Provider:

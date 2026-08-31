@@ -51,3 +51,17 @@ UPDATE_CHECK ?=
 update-pins:
 	$(CONF_NO_SUITES)
 	$(foreach s,$(CONF_SUITES),$(CONFORMANCE) pins $(if $(filter 1,$(UPDATE_CHECK)),check,update) $(s) $(if $(CONF_REF_$(s)),--ref $(CONF_REF_$(s))) &&) true
+
+.PHONY: gvisor-payload test-gvisor test-gvisor-full
+
+## Build the gVisor test payload (Linux: Bazel; macOS: Docker)
+gvisor-payload:
+	@$(CONFORMANCE) payload build gvisor
+
+## Run the gVisor pr subset (BACKEND=elfuse|qemu|all, TEST=ID... for named tests)
+test-gvisor:
+	$(call RUN_OPTIONAL_SKIP77,$(CONF_RUN) gvisor $(CONF_SELECT) --backend $(BACKEND) --jobs $(CONF_JOBS) --results $(CONF_RESULTS),test-gvisor)
+
+## Run every enabled gVisor binary, the nightly shape
+test-gvisor-full:
+	$(call RUN_OPTIONAL_SKIP77,$(CONF_RUN) gvisor --scope full --backend $(BACKEND) --jobs $(CONF_JOBS) --results $(CONF_RESULTS),test-gvisor-full)

@@ -1,0 +1,42 @@
+{
+  "actions": [
+    { "type": "quarantine",
+      "reason": "passed in two 2026-08-31 elfuse PR batches and blocked in the third",
+      "since": "2026-08-31",
+      "matchers": [
+        "gvisor:fifo_test/FifoTest.Fifo",
+      ] },
+    { "type": "quarantine",
+      "reason": "failed in the 2026-08-31 elfuse PR batch and passed in three immediate isolated reruns",
+      "since": "2026-08-31",
+      "matchers": [
+        "gvisor:wait_test/Waiters/WaitSpecificChildTest.AfterChildExecve/1",
+      ] },
+    { "type": "quarantine",
+      "reason": "flipped between the 2026-08-25 elfuse bootstrap, the gated pr run, and three isolated reruns of the same ids; the wait family tracks sys_wait4's wakeup latency",
+      "since": "2026-08-25",
+      "matchers": [
+        "gvisor:wait_test/Waiters/WaitAnyChildTest.IgnoredChildRusage/0",
+        "gvisor:wait_test/Waiters/WaitAnyChildTest.IgnoredChildRusage/1",
+        "gvisor:wait_test/Waiters/WaitAnyChildTest.WaitWNOHANG/0",
+        "gvisor:wait_test/Waiters/WaitAnyChildTest.WaitWNOHANG/1",
+        "gvisor:wait_test/Waiters/WaitSpecificChildTest.AfterChildExecve/0",
+      ] },
+    { "type": "quarantine",
+      "reason": "flipped between the 2026-08-25 elfuse bootstrap, the gated pr run, and three isolated reruns: the fcntl locks and clone3 pass alone and fail beside the rest of their binary, TruncateAfterCOWBreak alternates FAIL and INCONSISTENT, and SizeChangeMax passed once in the pr run",
+      "since": "2026-08-25",
+      "matchers": [
+        "gvisor:fcntl_test/FcntlLockTest.SetLockIsRegional",
+        "gvisor:fcntl_test/FcntlLockTest.SetWriteLockMultiProc",
+        "gvisor:fcntl_test/FcntlLockTest.SetWriteThenReadLockMultiProc",
+        "gvisor:fork_test/CloneTest.Clone3AsClone",
+        "gvisor:mmap_test/MMapDeathTest.TruncateAfterCOWBreak",
+        "gvisor:pipe_test/Pipes/PipeTest.SizeChangeMax/namedblocking",
+        "gvisor:pipe_test/Pipes/PipeTest.SizeChangeMax/namednonblocking",
+        "gvisor:pipe_test/Pipes/PipeTest.SizeChangeMax/pipe",
+        "gvisor:pipe_test/Pipes/PipeTest.SizeChangeMax/pipe2blocking",
+        "gvisor:pipe_test/Pipes/PipeTest.SizeChangeMax/pipe2nonblocking",
+        "gvisor:pipe_test/Pipes/PipeTest.SizeChangeMax/smallbuffer",
+      ] },
+  ],
+}

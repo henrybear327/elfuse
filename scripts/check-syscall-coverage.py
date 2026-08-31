@@ -84,8 +84,10 @@ def load_test_corpora() -> tuple[str, str]:
     """
     c_chunks: list[str] = []
     other_chunks: list[str] = []
+    # Conformance helpers run under a real kernel and do not cover elfuse.
+    conformance = TESTS / "conformance"
     for path in sorted(TESTS.rglob("*")):
-        if not path.is_file():
+        if not path.is_file() or conformance in path.parents:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         if path.suffix in C_SUFFIXES:

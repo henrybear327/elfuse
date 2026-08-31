@@ -51,3 +51,18 @@ UPDATE_CHECK ?=
 update-pins:
 	$(CONF_NO_SUITES)
 	$(foreach s,$(CONF_SUITES),$(CONFORMANCE) pins $(if $(filter 1,$(UPDATE_CHECK)),check,update) $(s) $(if $(CONF_REF_$(s)),--ref $(CONF_REF_$(s))) &&) true
+
+.PHONY: ltp-payload test-ltp test-ltp-full
+CONF_REF_ltp ?= $(LTP_TAG)
+
+## Build the LTP test payload (needs an AArch64 Linux gcc and the fixtures)
+ltp-payload:
+	@CROSS_COMPILE="$(CROSS_COMPILE)" $(CONFORMANCE) payload build ltp
+
+## Run the LTP pr subset (BACKEND=elfuse|qemu|all, TEST=ID... for named tests)
+test-ltp:
+	$(call RUN_OPTIONAL_SKIP77,$(CONF_RUN) ltp $(CONF_SELECT) --backend $(BACKEND) --jobs $(CONF_JOBS) --results $(CONF_RESULTS),test-ltp)
+
+## Run every LTP runtest tag, the nightly shape
+test-ltp-full:
+	$(call RUN_OPTIONAL_SKIP77,$(CONF_RUN) ltp --scope full --backend $(BACKEND) --jobs $(CONF_JOBS) --results $(CONF_RESULTS),test-ltp-full)

@@ -1,0 +1,19 @@
+{
+  "kirk": {
+    "archive_sha256": "dabc33925c2b4451afecfd63f880bc93e3aacd6994878cfa0b8d7870e7170f5b",
+    "archive_url": "https://github.com/linux-test-project/kirk/archive/refs/tags/v4.1.0.tar.gz",
+    "project": "linux-test-project/kirk",
+    "tag": "v4.1.0"
+  },
+  "license_boundary": "The LTP and kirk trees and everything built from them are GPL upstream material under externals/, ignored by git, and are not committed or distributed.",
+  "ltp": {
+    "archive_sha256": "685d83c6e370ac09201fb79593412f868fe031ee2890e204b5727fedcf51fb47",
+    "archive_url": "https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz",
+    "commit": "3a64d78f58bdceba93ed321e91215fb969a047ed",
+    "project": "linux-test-project/ltp",
+    "release": "20260529",
+    "sha256_url": "https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz.sha256",
+    "source_date_epoch": 1780048197
+  },
+  "schema_version": 1
+}

@@ -57,7 +57,13 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
-      - run: make conformance-payloads
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu
+      - run: bash tests/fetch-fixtures.sh
+      - run: make conformance-payloads CROSS_COMPILE=aarch64-linux-gnu-
+      - run: python3 scripts/conformance selection check ltp
+      - run: python3 scripts/conformance payload verify ltp
       - run: tar -C externals -cf conformance-payloads.tar payloads
       - uses: actions/upload-artifact@v7
         with:

@@ -19,6 +19,9 @@
 _QR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 _QR_FIX="${_QR_DIR}/externals/test-fixtures"
 
+# shellcheck source=tests/lib/qemu-ssh.sh
+source "${_QR_DIR}/tests/lib/qemu-ssh.sh"
+
 QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
 QEMU_PORT="${QEMU_PORT:-2222}"
 QEMU_MEM="${QEMU_MEM:-2048}"
@@ -174,16 +177,8 @@ qemu_start()
 # the suite's tolerance.
 _qemu_ssh_raw()
 {
-    ssh -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -o LogLevel=ERROR \
-        -o BatchMode=yes \
-        -o ConnectTimeout=10 \
-        -o ServerAliveInterval=10 \
-        -o ServerAliveCountMax=6 \
-        -i "$QEMU_SSH_KEY" \
-        -p "$QEMU_PORT" \
-        root@127.0.0.1 "$@"
+    qemu_ssh_opts
+    ssh "${QEMU_SSH_OPTS[@]}" root@127.0.0.1 "$@"
 }
 
 # Run a command in the VM. Any argument that is an absolute path under the host

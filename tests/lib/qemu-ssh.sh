@@ -5,7 +5,8 @@
 # shellcheck shell=bash
 # timeout(1) cannot wrap a shell function, so what the callers share is the
 # argv: qemu_ssh_opts fills QEMU_SSH_OPTS from QEMU_SSH_KEY and QEMU_PORT at
-# call time, and each caller builds its own ssh command line around it.
+# call time, and each caller builds its own ssh command line around it. The
+# conformance backend spells the same list in tests/conformance/backends/ssh.py.
 
 # shellcheck disable=SC2034  # Consumed by the sourcing script.
 qemu_ssh_opts()

@@ -86,7 +86,7 @@ BUILD_FLAVOR_STAMP := $(BUILD_DIR)/.build-flavor
 # skip, that sub-make evaluates the flavor guard with whatever CFLAGS its own
 # environment produces, so running the scanner beside a sanitizer build wipes
 # that build's objects from under it.
-BUILD_FLAVOR_GOALS := $(filter-out clean distclean help print-%,$(MAKECMDGOALS))
+BUILD_FLAVOR_GOALS := $(filter-out clean distclean clean-conformance help print-%,$(MAKECMDGOALS))
 
 ifneq ($(BUILD_FLAVOR_GOALS),)
 BUILD_FLAVOR_PREV := $(shell cat $(BUILD_FLAVOR_STAMP) 2>/dev/null)

@@ -1,5 +1,5 @@
 .PHONY: test-conformance-harness test-conformance test-conformance-full \
-        conformance-payloads clean-payloads update-pins
+        conformance-payloads clean-payloads clean-conformance update-pins
 
 CONFORMANCE := python3 scripts/conformance
 # The suite registry lives in tests/conformance/providers/__init__.py. On a
@@ -44,6 +44,10 @@ conformance-payloads:
 ## Remove the conformance payloads (they survive clean and distclean)
 clean-payloads:
 	rm -rf externals/payloads
+
+## Stop a leaked QEMU VM, kill orphaned guests, sweep elfuse scratch (results survive)
+clean-conformance:
+	$(CONFORMANCE) clean --results $(CONF_RESULTS)
 
 UPDATE_CHECK ?=
 

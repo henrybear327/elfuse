@@ -16,7 +16,7 @@ from typing import Callable, Iterator, List, Optional
 
 from conformance import EXIT_DRIFT, EXIT_OK, EXIT_RED, EXIT_SKIP, EXIT_USAGE
 from conformance import backends, expectations, jsonc, payload, providers, report
-from conformance import runner, seed, selection
+from conformance import runner, seed, selection, sweep
 from conformance.backends.base import BackendError
 from conformance.model import Status
 from conformance.providers.base import Provider, ProviderError
@@ -325,6 +325,19 @@ class Cli:
                 self.out(line)
         return EXIT_OK if report.gate(cases) == "green" else EXIT_RED
 
+    def clean(self, args: argparse.Namespace) -> int:
+        job = sweep.Sweep(self.repo_root, Path(args.results), self.out, self.fail,
+                          dry_run=args.dry_run)
+        try:
+            with job.elfuse.serialize(), job.qemu.serialize():
+                return EXIT_OK if job.run() else EXIT_RED
+        except BackendError as e:
+            self.fail(str(e))
+            pids = sweep.lock_openers([job.elfuse.lock_file, job.qemu.lock_file])
+            if pids:
+                self.fail("held open by pid %s" % " ".join(map(str, pids)))
+            return EXIT_USAGE
+
     def selftest(self, args: argparse.Namespace) -> int:
         suite = unittest.defaultTestLoader.discover(
             str(self.repo_root / "tests" / "conformance" / "selftest"),
@@ -421,6 +434,9 @@ def build_parser(suites: List[str]) -> argparse.ArgumentParser:
     p.add_argument("results")
     p.add_argument("--format", choices=("text", "markdown", "json"),
                    default="text")
+    p = command(top, "clean", "clean")
+    p.add_argument("--results", default="build/conformance")
+    p.add_argument("--dry-run", action="store_true")
     command(top, "selftest", "selftest")
     return parser
 

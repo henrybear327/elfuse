@@ -8,7 +8,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from conformance import cli, providers, report
+from conformance import cli, providers, report, sweep
 from conformance.backends.base import BackendError
 from conformance.selftest.fixture import FixtureProvider, LocalBackend, TempDirTest, setup
 
@@ -139,9 +139,42 @@ class CliTest(TempDirTest):
             with self.assertRaisesRegex(providers.ProviderError, "declares name"):
                 providers.make("other", self.root)
 
+    def clean(self, *args):
+        real = sweep.Sweep
+
+        def local(*a, **kw):
+            job = real(*a, tmp=self.root / "tmp", user_tmp=self.root / "ut",
+                       roots=[self.root / "T"], **kw)
+            job.elfuse.lock_file = self.root / "lock"
+            return job
+
+        (self.root / "tmp" / "elfuse-fork-Ab12Cd").mkdir(parents=True, exist_ok=True)
+        with unittest.mock.patch.object(sweep, "Sweep", local), \
+                unittest.mock.patch.object(sweep, "ps_listing", return_value=""), \
+                unittest.mock.patch.object(sweep, "ipcs_listing", return_value=""), \
+                unittest.mock.patch.object(sweep, "lock_openers", return_value=[4242]):
+            return self.invoke("clean", "--results", str(self.root / "r"), *args)
+
+    def test_clean_dry_run_lists_the_scratch_it_would_remove(self):
+        self.assertEqual(self.clean("--dry-run"), 0)
+        self.assertEqual(self.out, ["would rm -rf %s" % (self.root / "tmp" / "elfuse-fork-Ab12Cd")])
+        self.assertEqual(self.err, [])
+        self.assertTrue((self.root / "tmp" / "elfuse-fork-Ab12Cd").is_dir())
+        self.assertEqual(self.clean(), 0)
+        self.assertFalse((self.root / "tmp" / "elfuse-fork-Ab12Cd").exists())
+
+    def test_clean_refuses_while_a_session_holds_a_lock(self):
+        holder = LocalBackend()
+        holder.lock_file = self.root / "lock"
+        with holder.serialize():
+            self.assertEqual(self.clean("--dry-run"), 2)
+        self.assertEqual(self.out, [])
+        self.assertIn("another elfuse conformance session holds", self.err[0])
+        self.assertEqual(self.err[1], "conformance: held open by pid 4242")
+
     def test_parser_has_no_suite_owned_commands(self):
         help_text = cli.build_parser(["fixture"]).format_help()
-        self.assertIn("{suites,list,run,payload,selection,expectations,pins,report,selftest}",
+        self.assertIn("{suites,list,run,payload,selection,expectations,pins,report,clean,selftest}",
                       help_text)
         self.assertNotIn("fixture}", help_text)
 

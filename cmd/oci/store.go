@@ -355,11 +355,18 @@ func (r contextReader) Read(p []byte) (int, error) {
 	return r.r.Read(p)
 }
 
+// ensurePrivateDir creates a per-algorithm cache directory and sets the
+// store's mode on it and on its kind directory.
 func ensurePrivateDir(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o700)
+	for _, p := range []string{path, filepath.Dir(path)} {
+		if err := os.Chmod(p, 0o700); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func syncDirectory(path string) error {
@@ -374,6 +381,14 @@ func syncDirectory(path string) error {
 	return err
 }
 
+func (s *store) blob(hash v1.Hash) (io.ReadCloser, error) {
+	r, err := layout.Path(s.root).Blob(hash)
+	if err != nil {
+		return nil, fmt.Errorf("store: read blob %s: %w", hash, err)
+	}
+	return r, nil
+}
+
 func (s *store) writeBlob(ctx context.Context, desc v1.Descriptor, r io.ReadCloser) error {
 	defer r.Close()
 	if err := ctx.Err(); err != nil {
@@ -381,9 +396,6 @@ func (s *store) writeBlob(ctx context.Context, desc v1.Descriptor, r io.ReadClos
 	}
 	dir := filepath.Join(s.root, "blobs", desc.Digest.Algorithm)
 	if err := ensurePrivateDir(dir); err != nil {
-		return err
-	}
-	if err := os.Chmod(filepath.Join(s.root, "blobs"), 0o700); err != nil {
 		return err
 	}
 	path := filepath.Join(dir, desc.Digest.Hex)
@@ -665,4 +677,13 @@ func (s *store) manifestFor(ctx context.Context, digest string) (ocispec.Manifes
 		return manifest, fmt.Errorf("store: invalid manifest %s", digest)
 	}
 	return manifest, nil
+}
+
+func (s *store) loadRef(ctx context.Context, ref string, platform ocispec.Platform) (string, ocispec.Manifest, error) {
+	d, err := s.digestFor(ref, platform)
+	if err != nil {
+		return "", ocispec.Manifest{}, err
+	}
+	m, err := s.manifestFor(ctx, d)
+	return d, m, err
 }

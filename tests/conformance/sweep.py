@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -12,8 +13,9 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Iterable, List, NamedTuple, Optional, Tuple
+from typing import Callable, Iterable, List, NamedTuple, Optional, Set, Tuple
 
+from conformance import report
 from conformance.backends.base import BackendError
 from conformance.backends.elfuse import ElfuseBackend
 from conformance.backends.qemu import QemuBackend, parse_state
@@ -47,6 +49,7 @@ class IpcRow(NamedTuple):
     kind: str
     ident: int
     pids: Tuple[int, ...]
+    key: str = ""
 
 
 def ps_listing() -> str:
@@ -165,7 +168,29 @@ def ipc_rows(text: str) -> List[IpcRow]:
         fields = line.split()
         if len(fields) >= 6 and fields[0] in ("m", "q", "s") and fields[1].isdigit():
             pids = tuple(int(f) for f in fields[6:8] if f.isdigit())
-            out.append(IpcRow(fields[0], int(fields[1]), pids))
+            out.append(IpcRow(fields[0], int(fields[1]), pids, fields[2]))
+    return out
+
+
+def shm_ids(uid: int) -> Set[Tuple[int, str, int]]:
+    """Shared memory only: CPID is the creator and never changes, while a
+    queue's ipcs pids are its last sender and receiver."""
+    return {(r.ident, r.key, r.pids[0] if r.pids else 0)
+            for r in ipc_rows(ipcs_listing("m", uid))}
+
+
+def recorded_shm(results: Path) -> Set[Tuple[int, str, int]]:
+    """Segments the runs under this results tree recorded creating."""
+    out: Set[Tuple[int, str, int]] = set()
+    if not results.is_dir():
+        return out
+    for path in results.rglob(report.RESULTS):
+        try:
+            doc = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        for r in doc.get("run", {}).get("shm", []):
+            out.add((r.get("id"), r.get("key"), r.get("cpid")))
     return out
 
 
@@ -273,7 +298,7 @@ class Sweep:
             return True
         try:
             action()
-        except (OSError, BackendError) as e:
+        except (OSError, BackendError, subprocess.CalledProcessError) as e:
             self.fail("%s: %s" % (line, e))
             self.failed = True
             return False
@@ -290,7 +315,7 @@ class Sweep:
                      % " ".join(str(p.pid) for p in left))
         else:
             self.sweep_runtime()
-            self.report_ipc()
+            self.sweep_ipc()
         if self.results.is_dir():
             self.fix_results_modes()
         return not self.failed
@@ -355,15 +380,23 @@ class Sweep:
         for path in runtime_paths(self.tmp, self.user_tmp, self.uid):
             self.act("rm -rf %s" % path, lambda p=path: remove(p))
 
-    def report_ipc(self) -> None:
-        """Report only. sys_shmget and sys_msgget forward the guest key to the
-        host unchanged, so an elfuse object is indistinguishable from any other
-        of the user's, and outliving its creator is ordinary SysV lifecycle."""
+    def sweep_ipc(self) -> None:
+        """Removes only what a run recorded creating. sys_shmget and
+        sys_msgget forward the guest key to the host unchanged, so any other
+        object is indistinguishable from a third party's, and outliving its
+        creator is ordinary SysV lifecycle. Id, key and creator pid would all
+        have to be recycled together for the match to be wrong."""
         rows = [row for kind in ("m", "q", "s") for row in ipc_rows(ipcs_listing(kind, self.uid))]
         leaked_rows, keep_rows = dead_ipc(rows, alive)
+        mine = recorded_shm(self.results)
         for row, why in leaked_rows:
-            self.out("leaked ipc -%s %d: %s; ipcrm -%s %d by hand"
-                     % (row.kind, row.ident, why, row.kind, row.ident))
+            if row.kind == "m" and (row.ident, row.key, row.pids[0] if row.pids else 0) in mine:
+                self.act("ipcrm -m %d (%s, a run recorded creating it)" % (row.ident, why),
+                         lambda r=row: subprocess.run(["ipcrm", "-m", str(r.ident)],
+                                                      check=True, capture_output=True))
+            else:
+                self.out("leaked ipc -%s %d: %s; ipcrm -%s %d by hand"
+                         % (row.kind, row.ident, why, row.kind, row.ident))
         sems = [row for row, _ in keep_rows if row.kind == "s"]
         for row, why in keep_rows:
             if row.kind != "s":

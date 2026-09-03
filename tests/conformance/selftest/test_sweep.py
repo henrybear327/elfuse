@@ -1,6 +1,7 @@
 # Copyright 2026 elfuse contributors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import stat
 import unittest
@@ -71,9 +72,11 @@ class MatcherTest(unittest.TestCase):
 
     def test_ipc_rows_skip_the_preamble(self):
         rows = sweep.ipc_rows(IPCS_M + IPCS_Q + IPCS_S)
-        self.assertEqual([(r.kind, r.ident, r.pids) for r in rows], [
-            ("m", 65536, (4321, 4321)), ("m", 65537, (4322, 4322)),
-            ("q", 0, (0, 0)), ("q", 1, (4321, 0)), ("s", 393216, ()),
+        self.assertEqual([(r.kind, r.ident, r.pids, r.key) for r in rows], [
+            ("m", 65536, (4321, 4321), "0x00000000"),
+            ("m", 65537, (4322, 4322), "0x0000abcd"),
+            ("q", 0, (0, 0), "0x00000000"), ("q", 1, (4321, 0), "0x00000000"),
+            ("s", 393216, (), "0x6111bfce"),
         ])
 
     def test_dead_ipc_reports_only_what_a_dead_pid_owned(self):
@@ -256,6 +259,27 @@ class SweepTest(PlantedTest):
             ok, _ = self.sweep()
         self.assertFalse(ok)
         self.assertIn("chmod u+rwx under", self.err[0])
+
+    def test_only_a_recorded_segment_is_removed(self):
+        run = self.dir / "results" / "fake" / "host" / "1"
+        run.mkdir(parents=True)
+        (run / "results.json").write_text(json.dumps({"run": {"shm": [
+            {"id": 65536, "key": "0x00000000", "cpid": 4321}]}}))
+        ok, ipcrm = self.sweep()
+        self.assertTrue(ok, self.err)
+        self.assertEqual([c.args[0] for c in ipcrm.call_args_list],
+                         [["ipcrm", "-m", "65536"]])
+        self.assertIn("ipcrm -m 65536 (cpid 4321 dead, a run recorded creating it)", self.out)
+        self.assertIn("leaked ipc -q 1: pids 4321 dead; ipcrm -q 1 by hand", self.out)
+
+    def test_a_queue_sharing_a_recorded_id_is_kept(self):
+        run = self.dir / "results" / "fake" / "host" / "1"
+        run.mkdir(parents=True)
+        (run / "results.json").write_text(json.dumps({"run": {"shm": [
+            {"id": 1, "key": "0x00000000", "cpid": 4321}]}}))
+        ok, ipcrm = self.sweep()
+        self.assertTrue(ok, self.err)
+        self.assertEqual(ipcrm.call_args_list, [])
 
     def test_a_vm_that_exits_during_the_sweep_loses_its_rundir(self):
         ps = ("  51     1   51  501 ??       qemu-system-aarch64 %s -pidfile %s\n"

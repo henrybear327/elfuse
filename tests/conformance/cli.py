@@ -174,6 +174,7 @@ class Cli:
                         self.out(case.id)
                     return EXIT_OK
                 log = self.err if args.verbose else (lambda _: None)
+                before = sweep.shm_ids(os.getuid())
                 results = runner.run_lane(
                     provider, backend, cases, exps, results_dir, args.jobs,
                     not args.no_retry, args.bootstrap, log
@@ -189,6 +190,10 @@ class Cli:
                     "elapsed_s": round(time.monotonic() - started, 3),
                     "bootstrap": args.bootstrap,
                     "argv": args.argv,
+                    # What this lane created, so clean can tell its own leaks
+                    # from another process's segments.
+                    "shm": [{"id": i, "key": k, "cpid": c} for i, k, c
+                            in sorted(sweep.shm_ids(os.getuid()) - before)],
                 }
                 # Written before stop(), so a failing teardown cannot lose the lane.
                 report.write(results_dir, meta, results)

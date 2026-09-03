@@ -103,6 +103,17 @@ class CliTest(TempDirTest):
         doc = json.loads(next(results.rglob(report.RESULTS)).read_text())
         self.assertEqual(doc["run"]["argv"], argv)
 
+    def test_results_record_the_segments_a_lane_created(self):
+        self.assertEqual(self.invoke("payload", "build", "fixture"), 0)
+        results = self.root / "results"
+        before, after = {(1, "0x1", 7)}, {(1, "0x1", 7), (2, "0x2", 8)}
+        with unittest.mock.patch.object(sweep, "shm_ids", side_effect=[before, after]):
+            self.assertEqual(self.invoke(
+                "run", "fixture", "--scope", "pr", "--results", str(results)
+            ), 0, self.err)
+        doc = json.loads(next(results.rglob(report.RESULTS)).read_text())
+        self.assertEqual(doc["run"]["shm"], [{"id": 2, "key": "0x2", "cpid": 8}])
+
     def test_case_selector_and_dry_run(self):
         self.assertEqual(self.invoke("payload", "build", "fixture"), 0)
         self.assertEqual(self.invoke(

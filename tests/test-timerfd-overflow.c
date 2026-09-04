@@ -17,20 +17,21 @@ int main(void)
     const struct {
         const char *name;
         int clockid, flags;
-        int64_t seconds;
+        int64_t seconds, min_remaining_sec;
         bool interval;
     } cases[] = {
         {"relative nanosecond overflow", CLOCK_MONOTONIC, 0,
-         INT64_MAX / 1000000000, false},
+         INT64_MAX / 1000000000, 1000000000, false},
         {"relative microsecond overflow", CLOCK_MONOTONIC, 0,
-         INT64_MAX / 1000000, false},
-        {"relative maximum seconds", CLOCK_MONOTONIC, 0, INT64_MAX, false},
+         INT64_MAX / 1000000, 1000000000, false},
+        {"relative maximum seconds", CLOCK_MONOTONIC, 0, INT64_MAX, 1000000000,
+         false},
         {"interval nanosecond overflow", CLOCK_MONOTONIC, 0,
-         INT64_MAX / 1000000000, true},
+         INT64_MAX / 1000000000, 30, true},
         {"absolute monotonic overflow", CLOCK_MONOTONIC, TFD_TIMER_ABSTIME,
-         INT64_MAX / 1000000000, false},
+         INT64_MAX / 1000000000, 1000000000, false},
         {"absolute realtime overflow", CLOCK_REALTIME, TFD_TIMER_ABSTIME,
-         INT64_MAX / 1000000000, false},
+         INT64_MAX / 1000000000, 1000000000, false},
     };
 
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -70,11 +71,11 @@ int main(void)
             !cases[i].interval ||
             (current.it_interval.tv_sec == INT64_MAX / 1000000000 &&
              current.it_interval.tv_nsec == INT64_MAX % 1000000000);
-        if (current.it_value.tv_sec > 30 && interval_ok && got == -1 &&
-            read_errno == EAGAIN) {
+        if (current.it_value.tv_sec > cases[i].min_remaining_sec &&
+            interval_ok && got == -1 && read_errno == EAGAIN) {
             PASS();
         } else {
-            FAIL("large timer expired or returned an invalid interval");
+            FAIL("large timer returned an invalid remaining time or interval");
             printf("    remaining=%lld.%09ld interval=%lld.%09ld read=%ld\n",
                    (long long) current.it_value.tv_sec,
                    current.it_value.tv_nsec,

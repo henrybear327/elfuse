@@ -27,10 +27,17 @@ that both moves code and changes behavior cannot be reviewed as either.
 
 ## Decide whether the finding is real
 
-Measure it first. `references/measuring.md` carries the scans for function
-size, duplication, and nesting, and the traps in reading each. Report a number
-with the command that produced it and a judgment as a judgment; never quote a
-count from a document, this one included.
+Name the friction before treating it, and let that name bound the diff: which
+call site is hard to read, which contract is hard to find, which edit had to be
+repeated across files. A cleanup with no named friction has no stop condition,
+and the reviewer inherits the job of deciding where it should have ended. A
+second finding met on the way out is reported in its own diff, not absorbed
+into this one.
+
+Measure it. `references/measuring.md` carries the scans for function size,
+duplication, and nesting, and the traps in reading each. Report a number with
+the command that produced it and a judgment as a judgment; never quote a count
+from a document, this one included.
 
 Prefer deletion, an existing local helper, or a direct rewrite over a new
 abstraction. A parameter every caller gives the same value, a hook with one

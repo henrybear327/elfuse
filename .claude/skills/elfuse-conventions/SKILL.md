@@ -133,8 +133,7 @@ selects already formats to itself, and every file commentflow selects already
 reflows to itself. That was not free. The tree's comments were wrapped by hand
 before the tool existed, and the one-time reflow rewrote 142 of the 353 C and
 header files, both assembly files, and 36 of the 41 shell scripts. It landed as
-its own commit because a mechanical change with no behavior in it cannot be
-reviewed alongside one that has some.
+its own commit, under the rule the commit section states.
 
 The gate is what keeps it a no-op. If `make indent` ever hands you a diff in a
 file you did not touch, something reintroduced hand-wrapping, or your
@@ -368,6 +367,11 @@ arrows, and third person throughout. A commit body is the surface those
 classes were written for.
 
 Merge commits keep git's generated subject and are exempt.
+
+A change with no behavior in it lands as its own commit, whether it is a
+mechanical sweep or a reshape a feature is waiting on; the reshape lands before
+the feature. Combined, neither half is reviewable. The one-time `commentflow`
+reflow is the precedent.
 
 ## Pull requests
 

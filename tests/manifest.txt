@@ -83,6 +83,7 @@ test-epoll-dup
 test-epoll-refcount
 test-epoll-del-leak
 test-timerfd
+test-timerfd-overflow
 test-large-io-boundary
 test-ioctl-cloexec
 test-pty

@@ -28,6 +28,7 @@
 #include "debug/log.h"
 #include <sys/event.h>
 
+#include "proved/timespec.h"
 #include "syscall/linux-wire.h"
 #include "syscall/fd.h"
 #include "syscall/internal.h"
@@ -47,7 +48,10 @@ static void eventfd_close(int guest_fd);
 static void signalfd_close(int guest_fd);
 
 #define NS_PER_SEC 1000000000LL
-#define US_PER_SEC 1000000LL
+
+_Static_assert(
+    NS_PER_SEC == TIMESPEC_NSEC_PER_SEC,
+    "timerfd and proved timespec conversions must use the same scale");
 
 /* All special-FD state arrays store guest_fd as their first field. Keep the
  * common slot walk in one place so timerfd/eventfd/signalfd stay consistent.
@@ -293,26 +297,22 @@ int64_t sys_timerfd_settime(guest_t *g,
                              ? CLOCK_REALTIME
                              : CLOCK_MONOTONIC;
         clock_gettime(host_clock, &now);
-        int64_t target_sec = its.it_value_sec;
-        if (target_sec > INT64_MAX / NS_PER_SEC)
-            target_sec = INT64_MAX / NS_PER_SEC;
-        int64_t target_ns = target_sec * NS_PER_SEC + its.it_value_nsec;
+        int64_t target_ns =
+            timespec_to_ns_sat(its.it_value_sec, its.it_value_nsec);
         int64_t now_ns = now.tv_sec * NS_PER_SEC + now.tv_nsec;
         int64_t relative_ns = target_ns > now_ns ? target_ns - now_ns : 1;
         its.it_value_sec = relative_ns / NS_PER_SEC;
         its.it_value_nsec = relative_ns % NS_PER_SEC;
     }
 
-    /* Clamp large seconds values to prevent signed integer overflow. INT64_MAX
-     * / 1e6 is about 9.2e12 seconds; INT64_MAX / 1e9 is about 9.2e9 seconds.
+    /* Linux timerfd_setup converts both fields through timespec64_to_ktime,
+     * which saturates at KTIME_MAX. Derive the host timeout from the same
+     * bounded value reported by timerfd_gettime.
      */
-    int64_t val_sec = its.it_value_sec, int_sec = its.it_interval_sec;
-    if (val_sec > INT64_MAX / US_PER_SEC)
-        val_sec = INT64_MAX / US_PER_SEC;
-    if (int_sec > INT64_MAX / NS_PER_SEC)
-        int_sec = INT64_MAX / NS_PER_SEC;
-    int64_t value_us = val_sec * US_PER_SEC + its.it_value_nsec / 1000;
-    int64_t interval_ns = int_sec * NS_PER_SEC + its.it_interval_nsec;
+    int64_t value_ns = timespec_to_ns_sat(its.it_value_sec, its.it_value_nsec);
+    int64_t value_us = value_ns / 1000;
+    int64_t interval_ns =
+        timespec_to_ns_sat(its.it_interval_sec, its.it_interval_nsec);
 
     log_debug(
         "timerfd_settime: gfd=%d value=%lld.%09lld "
@@ -352,14 +352,7 @@ int64_t sys_timerfd_settime(guest_t *g,
         timerfd_state[slot].armed = true;
         timerfd_state[slot].interval_ns = interval_ns;
 
-        /* Use separate clamping for nanosecond computation: val_sec is clamped
-         * for microsecond use (INT64_MAX / 1e6), which overflows when * 1e9.
-         */
-        int64_t init_sec = its.it_value_sec;
-        if (init_sec > INT64_MAX / NS_PER_SEC)
-            init_sec = INT64_MAX / NS_PER_SEC;
-        timerfd_state[slot].initial_ns =
-            init_sec * NS_PER_SEC + its.it_value_nsec;
+        timerfd_state[slot].initial_ns = value_ns;
         timerfd_state[slot].expirations = 0;
 
         /* Record arm time for gettime remaining-time calculation */

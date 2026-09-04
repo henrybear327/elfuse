@@ -133,8 +133,7 @@ selects already formats to itself, and every file commentflow selects already
 reflows to itself. That was not free. The tree's comments were wrapped by hand
 before the tool existed, and the one-time reflow rewrote 142 of the 353 C and
 header files, both assembly files, and 36 of the 41 shell scripts. It landed as
-its own commit because a mechanical change with no behavior in it cannot be
-reviewed alongside one that has some.
+its own commit, under the rule the commit section states.
 
 The gate is what keeps it a no-op. If `make indent` ever hands you a diff in a
 file you did not touch, something reintroduced hand-wrapping, or your
@@ -338,13 +337,18 @@ Stop nl_put_attr truncating its own extent
 Prove the netlink walk loops
 Count the shared pty declarations correctly
 Give a pty's slave accounting one home
-Say what the proof matrix cache actually costs
+Name the SysV message size ceiling
 ```
 
 Note what is absent: no Conventional Commits prefix (`fix:`, `feat:`, `chore:`),
 no area tag, no ticket number in the subject. The subject is a sentence about
 behavior. A commit that removes something says what stops happening; a commit
 that adds a proof says what is now proved.
+
+A subject does not open with "Say". It names the act of writing rather than
+what changed, so every prose commit takes the same verb and the log stops
+telling them apart. Name the rule that now holds or the mechanism now stated
+instead. The ones already in the log stay; rewriting them is not a task.
 
 The body is where the reasoning goes: what the old code claimed, why that
 was wrong, what breaks if you do it the obvious other way. Substantial is
@@ -368,6 +372,11 @@ arrows, and third person throughout. A commit body is the surface those
 classes were written for.
 
 Merge commits keep git's generated subject and are exempt.
+
+A change with no behavior in it lands as its own commit, whether it is a
+mechanical sweep or a reshape a feature is waiting on; the reshape lands before
+the feature. Combined, neither half is reviewable. The one-time `commentflow`
+reflow is the precedent.
 
 ## Pull requests
 

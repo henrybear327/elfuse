@@ -23,10 +23,10 @@ rules for handling one it chose badly are `elfuse-security`.
    ```
 
    `<extra>` becomes `needs_extra_regs` in `syscall_table`
-   (`src/syscall/syscall.c`). The dispatcher always fetches X0-X2 and fetches
-   X3/X4/X5 only when it is set, so the criterion is whether the wrapper
-   expression consumes x3, x4, or x5 - not the syscall's documented argument
-   count. Several three-argument entries carry 1.
+   (`src/syscall/syscall.c`). The dispatcher always fetches X0-X2 and, on a
+   quiet run, fetches X3/X4/X5 only when it is set, so the criterion is
+   whether the wrapper expression consumes x3, x4, or x5 - not the syscall's
+   documented argument count. Several three-argument entries carry 1.
 
    The dispatcher zero-initializes x3-x5, so a wrapper that reads them with
    `<extra>` left at 0 sees a deterministic 0, not a stale register: a syscall
@@ -42,6 +42,15 @@ rules for handling one it chose badly are `elfuse-security`.
 
 3. Implement it in two pieces. The `sc_` wrapper and the `sys_` function are
    not the same thing and do not live in the same file.
+
+   Write step 4's test before the `sys_` body, and have it pass a
+   distinguishable non-zero value in every slot the wrapper consumes. A test
+   written afterward is shaped by the implementation, so it accepts x3-x5
+   reading as zero and the `<extra>` mistake from step 1 survives its own
+   test. Run that test without elfuse's `-v`: the fetch is gated on
+   `verbose || ... || needs_extra_regs` (`src/syscall/syscall.c`), so a
+   verbose run hands the wrapper the real X3-X5 and passes on the very entry
+   the test exists to catch.
 
    3a. The wrapper goes in `src/syscall/syscall.c`, as one line built by the
    `SC_FORWARD` / `SC_LOCKED` / `SC_STUB` macros. It exists to unpack x0-x5

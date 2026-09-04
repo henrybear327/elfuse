@@ -27,10 +27,17 @@ that both moves code and changes behavior cannot be reviewed as either.
 
 ## Decide whether the finding is real
 
-Measure it first. `references/measuring.md` carries the scans for function
-size, duplication, and nesting, and the traps in reading each. Report a number
-with the command that produced it and a judgment as a judgment; never quote a
-count from a document, this one included.
+Name the friction before treating it, and let that name bound the diff: which
+call site is hard to read, which contract is hard to find, which edit had to be
+repeated across files. A cleanup with no named friction has no stop condition,
+and the reviewer inherits the job of deciding where it should have ended. A
+second finding met on the way out is reported in its own diff, not absorbed
+into this one.
+
+Measure it. `references/measuring.md` carries the scans for function size,
+duplication, and nesting, and the traps in reading each. Report a number with
+the command that produced it and a judgment as a judgment; never quote a count
+from a document, this one included.
 
 Prefer deletion, an existing local helper, or a direct rewrite over a new
 abstraction. A parameter every caller gives the same value, a hook with one
@@ -102,22 +109,10 @@ the selected baseline before a multi-step cleanup. Keep inherited failures
 separate from the change. Stop when the baseline is red in the area being
 changed.
 
-A failure blamed on the environment earns one reproduction attempt under the
-condition blamed for it before it is written off. "Transient" and "the host was
-busy" are the two that hide real defects here, because a test harness racing
-its own pipeline and a probe that measures the wrong thing both fail only under
-load or only on some networks. Reproduce it, or say it went unexplained; do not
-report it as understood.
-
-The throughput guardrail is the one lane where load genuinely decides the
-result, and it distinguishes UNMEASURED from FAIL for that reason. Reaching it
-at the end of `make check` means measuring on a machine `make check` has just
-loaded, so an UNMEASURED verdict there says nothing about the change. Re-run
-that lane alone on an idle host and report what it says.
-
 Make one behavior-preserving step at a time, then run its mapped lanes. A pure
-cleanup uses the same validation as the feature area, not a weaker set. Changes
-under `src/proved/` require `make verify` and `make verify-mutants`.
+cleanup uses the same validation as the feature area, not a weaker set, and
+`elfuse-verify` owns reading the verdicts. Changes under `src/proved/` require
+`make verify` and `make verify-mutants`.
 
 `make lint` is advisory except for `readability-function-size`, which
 `.clang-tidy` names in `WarningsAsErrors`, so a function crossing the ceiling

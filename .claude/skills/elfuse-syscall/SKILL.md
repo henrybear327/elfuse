@@ -43,6 +43,13 @@ rules for handling one it chose badly are `elfuse-security`.
 3. Implement it in two pieces. The `sc_` wrapper and the `sys_` function are
    not the same thing and do not live in the same file.
 
+   Write step 4's test before the `sys_` body, and have it pass a
+   distinguishable non-zero value in every slot the wrapper consumes. A test
+   written afterward is shaped by the implementation, so it accepts x3-x5
+   reading as zero and the `<extra>` mistake from step 1 survives its own
+   test. Run it without elfuse's `-v`, or a verbose run turns the one test
+   that would catch this green.
+
    3a. The wrapper goes in `src/syscall/syscall.c`, as one line built by the
    `SC_FORWARD` / `SC_LOCKED` / `SC_STUB` macros. It exists to unpack x0-x5
    into typed arguments. `SC_LOCKED` is the variant that holds `mmap_lock`

@@ -264,7 +264,7 @@ run_check()
         test_report fail "$tool" " (exit rc=$rc)"
         test_excerpt "$output"
         fail=$((fail + 1))
-    elif printf "%s\n" "$output" | grep -qE "$pattern"; then
+    elif grep -qE "$pattern" <<< "$output"; then
         test_report ok "$tool"
         pass=$((pass + 1))
     else
@@ -324,7 +324,7 @@ run_pipe()
         test_report fail "$tool" " (exit rc=$rc)"
         test_excerpt "$output"
         fail=$((fail + 1))
-    elif printf "%s\n" "$output" | grep -qE "$pattern"; then
+    elif grep -qE "$pattern" <<< "$output"; then
         test_report ok "$tool"
         pass=$((pass + 1))
     else

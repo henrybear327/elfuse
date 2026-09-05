@@ -63,9 +63,9 @@
 #define ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS 0
 #endif
 
-/* Interrupt flag: when set, futex_wait returns -EINTR. Used to simulate SIGCHLD
- * delivery when all CLONE_THREAD workers exit: wakes the main thread from
- * blocking futex_wait without triggering a full exit_group.
+/* Interrupt flag: when set, futex_wait returns -EINTR. Raised only by teardown
+ * through thread_wake_all_blocked, so every blocked wait can observe that the
+ * process is tearing down without a full exit_group.
  */
 static _Atomic int futex_interrupt_requested = 0;
 
@@ -599,13 +599,17 @@ void futex_interrupt_clear(void)
 }
 
 /* Test-and-clear: returns 1 if the interrupt request was pending and atomically
- * clears it, 0 otherwise. The interrupt is a one-shot edge: forkipc.c sets it
- * when the last clone-thread exits so the main thread observes EINTR in its
- * next blocking wait, mirroring how real Linux delivers SIGCHLD. Without the
- * clear, the flag stays set and every subsequent epoll_pwait, ppoll, futex
+ * clears it, 0 otherwise. The interrupt is a one-shot edge, set by the teardown
+ * paths through thread_wake_all_blocked. Teardown state marks every thread as
+ * leaving; the atomic interrupt itself is consumed by only one waiter. Without
+ * the clear, the flag stays set and every subsequent epoll_pwait, ppoll, futex
  * wait, etc. spins on EINTR until execve clears it -- in foot's case it never
  * does, and the spinning main thread eventually faults in a code path the guest
  * never expects to reach.
+ *
+ * forkipc.c set it too, on the last clone-thread exit, for a SIGCHLD that
+ * clone(2) does not send. That is gone; only a process actually tearing down
+ * fabricates an EINTR now.
  */
 int futex_interrupt_consume(void)
 {

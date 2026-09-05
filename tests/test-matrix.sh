@@ -893,6 +893,8 @@ run_unit_tests()
     test_rc "$runner" "test-futex-requeue-account" 0 \
         "$bindir/test-futex-requeue-account"
     test_rc "$runner" "test-robust-futex" 0 "$bindir/test-robust-futex"
+    test_rc "$runner" "test-futex-ops" 0 \
+        "$bindir/test-futex-ops"
     test_check "$runner" "test-shim-futex-fast" "OK" \
         "$bindir/test-shim-futex-fast"
 

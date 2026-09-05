@@ -1142,15 +1142,12 @@ startup_ok:
     thread_deactivate(t);
 
     /* When all CLONE_THREAD workers have exited and only the main thread
-     * remains, interrupt its futex_wait. In real Linux, child exit delivers
-     * SIGCHLD which interrupts futex_wait with -EINTR. elfuse simulates this
-     * through the futex interrupt API.
+     * remains, nudge it so anything parked on host state re-checks. No EINTR
+     * goes with it: clone(2) sends no signal for a CLONE_THREAD exit, so a
+     * sibling's wait is not interrupted and its timeout is what ends it.
      */
     if (thread_active_count() == 1) {
-        log_debug(
-            "last worker exited, interrupting "
-            "main thread futex_wait/poll");
-        futex_interrupt_request();
+        log_debug("last worker exited, waking main thread");
         wakeup_pipe_signal();
         thread_interrupt_all();
     }

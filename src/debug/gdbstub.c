@@ -1146,7 +1146,7 @@ static void gdb_client_session(void)
         /* A socket read can buffer several packets. Consume them before waiting
          * for more input that the client may never send.
          */
-        if (rsp_ctx.read_pos >= rsp_ctx.read_len) {
+        if (!gdb_rsp_pending(&rsp_ctx)) {
             struct pollfd pfd = {
                 .fd = gdb.client_fd,
                 .events = POLLIN,

@@ -22,7 +22,7 @@ ELFUSE_HOST_NOFILE_MIN ?= $(shell bash "$(CURDIR)/tests/test-config.sh" --host-n
         test-sysroot-create-paths test-fork-ipc-protocol-host \
         test-vcpu-run-hooks-host test-identity-override-host \
         test-dynamic-array-host test-string-builder-host test-gdbstub-host \
-        test-config \
+        test-config test-runner \
         test-mremap-tail-emfile \
         test-proctitle-host test-proctitle-low-stack \
         test-sysroot-procfs-exec test-sysroot-fd-magiclink \
@@ -65,6 +65,10 @@ test-hello: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
 ## Verify test-config.sh keeps its CLI mode separate from sourced mode
 test-config:
 	@bash tests/test-config-cli.sh
+
+## Verify output matching and exit status checks in the shared shell runner
+test-runner:
+	@bash tests/test-runner.sh
 
 ## Run the libc-based file-backed region removal EMFILE regression probe
 test-mremap-tail-emfile: $(ELFUSE_BIN) $(BUILD_DIR)/test-mremap-tail-emfile
@@ -283,7 +287,7 @@ check-sanitizer: $(ELFUSE_BIN) $(TEST_DEPS) $(CHECK_HOST_UNIT_BINS)
 	$(CHECK_SHARED_LANES)
 
 ## Run the unit test suite plus busybox applet validation
-check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage check-eintr-contract check-lock-order check-atomics check-ascii check-svc-tails check-skill-refs test-config \
+check: $(ELFUSE_BIN) $(TEST_DEPS) check-syscall-coverage check-eintr-contract check-lock-order check-atomics check-ascii check-svc-tails check-skill-refs test-config test-runner \
 		$(CHECK_HOST_UNIT_BINS)
 	@bash tests/driver.sh -e $(ELFUSE_BIN) -d $(TEST_DIR) -v
 	$(CHECK_SHARED_LANES)

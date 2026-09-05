@@ -562,7 +562,7 @@ test_check()
         test_report fail "$label" " (exit $rc)"
         test_excerpt "$output"
         fail=$((fail + 1))
-    elif echo "$output" | grep -qE "$pattern"; then
+    elif grep -qE "$pattern" <<< "$output"; then
         test_report ok "$label"
         pass=$((pass + 1))
     else
@@ -630,7 +630,7 @@ test_pipe()
         test_report fail "$label" " (exit $rc)"
         test_excerpt "$output"
         fail=$((fail + 1))
-    elif echo "$output" | grep -qE "$pattern"; then
+    elif grep -qE "$pattern" <<< "$output"; then
         test_report ok "$label"
         pass=$((pass + 1))
     else

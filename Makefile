@@ -213,6 +213,12 @@ $(BUILD_DIR)/test-teardown-live-vcpu-host: \
 	@echo "  LD      $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(HVF_LDFLAGS)
 
+## Build the buffered GDB session host regression
+$(BUILD_DIR)/test-gdbstub-host: $(BUILD_DIR)/test-gdbstub-host.o \
+		$(BUILD_DIR)/debug/gdbstub-reg.o | $(BUILD_DIR)
+	@echo "  LD      $@"
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(HVF_LDFLAGS)
+
 ## Build the proved/gva.h contract-check host test (native macOS binary)
 # Header-only: proved/gva.h is static inline, so the test links nothing
 # from the project. It skips unless the build defines ELFUSE_CONTRACT_ASSERT,

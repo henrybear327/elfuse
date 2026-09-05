@@ -191,7 +191,7 @@ def recv_packet():
             break
         body.extend(ch)
     cksum = recv_exact(2).decode("ascii")
-    if int(cksum, 16) != sum(body) & 0xFF:
+    if cksum != f"{sum(body) & 0xFF:02x}":
         raise RuntimeError("invalid reply checksum")
     return ack, body.decode("ascii"), cksum
 
@@ -214,7 +214,8 @@ print(f"stop_body={body3}")
 print(f"stop_cksum={cksum3}")
 
 if sys.argv[2] == "batch":
-    # No further socket writes may wake the stub while replies are pending.
+    # This loopback write relies on coalescing; short reads can hide the stall.
+    # Send nothing else until all eight replies arrive.
     sock.sendall(frame_packet("qAttached") * 8)
     for _ in range(8):
         ack, body, _ = recv_packet()

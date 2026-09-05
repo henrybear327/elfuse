@@ -21,7 +21,7 @@ ELFUSE_HOST_NOFILE_MIN ?= $(shell bash "$(CURDIR)/tests/test-config.sh" --host-n
         test-sysroot-tmp-remove test-sysroot-host-fallback test-sysroot-case-exact \
         test-sysroot-create-paths test-fork-ipc-protocol-host \
         test-vcpu-run-hooks-host test-identity-override-host \
-        test-dynamic-array-host test-string-builder-host \
+        test-dynamic-array-host test-string-builder-host test-gdbstub-host \
         test-config \
         test-mremap-tail-emfile \
         test-proctitle-host test-proctitle-low-stack \
@@ -235,7 +235,7 @@ CHECK_HOST_UNIT_BINS := $(addprefix $(BUILD_DIR)/, \
         test-casefold-walk-host test-absock-names-host \
         test-dynamic-array-host test-string-builder-host \
         test-wakeup-pipe-host test-guest-env-host \
-        test-usb-desc-host test-elf-headers-host)
+        test-usb-desc-host test-elf-headers-host test-gdbstub-host)
 
 # Lanes shared by check and check-sanitizer, in execution order: the host
 # unit binaries, then the name-contract lanes cheap enough for a sanitizer
@@ -257,6 +257,7 @@ $(call run-host-unit,test-stdio-nonblock-host,launcher stdio flags across a gues
 $(call run-host-unit,test-guest-env-host,guest environment merge cross product)
 $(call run-host-unit,test-usb-desc-host,USB descriptor blob walk unit test)
 $(call run-host-unit,test-elf-headers-host,ELF header validation unit test)
+$(call run-host-unit,test-gdbstub-host,buffered GDB session regression)
 $(call run-lane,test-usb-sysfs,synthetic USB tree contract)
 $(call run-lane,test-usb-sysfs-sysroot,synthetic USB /sys sharing a populated sysroot)
 $(call run-lane,test-usb-sysfs-matrix,every /sys and /dev/bus entry point against every path class)
@@ -1147,8 +1148,13 @@ test-launch-flags: $(ELFUSE_BIN) $(TEST_HELLO_DEP) $(TEST_ENV_DEPS)
 test-usage-synopsis: $(ELFUSE_BIN)
 	@bash tests/test-usage-synopsis.sh $(ELFUSE_BIN)
 
+## Run the buffered GDB session host regression
+test-gdbstub-host: $(BUILD_DIR)/test-gdbstub-host
+	$(BUILD_DIR)/test-gdbstub-host
+
 ## Run GDB stub integration tests (LLDB <-> elfuse gdbstub)
-test-gdbstub: $(ELFUSE_BIN) $(TEST_DIR)/test-hello
+test-gdbstub: $(ELFUSE_BIN) $(TEST_DIR)/test-hello $(BUILD_DIR)/test-gdbstub-host
+	$(call run-host-unit,test-gdbstub-host,buffered GDB session regression)
 	@bash tests/test-gdbstub.sh -e $(ELFUSE_BIN) -v
 
 ## Run Rosetta CLI gating regressions without requiring Rosetta runtime support

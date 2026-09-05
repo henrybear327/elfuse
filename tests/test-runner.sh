@@ -8,6 +8,7 @@ set -euo pipefail
 if [ "${1:-}" = "--emit" ]; then
     awk 'BEGIN {
         print "match-begin"
+        # Keep output larger than pipe capacity to expose early-match SIGPIPE.
         for (i = 0; i < 30000; i++)
             print "abcdefghijklmnopqrstuvwxyz"
         print "match-end"
@@ -31,6 +32,7 @@ expect_result()
     local runner="$1" label="$2" pattern="$3" rc="$4" want="$5"
     local output
     checks=$((checks + 1))
+    # Each subshell inherits zero pass and fail counts and discards updates.
     if output=$(
         if [ "$runner" = run_pipe ]; then
             run_pipe test-runner.sh "$pattern" input --emit "$rc"

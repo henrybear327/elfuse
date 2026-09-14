@@ -16,7 +16,7 @@ observe the difference in a register, a permission, or a PC.
 
 ## Exception vectors: do not clobber GPRs
 
-Vector entry stubs for `svc_handler` MUST NOT write any GPR.
+Vector entry stubs for `svc_handler` must not write any GPR.
 
 This is the syscall boundary, not a function call: AAPCS64 caller-saved rules
 do not apply. Linux SVC #0 restores every register except X0 on return, so
@@ -198,11 +198,10 @@ Two rules survive any layout change:
 ## shim_data integrity
 
 shim_data is `MEM_PERM_RW_EL1_ONLY` and holds a host-published cache the EL1
-shim serves inline: identity slots (pid/ppid/uid/euid/gid/egid/tid), the
-urandom-eligible fd bitmap, a urandom ring, and an attention bitmask
-(`ATTN_BIT_SIGTIMER`, `ATTN_BIT_CRED`, `ATTN_BIT_TRACE`). HVC #5 is taken only
-when attention is raised, the fd is not in the bitmap, or the ring needs a
-refill.
+shim serves inline: identity slots, the urandom-eligible fd bitmap, a urandom
+ring, and an attention bitmask. `src/core/shim-globals.h` defines the slot
+offsets and the `ATTN_BIT_*` values. A call the shim cannot serve inline,
+including any made while attention is raised, goes out through HVC #5.
 
 Four things keep EL0 out of it, and a change that weakens any one of them is a
 guest-readable host cache:
@@ -215,14 +214,15 @@ guest-readable host cache:
   urandom write ranges (a racing EL0 munmap/mprotect) and returns EFAULT.
 - `/proc/self/maps` reports the span as PROT_NONE.
 
-Publishing into the cache is bracketed rather than ordered by luck:
-`shim_globals_attn_or` (`__ATOMIC_SEQ_CST`) raises the attention bit before
-the mutator's stores, so a weakly-ordered ARM64 reader cannot observe the
-publish without the bit; the clear is `__ATOMIC_RELEASE`.
+Publishing into the cache follows a fixed order: `shim_globals_attn_or`
+raises the attention bit before the mutator's stores, so a weakly-ordered ARM64
+reader cannot observe the publish without the bit, and `shim_globals_attn_and`
+clears it afterward. The comments in `src/core/shim-globals.c` give each memory
+order and the reason for it.
 
 ## Stack construction
 
-The Linux initial stack needs SP 16-byte aligned AND pointing directly at
+The Linux initial stack needs SP 16-byte aligned and pointing directly at
 argc. Padding goes above the structured area (before auxv), never after
 pushing argc.
 
@@ -243,7 +243,7 @@ macOS HVF allows one VM per process, so fork is `posix_spawn` of
 `elfuse --fork-child <fd>` plus IPC state transfer. Two rules that are easy to
 violate:
 
-- The parent must NOT remap `host_base`. HVF caches host VA to PA at
+- The parent must not remap `host_base`. HVF caches host VA to PA at
   `hv_vm_map` time, so a remap silently detaches the guest's view from the
   hypervisor's.
 - The child must restore `g->ttbr0` from the IPC header.

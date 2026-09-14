@@ -51,9 +51,9 @@ nothing needs attention. Pass a lower number to see the band underneath, which
 is where the next function to cross it will come from; those are expected to be
 unexempted and are not findings.
 
-Measured at the time of writing, every function past the ceiling carried an
-explicit exemption. A scan reporting unexempted bodies over the ceiling is
-wrong before the tree is: check the scan, then `make lint`, then believe it.
+`make lint` fails on an unexempted function past the ceiling, so while it is
+green, a scan reporting one disagrees with clang-tidy: check the scan's
+exemption window and line count before acting on it.
 
 This counts body lines between the braces. clang-tidy counts its own way, so
 treat the number as a ranking rather than as the check's verdict.

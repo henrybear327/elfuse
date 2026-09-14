@@ -83,15 +83,16 @@ rules for handling one it chose badly are `elfuse-security`.
 
 One rule generates this whole section: nothing crosses the boundary
 unconverted. A guest number is a Linux number until a translator turns it into
-a macOS one, and every translator lives in `translate.c`. Adding a conversion
-inline in a domain file is how the next syscall gets it wrong.
+a macOS one, and a conversion written inline at one call site is how the next
+syscall gets it wrong.
 
 The axes that actually diverge, which is the part you cannot derive by
 reading either kernel's headers alone:
 
-- errno. Return `-linux_errno(errno)`. The two agree below roughly 35 and
-  diverge above it (macOS EAGAIN is 35, Linux EAGAIN is 11), so a copied
-  constant is silently right in testing and wrong in production.
+- errno. Return `linux_errno()`, which reads `errno` itself and returns the
+  negated Linux value through `ERRNO_MAP` in `translate.c`. The numberings
+  differ (EAGAIN is 35 on macOS and 11 on Linux), so a copied macOS constant
+  is wrong.
 - `AT_*` flags. `translate_at_flags()` before any macOS call, with one
   exception that is not derivable: Linux puts `AT_EACCESS` on the same bit as
   `AT_REMOVEDIR`, so `faccessat` paths use `translate_faccessat_flags()`
@@ -106,9 +107,8 @@ reading either kernel's headers alone:
 - sockaddr. `linux_to_mac_sockaddr` / `mac_to_linux_sockaddr`. Linux has no
   `sa_len` byte, and the address families do not share numbering.
 
-The numeric values are in `src/syscall/abi.h` and `translate.c`. Read them
-there rather than from a copy: a stale constant in a document is worse than no
-constant, because it looks like it was checked.
+The Linux values are in `src/syscall/linux-wire.h`. Read them there rather
+than from a copy: a stale constant in a document looks checked.
 
 ## Paths and filenames
 

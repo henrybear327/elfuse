@@ -30,7 +30,10 @@ const (
 	refNameAnnotation = "org.opencontainers.image.ref.name"
 )
 
-var errNoMarker = errors.New("no store format marker")
+var (
+	errNoMarker  = errors.New("no store format marker")
+	errNotPulled = errors.New("not pulled")
+)
 
 type store struct {
 	root string
@@ -56,6 +59,37 @@ func openStore(root string) (*store, error) {
 
 func (s *store) lockPath() string { return filepath.Join(s.root, metadataLockName) }
 
+// openStoreForRead creates and repairs nothing, so a mistyped --store leaves
+// nothing behind.
+func openStoreForRead(root string) (*store, error) {
+	root = filepath.Clean(root)
+	fi, err := os.Stat(root)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("store: %s does not exist", root)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !fi.IsDir() {
+		return nil, fmt.Errorf("store: %s is not a directory", root)
+	}
+	s := &store{root: root}
+	if err := s.checkLayout(); err != nil {
+		if errors.Is(err, errNoMarker) {
+			return nil, fmt.Errorf("store: %s is not an elfuse OCI store", root)
+		}
+		return nil, err
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "oci-layout")); err == nil {
+		if err := checkJSON("oci-layout", b); err != nil {
+			return nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return s, nil
+}
+
 // checkLayout validates the store format without writing. errNoMarker means the
 // directory carries no marker, which pull may create and a reader must refuse.
 func (s *store) checkLayout() error {
@@ -73,6 +107,98 @@ func (s *store) checkLayout() error {
 		return fmt.Errorf("store: unsupported format marker %q", strings.TrimSpace(string(marker)))
 	}
 	return nil
+}
+
+const cacheRootfs = "rootfs"
+
+func (s *store) cacheBase(kind string) string {
+	return filepath.Join(s.root, kind, "sha256")
+}
+
+func digestHex(dgst string) (string, error) {
+	d, err := v1.NewHash(dgst)
+	if err != nil || d.Algorithm != "sha256" {
+		return "", fmt.Errorf("store: unsupported digest %q for a cache key", dgst)
+	}
+	return d.Hex, nil
+}
+
+func (s *store) cacheDir(kind, dgst string) (string, error) {
+	h, err := digestHex(dgst)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range []string{filepath.Join(s.root, kind), s.cacheBase(kind)} {
+		if err := rejectSymlink(p); err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(s.cacheBase(kind), h), nil
+}
+
+func rejectSymlink(path string) error {
+	fi, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; refusing to use it as a cache directory", path)
+	}
+	return nil
+}
+
+func insideStore(storeRoot, path string) bool {
+	abs := resolvedAbs(path)
+	absStore := resolvedAbs(storeRoot)
+	if abs == "" || absStore == "" {
+		return true
+	}
+	storeInfo, err := os.Stat(absStore)
+	if err != nil {
+		return true
+	}
+	// Filesystem identity catches case aliases on APFS. A tail that
+	// cannot be stat'ed is checked through its ancestors.
+	for candidate := abs; ; candidate = filepath.Dir(candidate) {
+		if info, err := os.Stat(candidate); err == nil && os.SameFile(storeInfo, info) {
+			return true
+		}
+		if filepath.Dir(candidate) == candidate {
+			return false
+		}
+	}
+}
+
+func refuseRootfsInStore(storeRoot, rootfs string) error {
+	if rootfs != "" && insideStore(storeRoot, rootfs) {
+		return fmt.Errorf("unpack: --rootfs %s is inside the store; drop --rootfs for the managed cache", rootfs)
+	}
+	if _, err := os.Stat(rootfs); err == nil && insideStore(rootfs, storeRoot) {
+		return fmt.Errorf("unpack: --rootfs %s contains the store", rootfs)
+	}
+	return nil
+}
+
+func resolvedAbs(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	rest := ""
+	for p := abs; ; {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return abs
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
 }
 
 func (s *store) withLock(ctx context.Context, fn func() error) error {
@@ -488,4 +614,55 @@ func (s *store) nestedIndex(index v1.IndexManifest, name string) (v1.IndexManife
 		}
 	}
 	return nested, nil
+}
+
+func (s *store) digestFor(ref string, platform ocispec.Platform) (string, error) {
+	parsed, err := normalizeRef(ref)
+	if err != nil {
+		return "", err
+	}
+	index, err := s.rootIndex()
+	if os.IsNotExist(err) {
+		return "", notPulledError(ref, platform)
+	}
+	if err != nil {
+		return "", err
+	}
+	nested, err := s.nestedIndex(index, parsed.Name())
+	if err != nil {
+		return "", err
+	}
+	for _, child := range nested.Manifests {
+		if samePlatform(child.Platform, platform) {
+			return child.Digest.String(), nil
+		}
+	}
+	return "", notPulledError(ref, platform)
+}
+
+func notPulledError(ref string, platform ocispec.Platform) error {
+	p := platformString(platform)
+	return fmt.Errorf("store: %q %w for %s (run elfuse-oci pull --platform %s %s first)", ref, errNotPulled, p, p, ref)
+}
+
+func (s *store) manifestFor(ctx context.Context, digest string) (ocispec.Manifest, error) {
+	var manifest ocispec.Manifest
+	if err := ctx.Err(); err != nil {
+		return manifest, err
+	}
+	hash, err := v1.NewHash(digest)
+	if err != nil {
+		return manifest, fmt.Errorf("store: manifest %s: %w", digest, err)
+	}
+	b, err := s.blobBytes(hash)
+	if err != nil {
+		return manifest, err
+	}
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		return manifest, fmt.Errorf("store: parse manifest %s: %w", digest, err)
+	}
+	if manifest.SchemaVersion != 2 || manifest.Config.Digest == "" {
+		return manifest, fmt.Errorf("store: invalid manifest %s", digest)
+	}
+	return manifest, nil
 }

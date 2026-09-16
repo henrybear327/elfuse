@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,8 @@ const (
 	metadataLockName  = ".lock"
 	refNameAnnotation = "org.opencontainers.image.ref.name"
 )
+
+var errNoMarker = errors.New("no store format marker")
 
 type store struct {
 	root string
@@ -52,6 +55,25 @@ func openStore(root string) (*store, error) {
 }
 
 func (s *store) lockPath() string { return filepath.Join(s.root, metadataLockName) }
+
+// checkLayout validates the store format without writing. errNoMarker means the
+// directory carries no marker, which pull may create and a reader must refuse.
+func (s *store) checkLayout() error {
+	marker, err := os.ReadFile(filepath.Join(s.root, markerName))
+	if os.IsNotExist(err) {
+		if _, legacyErr := os.Lstat(filepath.Join(s.root, "refs.json")); legacyErr == nil {
+			return fmt.Errorf("store: legacy refs.json layout; remove the store and pull again")
+		}
+		return errNoMarker
+	}
+	if err != nil {
+		return err
+	}
+	if string(marker) != markerContents {
+		return fmt.Errorf("store: unsupported format marker %q", strings.TrimSpace(string(marker)))
+	}
+	return nil
+}
 
 func (s *store) withLock(ctx context.Context, fn func() error) error {
 	l, err := acquireFlock(ctx, s.lockPath())
@@ -79,11 +101,8 @@ func (s *store) ensureLayoutLocked(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	marker, err := os.ReadFile(filepath.Join(s.root, markerName))
-	if os.IsNotExist(err) {
-		if _, legacyErr := os.Lstat(filepath.Join(s.root, "refs.json")); legacyErr == nil {
-			return fmt.Errorf("store: legacy refs.json layout; remove the store and pull again")
-		}
+	err := s.checkLayout()
+	if errors.Is(err, errNoMarker) {
 		entries, readErr := os.ReadDir(s.root)
 		if readErr != nil {
 			return readErr
@@ -102,12 +121,8 @@ func (s *store) ensureLayoutLocked(ctx context.Context) error {
 		if err := replaceFile(ctx, s.root, markerName, []byte(markerContents), 0o600); err != nil {
 			return err
 		}
-		marker = []byte(markerContents)
 	} else if err != nil {
 		return err
-	}
-	if string(marker) != markerContents {
-		return fmt.Errorf("store: unsupported format marker %q", strings.TrimSpace(string(marker)))
 	}
 	if err := ensureJSONFile(ctx, filepath.Join(s.root, "oci-layout"), []byte("{\"imageLayoutVersion\":\"1.0.0\"}\n")); err != nil {
 		return err
@@ -135,9 +150,13 @@ func ensureJSONFile(ctx context.Context, path string, initial []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	return checkJSON(filepath.Base(path), b)
+}
+
+func checkJSON(name string, b []byte) error {
 	var value any
 	if err := json.Unmarshal(b, &value); err != nil {
-		return fmt.Errorf("store: corrupt %s: %w", filepath.Base(path), err)
+		return fmt.Errorf("store: corrupt %s: %w", name, err)
 	}
 	return nil
 }
@@ -404,18 +423,9 @@ func (s *store) pinLocked(ctx context.Context, ref string, platform ocispec.Plat
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	nested := v1.IndexManifest{SchemaVersion: 2, MediaType: types.OCIImageIndex}
-	for _, desc := range index.Manifests {
-		if desc.Annotations[refNameAnnotation] != ref {
-			continue
-		}
-		b, err := s.blobBytes(desc.Digest)
-		if err != nil {
-			return err
-		}
-		if err := json.Unmarshal(b, &nested); err != nil {
-			return fmt.Errorf("store: parse index for %s: %w", ref, err)
-		}
+	nested, err := s.nestedIndex(index, ref)
+	if err != nil {
+		return err
 	}
 	kept := nested.Manifests[:0]
 	for _, desc := range nested.Manifests {
@@ -461,4 +471,21 @@ func platformKey(platform *v1.Platform) string {
 		return ""
 	}
 	return platform.String()
+}
+
+func (s *store) nestedIndex(index v1.IndexManifest, name string) (v1.IndexManifest, error) {
+	nested := v1.IndexManifest{SchemaVersion: 2, MediaType: types.OCIImageIndex}
+	for _, desc := range index.Manifests {
+		if desc.Annotations[refNameAnnotation] != name {
+			continue
+		}
+		b, err := s.blobBytes(desc.Digest)
+		if err != nil {
+			return nested, err
+		}
+		if err := json.Unmarshal(b, &nested); err != nil {
+			return nested, fmt.Errorf("store: parse index for %s: %w", name, err)
+		}
+	}
+	return nested, nil
 }

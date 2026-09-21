@@ -1814,6 +1814,12 @@ pid_t proc_namespace_host_pid(int64_t guest_pid)
                : -1;
 }
 
+pid_t proc_resolve_guest_pid(int64_t guest_pid)
+{
+    pid_t host_pid = proc_guest_to_host_pid(guest_pid);
+    return host_pid > 0 ? host_pid : proc_namespace_host_pid(guest_pid);
+}
+
 int64_t proc_host_to_guest_pid(pid_t host_pid)
 {
     pthread_mutex_lock(&pid_lock);

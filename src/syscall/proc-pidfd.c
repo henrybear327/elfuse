@@ -141,7 +141,7 @@ int pidfd_create(guest_t *g, int64_t target_pid)
     entry->write_end = pfd[1];
     pthread_mutex_unlock(&pidfd_lock);
 
-    pid_t host_pid = proc_guest_to_host_pid(target_pid);
+    pid_t host_pid = proc_resolve_guest_pid(target_pid);
     if (host_pid > 0) {
         bool monitor_ok = false;
         int64_t *ctx = malloc(2 * sizeof(int64_t));
@@ -207,7 +207,7 @@ int64_t sys_pidfd_open(guest_t *g, int64_t pid, unsigned int flags)
     if (pid == proc_get_pid())
         return pidfd_create(g, pid);
 
-    if (proc_guest_to_host_pid(pid) > 0)
+    if (proc_resolve_guest_pid(pid) > 0)
         return pidfd_create(g, pid);
 
     return -LINUX_ESRCH;
@@ -238,7 +238,7 @@ int64_t sys_pidfd_send_signal(guest_t *g,
         return 0;
     }
 
-    pid_t host_pid = proc_guest_to_host_pid(pid);
+    pid_t host_pid = proc_resolve_guest_pid(pid);
     if (host_pid > 0) {
         if (sig == 0) {
             if (kill(host_pid, 0) < 0)

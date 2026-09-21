@@ -505,6 +505,17 @@ int proc_get_namespace_targets(proc_signal_target_t *out,
  */
 pid_t proc_namespace_host_pid(int64_t guest_pid);
 
+/* Resolve one guest pid the way pid-directed signalling does: the child table
+ * answers for descendants, the fork-family registry for every other relative.
+ * Every caller that turns a guest pid the guest named into a host pid -- kill,
+ * pidfd_open, pidfd_send_signal -- goes through here, so they all reach the
+ * same set of processes.
+ *
+ * Returns the host pid, or -1 when no live fork-family member carries that
+ * guest pid.
+ */
+pid_t proc_resolve_guest_pid(int64_t guest_pid);
+
 /* Publish the caller's current guest pid/pgid to the fork-family registry. */
 void proc_registry_publish_self(void);
 

@@ -3897,19 +3897,8 @@ int64_t sys_mremap(guest_t *g,
 
         /* Check if the space after the old region is free (overflow-safe) */
         if (grow_off <= g->guest_size && grow_len <= g->guest_size - grow_off) {
-            bool can_grow = true;
-            for (int i = 0; i < g->nregions; i++) {
-                if (g->regions[i].start >= grow_off + grow_len)
-                    break;
-                if (g->regions[i].end > grow_off &&
-                    g->regions[i].start < grow_off + grow_len) {
-                    /* Skip the region being extended */
-                    if (g->regions[i].start == old_off)
-                        continue;
-                    can_grow = false;
-                    break;
-                }
-            }
+            bool can_grow =
+                !region_range_overlaps(g, grow_off, grow_off + grow_len);
 
             if (can_grow) {
                 remove_range_t removed = {old_off, old_off + old_size};

@@ -105,7 +105,7 @@ static void *pidfd_monitor_thread(void *arg)
     return NULL;
 }
 
-int pidfd_create(guest_t *g, int64_t target_pid)
+int pidfd_create(guest_t *g, int64_t target_pid, pid_t host_pid)
 {
     (void) g;
     int pfd[2];
@@ -141,15 +141,16 @@ int pidfd_create(guest_t *g, int64_t target_pid)
     entry->write_end = pfd[1];
     pthread_mutex_unlock(&pidfd_lock);
 
-    /* A pidfd on this process has nothing to watch: a guest cannot observe its
-     * own exit through it, so it stays unreadable for as long as it is open.
+    /* host_pid <= 0 means the target lives inside this host process -- the
+     * caller itself, or a CLONE_VM child, which holds a guest tid but no host
+     * pid of its own. Neither can be watched from here, and neither has exited,
+     * so the fd stays unreadable rather than being completed.
      */
-    if (target_pid == proc_get_pid())
+    if (host_pid <= 0)
         return gfd;
 
     bool monitor_ok = false;
-    pid_t host_pid = proc_resolve_guest_pid(target_pid);
-    if (host_pid > 0) {
+    {
         int64_t *ctx = malloc(2 * sizeof(int64_t));
         if (ctx) {
             ctx[0] = target_pid;
@@ -172,10 +173,10 @@ int pidfd_create(guest_t *g, int64_t target_pid)
         }
     }
 
-    /* No monitor means no one will ever mark this fd readable. A target that no
-     * longer resolves exited between the caller's lookup and this one, and
-     * Linux hands out a pidfd that reads as exited rather than one that waits
-     * forever, so complete it here.
+    /* Nothing will ever mark this fd readable without a monitor behind it, so
+     * complete it rather than leave the guest polling forever. A target that
+     * has already exited needs no special case: the monitor thread finds it
+     * gone and completes the fd the same way.
      */
     if (!monitor_ok)
         proc_pidfd_notify_exit(target_pid);
@@ -216,11 +217,16 @@ int64_t sys_pidfd_open(guest_t *g, int64_t pid, unsigned int flags)
     if (flags != 0)
         return -LINUX_EINVAL;
 
-    if (pid == proc_get_pid())
-        return pidfd_create(g, pid);
+    /* The kernel rejects a non-positive pid before it looks anything up. */
+    if (pid <= 0)
+        return -LINUX_EINVAL;
 
-    if (proc_resolve_guest_pid(pid) > 0)
-        return pidfd_create(g, pid);
+    if (pid == proc_get_pid())
+        return pidfd_create(g, pid, 0);
+
+    pid_t host_pid = proc_resolve_guest_pid(pid);
+    if (host_pid > 0)
+        return pidfd_create(g, pid, host_pid);
 
     return -LINUX_ESRCH;
 }

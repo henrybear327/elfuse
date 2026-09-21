@@ -1,5 +1,5 @@
 /*
- * Test pidfd_open/pidfd_send_signal aimed at relatives that are not descendants
+ * Test which targets pidfd_open accepts and which of them report an exit
  *
  * Copyright 2026 elfuse contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -10,8 +10,10 @@
  * fork-family lookup kill(getppid(), sig) uses. On Linux they succeed; they
  * must succeed here too.
  *
- * A pidfd on the caller itself is checked too: it is the one target with no
- * monitor behind it, so it must stay unreadable rather than read as exited.
+ * Two targets that legitimately have no exit monitor behind them are checked
+ * too, because both must stay unreadable rather than read as exited: the caller
+ * itself, and a CLONE_VM child, which holds a guest tid but no host process of
+ * its own. A non-positive pid is rejected before any lookup.
  *
  * The sibling half is ordered by two pipe handshakes rather than by sleeps: the
  * sibling exits only once the watcher reports its pidfd open, so a slow fork
@@ -32,6 +34,7 @@
 
 #define __NR_pidfd_open_nr 434
 #define __NR_pidfd_send_signal_nr 424
+
 
 static volatile sig_atomic_t got_usr1 = 0;
 
@@ -143,6 +146,18 @@ int main(void)
             failed++;
         }
         close((int) selfpfd);
+    }
+
+    /* The kernel rejects a non-positive pid outright rather than reporting it
+     * as a missing process.
+     */
+    if (raw_syscall2(__NR_pidfd_open_nr, 0, 0) != -22 /* EINVAL */) {
+        fprintf(stderr, "FAIL: pidfd_open(0) did not return EINVAL\n");
+        failed++;
+    }
+    if (raw_syscall2(__NR_pidfd_open_nr, -1, 0) != -22 /* EINVAL */) {
+        fprintf(stderr, "FAIL: pidfd_open(-1) did not return EINVAL\n");
+        failed++;
     }
 
     int pidp[2], readyp[2], gop[2];

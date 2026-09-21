@@ -741,8 +741,8 @@ run_unit_tests()
         "$bindir/test-kill-pgroup"
     test_check "$runner" "test-kill-parent" "0 failed" \
         "$bindir/test-kill-parent"
-    test_check "$runner" "test-pidfd-parent" "0 failed" \
-        "$bindir/test-pidfd-parent"
+    test_check "$runner" "test-pidfd-targets" "0 failed" \
+        "$bindir/test-pidfd-targets"
     test_rc "$runner" "test-sigio" 0 "$bindir/test-sigio"
     test_rc "$runner" "test-fault-signal-mt" 0 "$bindir/test-fault-signal-mt"
     test_rc "$runner" "test-exit-group-worker" 0 "$bindir/test-exit-group-worker"

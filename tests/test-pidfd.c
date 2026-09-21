@@ -189,6 +189,14 @@ int main(void)
             goto done;
         }
 
+        /* Without this, the check below passes vacuously: ppoll skips a
+         * negative fd and reports nothing, so an unwritten pidfd would look
+         * like one that correctly stays unreadable.
+         */
+        EXPECT_TRUE(vm_pidfd >= 0,
+                    "clone3 wrote no pidfd for the CLONE_VM "
+                    "child");
+
         struct linux_pollfd pf = {.fd = vm_pidfd, .events = 1, .revents = 0};
         uint64_t ts[2] = {0, 100000000}; /* 100 ms */
         long pr = raw_syscall5(__NR_ppoll, (long) &pf, 1, (long) ts, 0, 0);

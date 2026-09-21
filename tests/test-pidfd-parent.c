@@ -10,6 +10,9 @@
  * fork-family lookup kill(getppid(), sig) uses. On Linux they succeed; they
  * must succeed here too.
  *
+ * A pidfd on the caller itself is checked too: it is the one target with no
+ * monitor behind it, so it must stay unreadable rather than read as exited.
+ *
  * The sibling half is ordered by two pipe handshakes rather than by sleeps: the
  * sibling exits only once the watcher reports its pidfd open, so a slow fork
  * cannot turn the test red.
@@ -125,6 +128,22 @@ int main(void)
         "pidfd_send_signal(pfd, SIGUSR1) failed",
     };
     failed += report("parent signaller", signaller, signal_reasons);
+
+    /* A self-pidfd has nothing to watch, and a live process is not an exited
+     * one, so it must not poll readable.
+     */
+    long selfpfd = raw_syscall2(__NR_pidfd_open_nr, (long) getpid(), 0);
+    if (selfpfd < 0) {
+        fprintf(stderr, "FAIL: pidfd_open(self) failed\n");
+        failed++;
+    } else {
+        struct pollfd sv = {.fd = (int) selfpfd, .events = POLLIN};
+        if (poll(&sv, 1, 100) != 0) {
+            fprintf(stderr, "FAIL: self pidfd reports the caller exited\n");
+            failed++;
+        }
+        close((int) selfpfd);
+    }
 
     int pidp[2], readyp[2], gop[2];
     if (pipe(pidp) < 0 || pipe(readyp) < 0 || pipe(gop) < 0)

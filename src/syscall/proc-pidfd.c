@@ -141,9 +141,15 @@ int pidfd_create(guest_t *g, int64_t target_pid)
     entry->write_end = pfd[1];
     pthread_mutex_unlock(&pidfd_lock);
 
+    /* A pidfd on this process has nothing to watch: a guest cannot observe its
+     * own exit through it, so it stays unreadable for as long as it is open.
+     */
+    if (target_pid == proc_get_pid())
+        return gfd;
+
+    bool monitor_ok = false;
     pid_t host_pid = proc_resolve_guest_pid(target_pid);
     if (host_pid > 0) {
-        bool monitor_ok = false;
         int64_t *ctx = malloc(2 * sizeof(int64_t));
         if (ctx) {
             ctx[0] = target_pid;
@@ -164,9 +170,15 @@ int pidfd_create(guest_t *g, int64_t target_pid)
                 free(ctx);
             }
         }
-        if (!monitor_ok)
-            proc_pidfd_notify_exit(target_pid);
     }
+
+    /* No monitor means no one will ever mark this fd readable. A target that no
+     * longer resolves exited between the caller's lookup and this one, and
+     * Linux hands out a pidfd that reads as exited rather than one that waits
+     * forever, so complete it here.
+     */
+    if (!monitor_ok)
+        proc_pidfd_notify_exit(target_pid);
 
     return gfd;
 }

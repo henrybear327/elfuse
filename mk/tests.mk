@@ -779,9 +779,8 @@ test-slab-exit-writes: $(ELFUSE_BIN) $(SLAB_GUEST_DEPS) \
 	printf "OK (%s bytes written)\n" "$$n"
 
 # The truncate is safe only while no other process maps the slab file.
-# orphan has a clone child read its memory after its parent exited, and that
-# parent must not log a skip. On a /tmp that cannot clone, orphan takes the
-# fallback instead, so the lane skips.
+# orphan has a child read its memory after its parent exited. The parent
+# must skip truncation for the live-fd fallback, but not for an APFS clone.
 ## fork children and the exit truncate
 test-slab-exit-fork: $(ELFUSE_BIN) $(SLAB_GUEST_DEPS)
 	@$(SYSROOT_SCRATCH); \
@@ -799,15 +798,15 @@ test-slab-exit-fork: $(ELFUSE_BIN) $(SLAB_GUEST_DEPS)
 	if [ -z "$$result" ]; then \
 		printf "FAIL: no result\n"; exit 1; \
 	fi; \
-	if grep -q 'live shm fd as fallback' "$$tmpdir/orphan.log"; then \
-		printf "$(YELLOW)SKIP$(RESET) fclonefileat fails on this /tmp\n"; \
-		exit 0; \
-	fi; \
-	if grep -q 'maps the slab, not truncated' "$$tmpdir/orphan.log"; then \
-		printf "FAIL: truncate skipped after a clone\n"; exit 1; \
-	fi; \
 	if [ "$$result" != ok ]; then \
 		printf "FAIL: %s\n" "$$result"; exit 1; \
+	fi; \
+	if grep -q 'live shm fd as fallback' "$$tmpdir/orphan.log"; then \
+		if ! grep -q 'maps the slab, not truncated' "$$tmpdir/orphan.log"; then \
+			printf "FAIL: truncate not skipped for live slab\n"; exit 1; \
+		fi; \
+	elif grep -q 'maps the slab, not truncated' "$$tmpdir/orphan.log"; then \
+		printf "FAIL: truncate skipped after a clone\n"; exit 1; \
 	fi; \
 	printf "OK\n"
 

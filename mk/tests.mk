@@ -781,34 +781,43 @@ test-slab-exit-writes: $(ELFUSE_BIN) $(SLAB_GUEST_DEPS) \
 # The truncate is safe only while no other process maps the slab file.
 # orphan has a child read its memory after its parent exited. The parent
 # must skip truncation for the live-fd fallback, but not for an APFS clone.
+# Force the fallback too, since an APFS clone cannot exercise that guard.
 ## fork children and the exit truncate
 test-slab-exit-fork: $(ELFUSE_BIN) $(SLAB_GUEST_DEPS)
 	@$(SYSROOT_SCRATCH); \
 	$(SLAB_STEP); \
 	$(SLAB_GUEST); \
-	printf "  %-30s " "child outlives parent"; \
-	step orphan $(ELFUSE_BIN) --verbose \
-	    "$$guest" orphan "$$tmpdir"; \
-	touch "$$tmpdir/go"; \
-	i=0; \
-	while [ ! -s "$$tmpdir/result" ] && [ $$i -lt 300 ]; do \
-		sleep 0.1; i=$$((i + 1)); \
-	done; \
-	result=$$(cat "$$tmpdir/result" 2>/dev/null || true); \
-	if [ -z "$$result" ]; then \
-		printf "FAIL: no result\n"; exit 1; \
-	fi; \
-	if [ "$$result" != ok ]; then \
-		printf "FAIL: %s\n" "$$result"; exit 1; \
-	fi; \
-	if grep -q 'live shm fd as fallback' "$$tmpdir/orphan.log"; then \
-		if ! grep -q 'maps the slab, not truncated' "$$tmpdir/orphan.log"; then \
-			printf "FAIL: truncate not skipped for live slab\n"; exit 1; \
+	for mode in normal fallback; do \
+		disable_clone=0; \
+		if [ "$$mode" = fallback ]; then disable_clone=1; fi; \
+		dir="$$tmpdir/$$mode"; \
+		mkdir "$$dir"; \
+		printf "  %-30s " "child outlives parent ($$mode)"; \
+		step "$$mode" env ELFUSE_DISABLE_FORK_CLONEFILE=$$disable_clone \
+		    $(ELFUSE_BIN) --verbose "$$guest" orphan "$$dir"; \
+		touch "$$dir/go"; \
+		i=0; \
+		while [ ! -s "$$dir/result" ] && [ $$i -lt 300 ]; do \
+			sleep 0.1; i=$$((i + 1)); \
+		done; \
+		result=$$(cat "$$dir/result" 2>/dev/null || true); \
+		if [ -z "$$result" ]; then \
+			printf "FAIL: no result\n"; exit 1; \
 		fi; \
-	elif grep -q 'maps the slab, not truncated' "$$tmpdir/orphan.log"; then \
-		printf "FAIL: truncate skipped after a clone\n"; exit 1; \
-	fi; \
-	printf "OK\n"
+		if [ "$$result" != ok ]; then \
+			printf "FAIL: %s\n" "$$result"; exit 1; \
+		fi; \
+		if grep -q 'live shm fd as fallback' "$$tmpdir/$$mode.log"; then \
+			if ! grep -q 'maps the slab, not truncated' "$$tmpdir/$$mode.log"; then \
+				printf "FAIL: truncate not skipped for live slab\n"; exit 1; \
+			fi; \
+		elif [ "$$mode" = fallback ]; then \
+			printf "FAIL: forced fallback not taken\n"; exit 1; \
+		elif grep -q 'maps the slab, not truncated' "$$tmpdir/$$mode.log"; then \
+			printf "FAIL: truncate skipped after a clone\n"; exit 1; \
+		fi; \
+		printf "OK\n"; \
+	done
 
 # An exited member's registry record outlives it, and macOS can hand its host
 # pid to another elfuse process. The recipe plants such a record, host pid of

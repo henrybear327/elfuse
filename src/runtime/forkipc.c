@@ -1834,8 +1834,15 @@ int64_t sys_clone(hv_vcpu_t vcpu,
          * fork (Redis BGSAVE, checkpointing runtimes). On failure the fallback
          * differs per design above: Rosetta drops use_shm so the region-copy
          * path runs; native guests keep use_shm and send the live g->shm_fd.
+         * Exercise the fallback on APFS hosts.
          */
-        snapshot_shm_fd = fork_snapshot_shm_via_clonefile(g->shm_fd);
+        const char *disable_clone = getenv("ELFUSE_DISABLE_FORK_CLONEFILE");
+        if (disable_clone && strcmp(disable_clone, "1") == 0) {
+            snapshot_shm_fd = -1;
+            errno = ENOTSUP;
+        } else {
+            snapshot_shm_fd = fork_snapshot_shm_via_clonefile(g->shm_fd);
+        }
         if (snapshot_shm_fd < 0) {
             if (g->is_rosetta) {
                 log_warn(

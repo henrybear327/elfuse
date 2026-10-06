@@ -353,3 +353,43 @@ Off by default, and useful when a guest misbehaves rather than in normal use:
 - `ELFUSE_DISABLE_TLBI_RANGE=1`: refuse `FEAT_TLBIRANGE` and fall back to
   per-page and broadcast invalidation, which separates a stale-TLB bug from
   the range-encoding path.
+
+## OCI Images
+
+`scripts/elfuse-oci.py` runs OCI images under elfuse;
+[oci-images.md](oci-images.md) describes the store, the sealed volumes, and the
+per-run shadow. It needs crane and umoci (`brew install crane umoci`), and runs
+`build/elfuse` from its checkout, else `elfuse` on `PATH`.
+
+```sh
+make elfuse
+scripts/elfuse-oci.py run python:3.12-slim python3 -c 'print("hello")'
+scripts/elfuse-oci.py clean
+```
+
+| Command | Effect |
+|---------|--------|
+| `pull REF` | Seal the `linux/arm64` image of `REF` unless the store holds it |
+| `run [--entrypoint CMD] REF [ARG]...` | Run `REF` under elfuse, pulling it first when the store has no record of it |
+| `clean` | Detach and remove every image, run, and interrupted pull in the store; refuse a non-empty directory that is not a store, and a store in use |
+| `list` | Print each reference in the store with its image digest and size, and each image no reference names as `<none>` |
+
+`--entrypoint CMD` replaces the image Entrypoint and drops its Cmd; an empty
+`CMD` leaves only the arguments. Every argument after `REF` goes to the guest.
+The store is `$ELFUSE_OCI_STORE`, by default `~/.local/share/elfuse/oci`; a new
+or empty directory becomes a store.
+
+crane reads registry credentials from the Docker configuration
+(`$DOCKER_CONFIG/config.json`, by default `~/.docker/config.json`) when one
+exists, else from Podman's `$REGISTRY_AUTH_FILE` or
+`$XDG_RUNTIME_DIR/containers/auth.json`.
+
+### Running The Smoke Lane Locally
+
+```sh
+make elfuse
+ELFUSE_OCI_STORE=/tmp/oci-scratch scripts/ci/oci-smoke.sh
+```
+
+The lane needs macOS with Hypervisor.framework and network access, and ends by
+cleaning the store. Its coverage is in [oci-images.md](oci-images.md#validation).

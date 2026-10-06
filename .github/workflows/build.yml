@@ -126,27 +126,6 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  oci-linux:
-    name: elfuse-oci (Linux)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
-      - name: Build, lint and test elfuse-oci
-        run: |
-          set -euo pipefail
-          go version
-          make elfuse-oci
-          make oci-lint
-          make oci-test
-
   runtime-macos:
     name: Runtime (${{ matrix.name }})
     needs: build-macos
